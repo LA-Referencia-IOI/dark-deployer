@@ -16,4 +16,4 @@ logs/
 
 # Dependencies
 node_modules/
-components
+components/

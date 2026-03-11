@@ -206,6 +206,99 @@ def setup_repo(target_dir: str, commands_str: str) -> None:
     print(f"[OK] '{target_dir}' is up.\n")
 
 
+# ─── dark-dapp specific installer ────────────────────────────────────────────
+
+
+def install_dark_dapp(target_dir: str, env: dict) -> None:
+    """Run the full setup sequence for the ``dark-dapp`` component.
+
+    Performs the following steps inside ``target_dir``:
+
+    1. Installs Python dependencies into a ``venv`` (``requirements.txt``).
+    2. Generates ``config.ini`` from the global blockchain variables in ``.env``
+       (``RPC_URL``, ``CHAIN_ID``, ``MASTER_PRIVATE_KEY``).
+    3. Compiles Solidity contracts via ``dARK_dapp/compile.py``.
+    4. Deploys contracts to the configured network via ``dARK_dapp/deploy.py``.
+
+    :param target_dir: Path to the cloned ``dark-dapp`` directory.
+    :type target_dir: str
+    :param env: Dictionary of environment variables loaded from ``.env``.
+    :type env: dict
+    :raises SystemExit: If any required variable is missing or a step fails.
+    """
+    import configparser
+
+    abs_target = Path(target_dir).resolve()
+    venv_dir   = abs_target / "venv"
+    pip        = str(venv_dir / "bin" / "pip")
+    python     = str(venv_dir / "bin" / "python")
+
+    # ── Step 1: virtual environment + pip install ─────────────────────────────
+    print("[INFO] Installing dark-dapp Python dependencies...")
+    if not venv_dir.exists():
+        run_shell(f"{sys.executable} -m venv {venv_dir}")
+    else:
+        print(f"[INFO] venv already exists at '{venv_dir}', skipping creation.")
+
+    run_shell(f"{pip} install -r requirements.txt", cwd=str(abs_target))
+    print(f"[OK] Python dependencies installed.\n")
+
+    # ── Step 2: generate config.ini ───────────────────────────────────────────
+    rpc_url     = env.get("RPC_URL", "").strip()
+    chain_id    = env.get("CHAIN_ID", "").strip()
+    private_key = env.get("MASTER_PRIVATE_KEY", "").strip()
+
+    if not rpc_url:
+        print("[ERROR] 'RPC_URL' is not set in .env")
+        sys.exit(1)
+    if not chain_id:
+        print("[ERROR] 'CHAIN_ID' is not set in .env")
+        sys.exit(1)
+    if not private_key or private_key == "0x":
+        print("[ERROR] 'MASTER_PRIVATE_KEY' is not set in .env")
+        sys.exit(1)
+
+    config = configparser.ConfigParser()
+    config["base"]       = {"blockchain_net": "dark-local"}
+    config["dark-local"] = {
+        "url":              rpc_url,
+        "chain_id":         chain_id,
+        "account_priv_key": private_key,
+    }
+
+    config_path = abs_target / "config.ini"
+    with open(config_path, "w") as f:
+        config.write(f)
+    print(f"[OK] config.ini generated at '{config_path}'.\n")
+
+    # ── Step 3: compile contracts ─────────────────────────────────────────────
+    # compile.py uses relative paths (./contracts, ./compiled) so it must be
+    # run from inside dARK_dapp/, not from the repo root.
+    dapp_dir     = abs_target / "dARK_dapp"
+    compiled_dir = dapp_dir / "compiled"
+
+    print("[INFO] Compiling Solidity contracts...")
+    run_shell(f"{python} compile.py", cwd=str(dapp_dir))
+
+    # compile.py swallows exceptions and exits with code 0 even on failure,
+    # so we verify the compiled/ directory was actually populated.
+    if not compiled_dir.exists() or not any(compiled_dir.iterdir()):
+        print("[ERROR] Compilation failed — 'dARK_dapp/compiled/' is empty or missing.")
+        sys.exit(1)
+    print("[OK] Contracts compiled.\n")
+
+    # ── Step 4: deploy contracts ──────────────────────────────────────────────
+    # deploy.py also uses relative paths (./compiled, ./deployed_contracts.ini)
+    # so it must run from inside dARK_dapp/ as well.
+    # Wait for the node to be ready before deploying — docker compose up -d
+    # returns immediately but the node may still be initialising.
+    wait_for_rpc(rpc_url)
+    print("[INFO] Deploying contracts to the network...")
+    run_shell(f"{python} deploy.py", cwd=str(dapp_dir))
+    print("[OK] Contracts deployed.\n")
+
+
+
 # ─── Blockchain submodule installer ──────────────────────────────────────────
 
 
@@ -253,7 +346,12 @@ def install_blockchain(prefix: str, env: dict) -> None:
         install_repo(name=folder, repo_url=repo_url, branch=branch, target_dir=target)
 
         if do_setup:
-            setup_repo(target_dir=target, commands_str=commands)
+            # dark-dapp has a dedicated installer that generates config.ini
+            # and deploys smart contracts instead of running generic COMMANDS.
+            if folder == "dark-dapp":
+                install_dark_dapp(target_dir=target, env=env)
+            else:
+                setup_repo(target_dir=target, commands_str=commands)
         else:
             print(f"[INFO] SETUP=False — '{folder}' cloned, setup skipped.\n")
 
