@@ -292,7 +292,7 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     # so it must run from inside dARK_dapp/ as well.
     # Wait for the node to be ready before deploying — docker compose up -d
     # returns immediately but the node may still be initialising.
-    wait_for_rpc(rpc_url)
+    # wait_for_rpc(rpc_url)
     print("[INFO] Deploying contracts to the network...")
     run_shell(f"{python} deploy.py", cwd=str(dapp_dir))
     print("[OK] Contracts deployed.\n")
