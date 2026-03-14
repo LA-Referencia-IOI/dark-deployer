@@ -17,3 +17,5 @@ logs/
 # Dependencies
 node_modules/
 components/
+
+.devtime.json

@@ -125,6 +125,72 @@ def get_url(env: dict, key: str) -> str:
     return env.get(key, "").strip()
 
 
+def extract_wallet_info(wallet_path: str) -> dict:
+    """Extract wallet address, public key, and private key from master-wallet.txt.
+
+    :param wallet_path: Path to the master-wallet.txt file.
+    :type wallet_path: str
+    :returns: Dictionary with MASTER_WALLET_ADDRESS, MASTER_PUBLIC_KEY, and MASTER_PRIVATE_KEY.
+    :rtype: dict
+    """
+    info = {}
+    try:
+        with open(wallet_path, "r") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith("Address"):
+                    parts = stripped.split(":", 1)
+                    if len(parts) == 2:
+                        info["MASTER_WALLET_ADDRESS"] = parts[1].strip()
+                elif stripped.startswith("Public Key"):
+                    parts = stripped.split(":", 1)
+                    if len(parts) == 2:
+                        info["MASTER_PUBLIC_KEY"] = parts[1].strip()
+                elif stripped.startswith("Private Key"):
+                    parts = stripped.split(":", 1)
+                    if len(parts) == 2:
+                        info["MASTER_PRIVATE_KEY"] = parts[1].strip()
+    except FileNotFoundError:
+        pass
+    return info
+
+
+def update_env_file(env_path: str, updates: dict) -> None:
+    """Update specific keys in a .env file, preserving comments and other variables.
+
+    :param env_path: Path to the .env file.
+    :type env_path: str
+    :param updates: Dictionary mapping keys to their new values.
+    :type updates: dict
+    """
+    try:
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        lines = []
+
+    new_lines = []
+    updated_keys = set()
+    
+    for line in lines:
+        if "=" in line and not line.strip().startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            if key in updates:
+                new_lines.append(f"{key}={updates[key]}\n")
+                updated_keys.add(key)
+            else:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+
+    for key, val in updates.items():
+        if key not in updated_keys:
+            new_lines.append(f"{key}={val}\n")
+
+    with open(env_path, "w") as f:
+        f.writelines(new_lines)
+
+
 # ─── Repository installer ─────────────────────────────────────────────────────
 
 #: Default commands used when a repo does not define its own COMMANDS variable.
@@ -247,6 +313,8 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     rpc_url     = env.get("RPC_URL", "").strip()
     chain_id    = env.get("CHAIN_ID", "").strip()
     private_key = env.get("MASTER_PRIVATE_KEY", "").strip()
+    public_key  = env.get("MASTER_PUBLIC_KEY", "").strip()
+    address     = env.get("MASTER_WALLET_ADDRESS", "").strip()
 
     if not rpc_url:
         print("[ERROR] 'RPC_URL' is not set in .env")
@@ -263,7 +331,10 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     config["dark-local"] = {
         "url":              rpc_url,
         "chain_id":         chain_id,
-        "account_priv_key": private_key,
+        "MASTER_WALLET_ADDRESS": address,
+        "MASTER_PRIVATE_KEY": private_key,
+        "MASTER_PUBLIC_KEY": public_key,
+        "acoupled_setup":   "True",
     }
 
     config_path = abs_target / "config.ini"
@@ -352,6 +423,17 @@ def install_blockchain(prefix: str, env: dict) -> None:
                 install_dark_dapp(target_dir=target, env=env)
             else:
                 setup_repo(target_dir=target, commands_str=commands)
+
+                # After dark-env is set up, attempt to extract the master wallet if present
+                if folder == "dark-env":
+                    wallet_path = Path(target) / "master-wallet.txt"
+                    wallet_info = extract_wallet_info(str(wallet_path))
+                    if wallet_info:
+                        print(f"[INFO] Extracted master wallet info from '{wallet_path}'.")
+                        update_env_file(".env", wallet_info)
+                        print("[OK] Updated global .env with master wallet keys.")
+                        # Update the in-memory env dict so subsequent setups (like dark-dapp) see the changes!
+                        env.update(wallet_info)
         else:
             print(f"[INFO] SETUP=False — '{folder}' cloned, setup skipped.\n")
 
