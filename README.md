@@ -167,6 +167,8 @@ components/
 │   ├── dark-dapp/
 │   └── dark-explorador/
 ├── orchestrator/
+    └── dark-core-orchestrator/
+        └── venv/observer-lib/
 ├── resolver/
 ├── minter/
 └── ipfs/
