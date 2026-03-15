@@ -41,6 +41,17 @@ The script will clone each configured repository into `components/` and run its 
 
 ---
 
+### 4 . Clean
+```bash
+python clean.py
+```
+---
+
+### 5. Restart
+
+```bash
+python restart.py
+```
 ## Environment Variables
 
 ### `TYPE`
