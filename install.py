@@ -437,6 +437,71 @@ def install_blockchain(prefix: str, env: dict) -> None:
         else:
             print(f"[INFO] SETUP=False — '{folder}' cloned, setup skipped.\n")
 
+# ─── Orchestrator submodule installer ──────────────────────────────────────────
+
+def install_orchestrator(prefix: str, env: dict) -> None:
+    """
+    Instala componentes do Orchestrator num venv partilhado e 
+    configura o .env da lib com valores dinâmicos do blockchain.
+    """
+    import configparser
+    print("\n── Orchestrator (Shared Venv & Auto-Config) ──────────────────")
+
+    core_folder = "dark-core-orchestrator"
+    lib_folder  = "dark-observer-lib"
+    base_path   = Path("components/orchestrator")
+    core_path   = base_path / core_folder
+    lib_path    = base_path / lib_folder
+
+    # 1. instalar o CORE no venv partilhado
+    repo_url_core = get_url(env, f"{prefix}_ORCHESTRATOR_REPOSITORY_URL")
+    if repo_url_core:
+        install_repo(core_folder, repo_url_core, env.get(f"{prefix}_ORCHESTRATOR_REPOSITORY_BRANCH", "main"), str(core_path))
+        setup_repo(str(core_path), "") # create venv and install dependencies, but skip custom commands for now
+    else:
+        print("[ERROR] Core Orchestrator URL not found."); return
+
+    shared_pip = str(core_path.resolve() / "venv" / "bin" / "pip")
+
+    # 2. install LIB
+    repo_url_lib = get_url(env, f"{prefix}_ORCHESTRATOR_OBSERVER_LIB_REPOSITORY_URL")
+    if repo_url_lib:
+        install_repo(lib_folder, repo_url_lib, env.get(f"{prefix}_ORCHESTRATOR_OBSERVER_LIB_REPOSITORY_BRANCH", "main"), str(lib_path))
+        
+        # --- populate .env  ---
+        print(f"[INFO] A configurar .env para {lib_folder}...")
+        
+        chain_id = env.get("CHAIN_ID", "1337")
+
+        contract_address = "0x0"
+        ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
+        
+        if ini_path.exists():
+            deployed_config = configparser.ConfigParser()
+            deployed_config.read(ini_path)
+            try:
+                contract_address = deployed_config['dARK']['address']
+            except KeyError:
+                print(f"[WARNING] Secção [dARK] ou 'address' não encontrado em {ini_path}")
+        else:
+            print(f"[WARNING] Ficheiro de contratos não encontrado em {ini_path}")
+
+        # c) write .env for the lib
+        lib_env_path = lib_path / ".env"
+        with open(lib_env_path, "w") as f:
+            f.write(f"DARK_CHAIN_ID={chain_id}\n")
+            f.write(f"DARK_CONTRACT_ADDRESS={contract_address}\n")
+        print(f"[OK] .env gerado em {lib_env_path}")
+
+        # setup lib with pip install -e, using the CORE's venv to ensure they share the same environment
+        print(f"[INFO] A instalar {lib_folder} no venv do {core_folder}...")
+        run_shell(f"{shared_pip} install -e {lib_path.resolve()}", cwd=str(core_path.resolve()))
+    
+    # 3. run CORE commands (if any) after the lib is installed, so they can rely on the lib being present in the venv
+    core_cmds = env.get(f"{prefix}_ORCHESTRATOR_COMMANDS", "").strip()
+    if core_cmds:
+        core_cmds = core_cmds.replace("pip ", f"{shared_pip} ")
+        run_commands(core_cmds, cwd=str(core_path.resolve()))
 
 # ─── Generic single-repo component installer ─────────────────────────────────
 
@@ -445,7 +510,7 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
     """Clone and set up a single-repository component.
 
     :param name: Component name in uppercase, matching the env variable segment
-                 (e.g. ``ORCHESTRATOR``, ``RESOLVER``, ``MINTER``, ``IPFS``).
+                 (e.g. ``RESOLVER``, ``MINTER``, ``IPFS``).
     :type name: str
     :param prefix: Environment variable prefix (e.g. ``DEVELOPER``).
     :type prefix: str
@@ -499,7 +564,10 @@ def install_profile(prefix: str, env: dict) -> None:
     """
     install_blockchain(prefix=prefix, env=env)
 
-    for component in ("ORCHESTRATOR", "RESOLVER", "MINTER", "IPFS"):
+
+    install_orchestrator(prefix=prefix, env=env)
+
+    for component in ("RESOLVER", "MINTER", "IPFS"):
         install_single_component(name=component, prefix=prefix, env=env)
 
 
