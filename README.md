@@ -149,8 +149,8 @@ DEVELOPER_BLOCKCHAIN_DARK_ENV_SETUP=True
 
 If a repository contains a `requirements.txt`, the installer will automatically:
 
-1. Create a `venv` virtual environment inside that repository directory.
-2. Install all dependencies via `pip install -r requirements.txt`.
+1. Create (or reuse) a shared root virtual environment at `./venv`.
+2. Install dependencies via `./venv/bin/pip install -r requirements.txt`.
 
 This happens **before** the `COMMANDS` are executed.
 
@@ -177,13 +177,13 @@ After running the installer, components are placed under `components/`:
 
 ```
 components/
+├── venv/
 ├── blockchain/
 │   ├── dark-env/
 │   ├── dark-dapp/
 │   └── dark-explorador/
 ├── core/
 │   └── dark-core-lib/
-│       ├── venv/
 │       └── .env.integration
 ├── resolver/
 ├── minter/

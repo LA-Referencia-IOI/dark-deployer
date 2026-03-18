@@ -34,8 +34,13 @@ import subprocess
 import sys
 from pathlib import Path
 import configparser
+import re
+from typing import Optional
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+SHARED_VENV_DIR = PROJECT_ROOT / "venv"
 
 
 def load_env(filepath: str = ".env") -> dict:
@@ -108,6 +113,27 @@ def run_commands(commands_str: str, cwd: str) -> None:
         cmd = cmd.strip()
         if cmd:
             run_shell(cmd, cwd=cwd)
+
+
+def ensure_shared_venv() -> Path:
+    """Create or reuse a shared root virtual environment.
+
+    :returns: Absolute path to the shared root venv.
+    :rtype: Path
+    """
+    if not SHARED_VENV_DIR.exists():
+        print(f"[INFO] Creating shared venv at '{SHARED_VENV_DIR}'...")
+        run_shell(f"{sys.executable} -m venv {SHARED_VENV_DIR}")
+    else:
+        print(f"[INFO] Shared venv already exists at '{SHARED_VENV_DIR}', reusing it.")
+
+    return SHARED_VENV_DIR
+
+
+def shared_venv_bin(bin_name: str) -> str:
+    """Return absolute path to a binary inside the shared root venv."""
+    venv_dir = ensure_shared_venv()
+    return str(venv_dir / "bin" / bin_name)
 
 
 def get_url(env: dict, key: str) -> str:
@@ -215,14 +241,125 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
     :param target_dir: Local directory where the repository will be placed.
     :type target_dir: str
     """
+    def github_https_to_ssh(url: str) -> Optional[str]:
+        """Convert https GitHub URL to SSH URL when possible."""
+        match = re.match(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+        if not match:
+            return None
+        owner, repo = match.groups()
+        return f"git@github.com:{owner}/{repo}.git"
+
+    def github_ssh_to_https(url: str) -> Optional[str]:
+        """Convert SSH GitHub URL to https URL when possible."""
+        match = re.match(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
+        if not match:
+            return None
+        owner, repo = match.groups()
+        return f"https://github.com/{owner}/{repo}.git"
+
+    def github_repo_slug(url: str) -> Optional[str]:
+        """Return GitHub owner/repo slug for HTTPS or SSH URLs."""
+        https_match = re.match(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+        if https_match:
+            return f"{https_match.group(1)}/{https_match.group(2)}"
+
+        ssh_match = re.match(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
+        if ssh_match:
+            return f"{ssh_match.group(1)}/{ssh_match.group(2)}"
+
+        return None
+
+    def build_repo_url_candidates(url: str) -> list[str]:
+        """Build preferred URL candidates, prioritizing SSH for GitHub repos."""
+        candidates = []
+        ssh_url = github_https_to_ssh(url)
+        https_url = github_ssh_to_https(url)
+
+        if ssh_url:
+            # Input was HTTPS GitHub URL: prefer SSH first to avoid auth errors.
+            candidates.extend([ssh_url, url])
+        elif https_url:
+            # Input was SSH GitHub URL: keep SSH first, then HTTPS fallback.
+            candidates.extend([url, https_url])
+        else:
+            candidates.append(url)
+
+        # Deduplicate while preserving order.
+        seen = set()
+        ordered = []
+        for candidate in candidates:
+            if candidate not in seen:
+                seen.add(candidate)
+                ordered.append(candidate)
+        return ordered
+
     target = Path(target_dir)
+    repo_candidates = build_repo_url_candidates(repo_url)
 
     if target.exists():
         print(f"[INFO] '{target_dir}' already exists — pulling latest changes...")
-        run_shell(f"git pull origin {branch}", cwd=str(target))
+        # Keep origin aligned with configured URL before pulling.
+        current_origin = subprocess.run(
+            "git remote get-url origin",
+            shell=True,
+            cwd=str(target),
+            capture_output=True,
+            text=True,
+        )
+        current_origin_url = current_origin.stdout.strip() if current_origin.returncode == 0 else ""
+        same_repo = (
+            current_origin_url
+            and github_repo_slug(current_origin_url)
+            and github_repo_slug(current_origin_url) == github_repo_slug(repo_url)
+        )
+        if same_repo and current_origin_url:
+            # Prefer the URL already known to work for this local clone.
+            if current_origin_url in repo_candidates:
+                repo_candidates = [current_origin_url] + [
+                    c for c in repo_candidates if c != current_origin_url
+                ]
+            else:
+                repo_candidates = [current_origin_url] + repo_candidates
+
+        pull_success = False
+        last_exc: Optional[SystemExit] = None
+        for candidate_url in repo_candidates:
+            if not current_origin_url or current_origin_url != candidate_url:
+                print(f"[INFO] Updating origin URL to '{candidate_url}'...")
+                run_shell(f"git remote set-url origin {candidate_url}", cwd=str(target))
+                current_origin_url = candidate_url
+
+            try:
+                run_shell(f"git pull origin {branch}", cwd=str(target))
+                pull_success = True
+                break
+            except SystemExit as exc:
+                last_exc = exc
+                print(
+                    "[WARNING] Pull failed for remote "
+                    f"'{candidate_url}'. Trying next candidate..."
+                )
+
+        if not pull_success and last_exc is not None:
+            raise last_exc
     else:
         print(f"[INFO] Cloning '{name}' from {repo_url} (branch: {branch})...")
-        run_shell(f"git clone --branch {branch} {repo_url} {str(target)}")
+        clone_success = False
+        last_exc: Optional[SystemExit] = None
+        for candidate_url in repo_candidates:
+            try:
+                run_shell(f"git clone --branch {branch} {candidate_url} {str(target)}")
+                clone_success = True
+                break
+            except SystemExit as exc:
+                last_exc = exc
+                print(
+                    "[WARNING] Clone failed for URL "
+                    f"'{candidate_url}'. Trying next candidate..."
+                )
+
+        if not clone_success and last_exc is not None:
+            raise last_exc
 
     print(f"[OK] '{name}' ready at '{target_dir}'.\n")
 
@@ -230,9 +367,9 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
 def setup_repo(target_dir: str, commands_str: str) -> None:
     """Run the post-clone setup for a repository.
 
-    If a ``requirements.txt`` is present in ``target_dir``, a Python
-    virtual environment named ``venv`` is created (or reused) and all
-    dependencies are installed via ``pip`` before any other commands run.
+    If a ``requirements.txt`` is present in ``target_dir``, dependencies are
+    installed into the shared root virtual environment (``./venv``) before
+    any other commands run.
 
     The remaining setup commands are then executed in sequence as defined
     by ``commands_str``.
@@ -249,23 +386,14 @@ def setup_repo(target_dir: str, commands_str: str) -> None:
     # regardless of the working directory used by run_shell.
     abs_target = Path(target_dir).resolve()
 
-    # ── Python dependencies (optional) ───────────────────────────────────────
+    # ── Python dependencies (optional, shared root venv) ────────────────────
     requirements = abs_target / "requirements.txt"
-    venv_dir = abs_target / "venv"
 
     if requirements.exists():
-        print("[INFO] requirements.txt found — creating virtual environment...")
-
-        # Create the virtual environment if it does not already exist
-        if not venv_dir.exists():
-            run_shell(f"{sys.executable} -m venv {venv_dir}")
-        else:
-            print(f"[INFO] venv already exists at '{venv_dir}', skipping creation.")
-
-        # Install dependencies using the venv's own pip
-        pip = str(venv_dir / "bin" / "pip")
+        print("[INFO] requirements.txt found — installing into shared root venv...")
+        pip = shared_venv_bin("pip")
         run_shell(f"{pip} install -r requirements.txt", cwd=str(abs_target))
-        print(f"[OK] Python dependencies installed into '{venv_dir}'.\n")
+        print(f"[OK] Python dependencies installed into '{SHARED_VENV_DIR}'.\n")
 
     # ── Run per-repo commands ─────────────────────────────────────────────────
     run_commands(commands_str, cwd=str(abs_target))
@@ -281,7 +409,7 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
 
     Performs the following steps inside ``target_dir``:
 
-    1. Installs Python dependencies into a ``venv`` (``requirements.txt``).
+    1. Installs Python dependencies into the shared root venv (``./venv``).
     2. Generates ``config.ini`` from the global blockchain variables in ``.env``
        (``RPC_URL``, ``CHAIN_ID``, ``MASTER_PRIVATE_KEY``).
     3. Compiles Solidity contracts via ``dARK_dapp/compile.py``.
@@ -294,19 +422,13 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     :raises SystemExit: If any required variable is missing or a step fails.
     """
     abs_target = Path(target_dir).resolve()
-    venv_dir   = abs_target / "venv"
-    pip        = str(venv_dir / "bin" / "pip")
-    python     = str(venv_dir / "bin" / "python")
+    pip        = shared_venv_bin("pip")
+    python     = shared_venv_bin("python")
 
-    # ── Step 1: virtual environment + pip install ─────────────────────────────
-    print("[INFO] Installing dark-dapp Python dependencies...")
-    if not venv_dir.exists():
-        run_shell(f"{sys.executable} -m venv {venv_dir}")
-    else:
-        print(f"[INFO] venv already exists at '{venv_dir}', skipping creation.")
-
+    # ── Step 1: shared root venv + pip install ───────────────────────────────
+    print("[INFO] Installing dark-dapp Python dependencies into shared root venv...")
     run_shell(f"{pip} install -r requirements.txt", cwd=str(abs_target))
-    print(f"[OK] Python dependencies installed.\n")
+    print(f"[OK] Python dependencies installed into '{SHARED_VENV_DIR}'.\n")
 
     # ── Step 2: generate config.ini ───────────────────────────────────────────
     rpc_url     = env.get("RPC_URL", "").strip()
@@ -572,15 +694,22 @@ def install_core_lib(prefix: str, env: dict) -> None:
     setup_repo(target_dir=str(core_path), commands_str="")
 
     core_abs = core_path.resolve()
-    venv_pip = str(core_abs / "venv" / "bin" / "pip")
+    venv_pip = shared_venv_bin("pip")
 
     print("[INFO] Installing dark-core-lib in editable mode...")
-    run_shell(f"{venv_pip} install -e .", cwd=str(core_abs))
+    try:
+        run_shell(f"{venv_pip} install -e .", cwd=str(core_abs))
+    except SystemExit:
+        print(
+            "[WARNING] Editable install failed. "
+            "Falling back to a regular install for compatibility."
+        )
+        run_shell(f"{venv_pip} install .", cwd=str(core_abs))
 
     generate_core_lib_env_integration(core_path=core_abs, env=env)
 
     if extra_commands:
-        # Ensure any "pip ..." command uses the component venv pip.
+        # Ensure any "pip ..." command uses the shared root venv pip.
         extra_commands = extra_commands.replace("pip ", f"{venv_pip} ")
         run_commands(extra_commands, cwd=str(core_abs))
 
