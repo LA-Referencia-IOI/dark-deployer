@@ -17,7 +17,7 @@ Supported profiles:
 
 Components installed (per profile):
     - **blockchain** — three sub-repos: ``dark-env``, ``dark-dapp``, ``dark-explorador``
-    - **orchestrator**
+    - **core-lib**
     - **resolver**
     - **minter**
     - **ipfs**
@@ -33,6 +33,7 @@ cloned repository directory. Shell syntax (globs, redirects) is supported.
 import subprocess
 import sys
 from pathlib import Path
+import configparser
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -292,8 +293,6 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     :type env: dict
     :raises SystemExit: If any required variable is missing or a step fails.
     """
-    import configparser
-
     abs_target = Path(target_dir).resolve()
     venv_dir   = abs_target / "venv"
     pip        = str(venv_dir / "bin" / "pip")
@@ -437,71 +436,153 @@ def install_blockchain(prefix: str, env: dict) -> None:
         else:
             print(f"[INFO] SETUP=False — '{folder}' cloned, setup skipped.\n")
 
-# ─── Orchestrator submodule installer ──────────────────────────────────────────
+# ─── Core-lib installer ───────────────────────────────────────────────────────
 
-def install_orchestrator(prefix: str, env: dict) -> None:
+
+def read_deployed_contract_addresses(ini_path: Path) -> tuple[str, str]:
+    """Read dARK and Authority addresses from deployed_contracts.ini.
+
+    :param ini_path: Path to deployed_contracts.ini.
+    :type ini_path: Path
+    :returns: Tuple of (dark_contract_address, authority_contract_address).
+    :rtype: tuple[str, str]
     """
-    Instala componentes do Orchestrator num venv partilhado e 
-    configura o .env da lib com valores dinâmicos do blockchain.
+    dark_address = ""
+    authority_address = ""
+
+    if not ini_path.exists():
+        return dark_address, authority_address
+
+    deployed = configparser.ConfigParser()
+    deployed.read(ini_path)
+
+    section_map = {section.lower(): section for section in deployed.sections()}
+
+    dark_section = section_map.get("dark")
+    if dark_section:
+        dark_address = deployed.get(dark_section, "address", fallback="").strip()
+
+    authority_section = section_map.get("authority")
+    if authority_section:
+        authority_address = deployed.get(authority_section, "address", fallback="").strip()
+
+    return dark_address, authority_address
+
+
+def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
+    """Generate .env.integration for dark-core-lib from installed blockchain state.
+
+    :param core_path: Path to components/core/dark-core-lib.
+    :type core_path: Path
+    :param env: Dictionary of environment variables loaded from .env.
+    :type env: dict
     """
-    import configparser
-    print("\n── Orchestrator (Shared Venv & Auto-Config) ──────────────────")
+    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
+    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
 
-    core_folder = "dark-core-orchestrator"
-    lib_folder  = "dark-observer-lib"
-    base_path   = Path("components/orchestrator")
-    core_path   = base_path / core_folder
-    lib_path    = base_path / lib_folder
+    if not dark_contract or not authority_contract:
+        print(
+            "[WARNING] Could not read full contract addresses from "
+            f"'{ini_path}'. .env.integration may be incomplete."
+        )
 
-    # 1. instalar o CORE no venv partilhado
-    repo_url_core = get_url(env, f"{prefix}_ORCHESTRATOR_REPOSITORY_URL")
-    if repo_url_core:
-        install_repo(core_folder, repo_url_core, env.get(f"{prefix}_ORCHESTRATOR_REPOSITORY_BRANCH", "main"), str(core_path))
-        setup_repo(str(core_path), "") # create venv and install dependencies, but skip custom commands for now
-    else:
-        print("[ERROR] Core Orchestrator URL not found."); return
+    integration_env = {
+        "DARK_RPC_URL": env.get("RPC_URL", "http://localhost:8545").strip(),
+        "DARK_CHAIN_ID": env.get("CHAIN_ID", "1337").strip(),
+        "DARK_CONTRACT_ADDRESS": dark_contract,
+        "DARK_AUTHORITY_ADDRESS": authority_contract,
+        "DARK_ADMIN_PRIVATE_KEY": env.get("MASTER_PRIVATE_KEY", "").strip(),
+        "DARK_READ_ONLY": "False",
+        "DARK_VALIDATE_CHAIN_ID": "True",
+        "DARK_GAS_LIMIT": "500000",
+        "DARK_TX_TIMEOUT_SECONDS": "120",
+    }
 
-    shared_pip = str(core_path.resolve() / "venv" / "bin" / "pip")
+    env_path = core_path / ".env.integration"
+    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
+    with open(env_path, "w") as f:
+        f.writelines(lines)
 
-    # 2. install LIB
-    repo_url_lib = get_url(env, f"{prefix}_ORCHESTRATOR_OBSERVER_LIB_REPOSITORY_URL")
-    if repo_url_lib:
-        install_repo(lib_folder, repo_url_lib, env.get(f"{prefix}_ORCHESTRATOR_OBSERVER_LIB_REPOSITORY_BRANCH", "main"), str(lib_path))
-        
-        # --- populate .env  ---
-        print(f"[INFO] A configurar .env para {lib_folder}...")
-        
-        chain_id = env.get("CHAIN_ID", "1337")
+    print(f"[OK] Generated '{env_path}'.")
 
-        contract_address = "0x0"
-        ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-        
-        if ini_path.exists():
-            deployed_config = configparser.ConfigParser()
-            deployed_config.read(ini_path)
-            try:
-                contract_address = deployed_config['dARK']['address']
-            except KeyError:
-                print(f"[WARNING] Secção [dARK] ou 'address' não encontrado em {ini_path}")
-        else:
-            print(f"[WARNING] Ficheiro de contratos não encontrado em {ini_path}")
 
-        # c) write .env for the lib
-        lib_env_path = lib_path / ".env"
-        with open(lib_env_path, "w") as f:
-            f.write(f"DARK_CHAIN_ID={chain_id}\n")
-            f.write(f"DARK_CONTRACT_ADDRESS={contract_address}\n")
-        print(f"[OK] .env gerado em {lib_env_path}")
+def install_core_lib(prefix: str, env: dict) -> None:
+    """Clone and set up dark-core-lib as the unified SDK component.
 
-        # setup lib with pip install -e, using the CORE's venv to ensure they share the same environment
-        print(f"[INFO] A instalar {lib_folder} no venv do {core_folder}...")
-        run_shell(f"{shared_pip} install -e {lib_path.resolve()}", cwd=str(core_path.resolve()))
-    
-    # 3. run CORE commands (if any) after the lib is installed, so they can rely on the lib being present in the venv
-    core_cmds = env.get(f"{prefix}_ORCHESTRATOR_COMMANDS", "").strip()
-    if core_cmds:
-        core_cmds = core_cmds.replace("pip ", f"{shared_pip} ")
-        run_commands(core_cmds, cwd=str(core_path.resolve()))
+    Supports a legacy fallback to ORCHESTRATOR_* variables to avoid
+    breaking existing .env files during migration.
+
+    :param prefix: Environment variable prefix (e.g. ``DEVELOPER``).
+    :type prefix: str
+    :param env: Dictionary of environment variables loaded from .env.
+    :type env: dict
+    """
+    print("\n── Core Lib (Unified SDK) ─────────────────────────────────────")
+
+    core_url_key = f"{prefix}_CORE_LIB_REPOSITORY_URL"
+    core_branch_key = f"{prefix}_CORE_LIB_REPOSITORY_BRANCH"
+    core_setup_key = f"{prefix}_CORE_LIB_SETUP"
+    core_commands_key = f"{prefix}_CORE_LIB_COMMANDS"
+
+    legacy_url_key = f"{prefix}_ORCHESTRATOR_REPOSITORY_URL"
+    legacy_branch_key = f"{prefix}_ORCHESTRATOR_REPOSITORY_BRANCH"
+    legacy_setup_key = f"{prefix}_ORCHESTRATOR_SETUP"
+    legacy_commands_key = f"{prefix}_ORCHESTRATOR_COMMANDS"
+
+    repo_url = get_url(env, core_url_key)
+    using_legacy_vars = False
+    if not repo_url:
+        repo_url = get_url(env, legacy_url_key)
+        using_legacy_vars = bool(repo_url)
+
+    if not repo_url:
+        print(
+            f"[SKIP] Neither '{core_url_key}' nor '{legacy_url_key}' is set "
+            "— skipping 'dark-core-lib'."
+        )
+        return
+
+    if using_legacy_vars:
+        print(
+            f"[WARNING] Using legacy variable '{legacy_url_key}'. "
+            f"Please migrate to '{core_url_key}'."
+        )
+
+    branch = env.get(core_branch_key, "").strip() or env.get(legacy_branch_key, "main").strip() or "main"
+    setup_raw = env.get(core_setup_key, "").strip()
+    if not setup_raw:
+        setup_raw = env.get(legacy_setup_key, "True").strip()
+    do_setup = setup_raw.lower() != "false"
+
+    extra_commands = env.get(core_commands_key, "").strip() or env.get(legacy_commands_key, "").strip()
+
+    core_path = Path("components/core/dark-core-lib")
+
+    install_repo(
+        name="dark-core-lib",
+        repo_url=repo_url,
+        branch=branch,
+        target_dir=str(core_path),
+    )
+
+    if not do_setup:
+        print("[INFO] SETUP=False — 'dark-core-lib' cloned, setup skipped.\n")
+        return
+
+    setup_repo(target_dir=str(core_path), commands_str="")
+
+    core_abs = core_path.resolve()
+    venv_pip = str(core_abs / "venv" / "bin" / "pip")
+
+    print("[INFO] Installing dark-core-lib in editable mode...")
+    run_shell(f"{venv_pip} install -e .", cwd=str(core_abs))
+
+    generate_core_lib_env_integration(core_path=core_abs, env=env)
+
+    if extra_commands:
+        # Ensure any "pip ..." command uses the component venv pip.
+        extra_commands = extra_commands.replace("pip ", f"{venv_pip} ")
+        run_commands(extra_commands, cwd=str(core_abs))
 
 # ─── Generic single-repo component installer ─────────────────────────────────
 
@@ -551,7 +632,7 @@ def install_profile(prefix: str, env: dict) -> None:
     Components installed in order:
 
     1. Blockchain (``dark-env``, ``dark-dapp``, ``dark-explorador``)
-    2. Orchestrator
+    2. Core Lib
     3. Resolver
     4. Minter
     5. IPFS
@@ -565,7 +646,7 @@ def install_profile(prefix: str, env: dict) -> None:
     install_blockchain(prefix=prefix, env=env)
 
 
-    install_orchestrator(prefix=prefix, env=env)
+    install_core_lib(prefix=prefix, env=env)
 
     for component in ("RESOLVER", "MINTER", "IPFS"):
         install_single_component(name=component, prefix=prefix, env=env)

@@ -34,7 +34,7 @@ Then open `.env` and configure it (see [Environment Variables](#environment-vari
 ### 3. Run the installer
 
 ```bash
-python install.py
+python3 install.py
 ```
 
 The script will clone each configured repository into `components/` and run its setup commands automatically.
@@ -43,14 +43,14 @@ The script will clone each configured repository into `components/` and run its 
 
 ### 4 . Clean
 ```bash
-python clean.py
+python3 clean.py
 ```
 ---
 
 ### 5. Restart
 
 ```bash
-python restart.py
+python3 restart.py
 ```
 ## Environment Variables
 
@@ -95,7 +95,7 @@ The `blockchain` component has three independent sub-repositories:
 
 | Component    | Variable prefix           |
 | ------------ | ------------------------- |
-| Orchestrator | `{PROFILE}_ORCHESTRATOR_` |
+| Core Lib     | `{PROFILE}_CORE_LIB_`     |
 | Resolver     | `{PROFILE}_RESOLVER_`     |
 | Minter       | `{PROFILE}_MINTER_`       |
 | IPFS         | `{PROFILE}_IPFS_`         |
@@ -156,6 +156,21 @@ This happens **before** the `COMMANDS` are executed.
 
 ---
 
+### Core Lib auto-configuration
+
+When `core-lib` setup is enabled, the installer also generates:
+
+`components/core/dark-core-lib/.env.integration`
+
+using values from:
+
+- Global `.env`: `RPC_URL`, `CHAIN_ID`, `MASTER_PRIVATE_KEY`
+- Deployed contracts file: `components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini`
+
+This keeps `dark-core-lib` aligned with the blockchain and contract addresses deployed during installation.
+
+---
+
 ## Installed directory structure
 
 After running the installer, components are placed under `components/`:
@@ -166,9 +181,10 @@ components/
 │   ├── dark-env/
 │   ├── dark-dapp/
 │   └── dark-explorador/
-├── orchestrator/
-    └── dark-core-orchestrator/
-        └── venv/observer-lib/
+├── core/
+│   └── dark-core-lib/
+│       ├── venv/
+│       └── .env.integration
 ├── resolver/
 ├── minter/
 └── ipfs/
