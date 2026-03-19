@@ -78,6 +78,31 @@ def load_env(filepath: str = ".env") -> dict:
     return env
 
 
+def load_optional_env(filepath: Path) -> dict:
+    """Parse an env-style file if it exists, returning an empty dict otherwise.
+
+    :param filepath: Path to the env-style file.
+    :type filepath: Path
+    :returns: Parsed environment values preserving file order.
+    :rtype: dict
+    """
+    env: dict = {}
+
+    if not filepath.exists():
+        return env
+
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                env[key.strip()] = value.strip()
+
+    return env
+
+
 def run_shell(cmd: str, cwd: str = None) -> None:
     """Execute a single shell command string and exit the process on failure.
 
@@ -628,6 +653,87 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     print(f"[OK] Generated '{env_path}'.")
 
 
+def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
+    """Generate .env.integration for minter from installed blockchain state.
+
+    Uses the component's ``.env.example`` as a baseline, then overwrites the
+    blockchain-sensitive values with the deployed contracts and master key from
+    the active installation.
+
+    :param minter_path: Path to components/minter.
+    :type minter_path: Path
+    :param env: Dictionary of environment variables loaded from .env.
+    :type env: dict
+    """
+    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
+    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
+
+    if not dark_contract or not authority_contract:
+        print(
+            "[WARNING] Could not read full contract addresses from "
+            f"'{ini_path}'. .env.integration may be incomplete."
+        )
+
+    template_env = load_optional_env(minter_path / ".env.example")
+
+    integration_env = {
+        **template_env,
+        "DARK_RPC_URL": env.get(
+            "RPC_URL",
+            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
+        ).strip(),
+        "DARK_CHAIN_ID": env.get(
+            "CHAIN_ID",
+            template_env.get("DARK_CHAIN_ID", "1337"),
+        ).strip(),
+        "DARK_CONTRACT_ADDRESS": dark_contract or template_env.get("DARK_CONTRACT_ADDRESS", "").strip(),
+        "DARK_AUTHORITY_ADDRESS": authority_contract or template_env.get("DARK_AUTHORITY_ADDRESS", "").strip(),
+        "DARK_ADMIN_PRIVATE_KEY": env.get(
+            "MASTER_PRIVATE_KEY",
+            template_env.get("DARK_ADMIN_PRIVATE_KEY", ""),
+        ).strip(),
+    }
+
+    env_path = minter_path / ".env.integration"
+    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
+    with open(env_path, "w") as f:
+        f.writelines(lines)
+
+    print(f"[OK] Generated '{env_path}'.")
+
+
+def commands_include_docker_compose_up(commands_str: str) -> bool:
+    """Return True when the command string already handles compose startup."""
+    return any(
+        "docker compose up" in cmd or "docker-compose up" in cmd
+        for cmd in (part.strip() for part in commands_str.split("|"))
+    )
+
+
+def start_minter_stack(minter_path: Path) -> None:
+    """Start minter services via Docker Compose when blockchain network exists."""
+    compose_file = minter_path / "docker-compose.yml"
+    if not compose_file.exists():
+        print(f"[WARNING] '{compose_file}' not found. Skipping minter Docker startup.")
+        return
+
+    network_check = subprocess.run(
+        "docker network inspect dark-net",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if network_check.returncode != 0:
+        print(
+            "[WARNING] Docker network 'dark-net' was not found. "
+            "Skipping minter Docker startup. Start blockchain first."
+        )
+        return
+
+    print("[INFO] Starting minter Docker stack...")
+    run_shell("docker compose up -d --build", cwd=str(minter_path))
+
+
 def install_core_lib(prefix: str, env: dict) -> None:
     """Clone and set up dark-core-lib as the unified SDK component.
 
@@ -743,13 +849,23 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = env.get(commands_key, DEFAULT_COMMANDS).strip()
     target   = f"components/{name.lower()}"
+    target_path = Path(target).resolve()
 
     install_repo(name=name.lower(), repo_url=repo_url, branch=branch, target_dir=target)
+
+    if name.upper() == "MINTER":
+        generate_minter_env_integration(minter_path=target_path, env=env)
 
     if do_setup:
         setup_repo(target_dir=target, commands_str=commands)
     else:
         print(f"[INFO] SETUP=False — '{name.lower()}' cloned, setup skipped.\n")
+
+    if name.upper() == "MINTER" and do_setup:
+        if commands_include_docker_compose_up(commands):
+            print("[INFO] Minter Docker startup already handled by configured commands.")
+        else:
+            start_minter_stack(minter_path=target_path)
 
 
 # ─── Profile installer ────────────────────────────────────────────────────────
