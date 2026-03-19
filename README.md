@@ -96,6 +96,7 @@ The `blockchain` component has three independent sub-repositories:
 | Component    | Variable prefix           |
 | ------------ | ------------------------- |
 | Core Lib     | `{PROFILE}_CORE_LIB_`     |
+| Core Admin API | `{PROFILE}_CORE_ADMIN_API_` |
 | Resolver     | `{PROFILE}_RESOLVER_`     |
 | Minter       | `{PROFILE}_MINTER_`       |
 | IPFS         | `{PROFILE}_IPFS_`         |
@@ -177,15 +178,18 @@ After running the installer, components are placed under `components/`:
 
 ```
 components/
-├── venv/
 ├── blockchain/
 │   ├── dark-env/
 │   ├── dark-dapp/
 │   └── dark-explorador/
 ├── core/
-│   └── dark-core-lib/
+│   ├── dark-core-lib/
+│   │   └── .env.integration
+├── services/
+│   ├── dark-core-admin-api/
+│   │   └── .env.integration
+│   └── dark-core-minter-api/
 │       └── .env.integration
 ├── resolver/
-├── minter/
 └── ipfs/
 ```

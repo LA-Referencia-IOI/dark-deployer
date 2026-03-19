@@ -660,7 +660,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     blockchain-sensitive values with the deployed contracts and master key from
     the active installation.
 
-    :param minter_path: Path to components/minter.
+    :param minter_path: Path to components/services/dark-core-minter-api.
     :type minter_path: Path
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
@@ -702,6 +702,55 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     print(f"[OK] Generated '{env_path}'.")
 
 
+def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
+    """Generate .env.integration for dark-core-admin-api from installed blockchain state.
+
+    Uses the component's ``.env.example`` as a baseline, then overwrites the
+    blockchain-sensitive values with the deployed contracts and master key from
+    the active installation.
+
+    :param admin_api_path: Path to components/services/dark-core-admin-api.
+    :type admin_api_path: Path
+    :param env: Dictionary of environment variables loaded from .env.
+    :type env: dict
+    """
+    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
+    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
+
+    if not dark_contract or not authority_contract:
+        print(
+            "[WARNING] Could not read full contract addresses from "
+            f"'{ini_path}'. .env.integration may be incomplete."
+        )
+
+    template_env = load_optional_env(admin_api_path / ".env.example")
+
+    integration_env = {
+        **template_env,
+        "DARK_RPC_URL": env.get(
+            "RPC_URL",
+            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
+        ).strip(),
+        "DARK_CHAIN_ID": env.get(
+            "CHAIN_ID",
+            template_env.get("DARK_CHAIN_ID", "1337"),
+        ).strip(),
+        "DARK_CONTRACT_ADDRESS": dark_contract or template_env.get("DARK_CONTRACT_ADDRESS", "").strip(),
+        "DARK_AUTHORITY_ADDRESS": authority_contract or template_env.get("DARK_AUTHORITY_ADDRESS", "").strip(),
+        "DARK_ADMIN_PRIVATE_KEY": env.get(
+            "MASTER_PRIVATE_KEY",
+            template_env.get("DARK_ADMIN_PRIVATE_KEY", ""),
+        ).strip(),
+    }
+
+    env_path = admin_api_path / ".env.integration"
+    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
+    with open(env_path, "w") as f:
+        f.writelines(lines)
+
+    print(f"[OK] Generated '{env_path}'.")
+
+
 def commands_include_docker_compose_up(commands_str: str) -> bool:
     """Return True when the command string already handles compose startup."""
     return any(
@@ -732,6 +781,30 @@ def start_minter_stack(minter_path: Path) -> None:
 
     print("[INFO] Starting minter Docker stack...")
     run_shell("docker compose up -d --build", cwd=str(minter_path))
+
+
+def start_admin_api_stack(admin_api_path: Path) -> None:
+    """Start admin API via Docker Compose when blockchain network exists."""
+    compose_file = admin_api_path / "docker-compose.yml"
+    if not compose_file.exists():
+        print(f"[WARNING] '{compose_file}' not found. Skipping admin API Docker startup.")
+        return
+
+    network_check = subprocess.run(
+        "docker network inspect dark-net",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if network_check.returncode != 0:
+        print(
+            "[WARNING] Docker network 'dark-net' was not found. "
+            "Skipping admin API Docker startup. Start blockchain first."
+        )
+        return
+
+    print("[INFO] Starting admin API Docker stack...")
+    run_shell("docker compose up -d --build", cwd=str(admin_api_path))
 
 
 def install_core_lib(prefix: str, env: dict) -> None:
@@ -819,6 +892,47 @@ def install_core_lib(prefix: str, env: dict) -> None:
         extra_commands = extra_commands.replace("pip ", f"{venv_pip} ")
         run_commands(extra_commands, cwd=str(core_abs))
 
+
+def install_core_admin_api(prefix: str, env: dict) -> None:
+    """Clone and set up dark-core-admin-api as an optional core service."""
+    print("\n── Core Admin API ─────────────────────────────────────────────")
+
+    url_key = f"{prefix}_CORE_ADMIN_API_REPOSITORY_URL"
+    branch_key = f"{prefix}_CORE_ADMIN_API_REPOSITORY_BRANCH"
+    setup_key = f"{prefix}_CORE_ADMIN_API_SETUP"
+    commands_key = f"{prefix}_CORE_ADMIN_API_COMMANDS"
+
+    repo_url = get_url(env, url_key)
+    if not repo_url:
+        print(f"[SKIP] '{url_key}' is not set — skipping 'dark-core-admin-api'.")
+        return
+
+    branch = env.get(branch_key, "main").strip() or "main"
+    do_setup = env.get(setup_key, "True").strip().lower() != "false"
+    commands = env.get(commands_key, "").strip()
+    target = "components/services/dark-core-admin-api"
+    target_path = Path(target).resolve()
+
+    install_repo(
+        name="dark-core-admin-api",
+        repo_url=repo_url,
+        branch=branch,
+        target_dir=target,
+    )
+
+    generate_admin_api_env_integration(admin_api_path=target_path, env=env)
+
+    if do_setup:
+        setup_repo(target_dir=target, commands_str=commands)
+    else:
+        print("[INFO] SETUP=False — 'dark-core-admin-api' cloned, setup skipped.\n")
+        return
+
+    if commands_include_docker_compose_up(commands):
+        print("[INFO] Admin API Docker startup already handled by configured commands.")
+    else:
+        start_admin_api_stack(admin_api_path=target_path)
+
 # ─── Generic single-repo component installer ─────────────────────────────────
 
 
@@ -849,9 +963,13 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = env.get(commands_key, DEFAULT_COMMANDS).strip()
     target   = f"components/{name.lower()}"
+    repo_name = name.lower()
+    if name.upper() == "MINTER":
+        target = "components/services/dark-core-minter-api"
+        repo_name = "dark-core-minter-api"
     target_path = Path(target).resolve()
 
-    install_repo(name=name.lower(), repo_url=repo_url, branch=branch, target_dir=target)
+    install_repo(name=repo_name, repo_url=repo_url, branch=branch, target_dir=target)
 
     if name.upper() == "MINTER":
         generate_minter_env_integration(minter_path=target_path, env=env)
@@ -859,7 +977,7 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
     if do_setup:
         setup_repo(target_dir=target, commands_str=commands)
     else:
-        print(f"[INFO] SETUP=False — '{name.lower()}' cloned, setup skipped.\n")
+        print(f"[INFO] SETUP=False — '{repo_name}' cloned, setup skipped.\n")
 
     if name.upper() == "MINTER" and do_setup:
         if commands_include_docker_compose_up(commands):
@@ -878,9 +996,10 @@ def install_profile(prefix: str, env: dict) -> None:
 
     1. Blockchain (``dark-env``, ``dark-dapp``, ``dark-explorador``)
     2. Core Lib
-    3. Resolver
-    4. Minter
-    5. IPFS
+    3. Core Admin API
+    4. Resolver
+    5. Minter
+    6. IPFS
 
     :param prefix: Environment variable prefix matching the active profile
                    (e.g. ``DEVELOPER``, ``SANDBOX``, ``PRODUCTION``).
@@ -892,6 +1011,7 @@ def install_profile(prefix: str, env: dict) -> None:
 
 
     install_core_lib(prefix=prefix, env=env)
+    install_core_admin_api(prefix=prefix, env=env)
 
     for component in ("RESOLVER", "MINTER", "IPFS"):
         install_single_component(name=component, prefix=prefix, env=env)
