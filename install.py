@@ -38,6 +38,7 @@ import configparser
 import re
 from typing import Optional
 import json
+import http.client
 import urllib.error
 import urllib.request
 
@@ -163,7 +164,14 @@ def wait_for_rpc(
                 print(f"[OK] Blockchain RPC is ready at block {block_number}.")
                 return
             last_error = f"Unexpected RPC response: {body}"
-        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ValueError,
+            json.JSONDecodeError,
+            OSError,
+            http.client.HTTPException,
+        ) as exc:
             last_error = str(exc)
 
         time.sleep(poll_interval)
@@ -194,7 +202,7 @@ def wait_for_http_ready(
                     print(f"[OK] {service_name} is healthy at '{url}'.")
                     return
                 last_error = f"unexpected HTTP status {status_code}"
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
             last_error = str(exc)
 
         time.sleep(poll_interval)
@@ -355,6 +363,27 @@ def shared_venv_bin(bin_name: str) -> str:
     """Return absolute path to a binary inside the shared root venv."""
     venv_dir = ensure_shared_venv()
     return str(venv_dir / "bin" / bin_name)
+
+
+def ensure_component_venv(venv_dir: Path) -> Path:
+    """Create or reuse a component-local virtual environment.
+
+    This is used for components whose pinned dependencies would otherwise
+    downgrade packages in the shared developer venv.
+    """
+    if not venv_dir.exists():
+        print(f"[INFO] Creating component venv at '{venv_dir}'...")
+        run_shell(f"{sys.executable} -m venv {venv_dir}")
+    else:
+        print(f"[INFO] Component venv already exists at '{venv_dir}', reusing it.")
+
+    return venv_dir
+
+
+def component_venv_bin(venv_dir: Path, bin_name: str) -> str:
+    """Return absolute path to a binary inside a component-local venv."""
+    resolved_venv = ensure_component_venv(venv_dir)
+    return str(resolved_venv / "bin" / bin_name)
 
 
 def get_url(env: dict, key: str) -> str:
@@ -630,7 +659,8 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
 
     Performs the following steps inside ``target_dir``:
 
-    1. Installs Python dependencies into the shared root venv (``./venv``).
+    1. Installs Python dependencies into a component-local venv
+       (``<target_dir>/.venv``).
     2. Generates ``config.ini`` from the global blockchain variables in ``.env``
        (``RPC_URL``, ``CHAIN_ID``, ``MASTER_PRIVATE_KEY``).
     3. Compiles Solidity contracts via ``dARK_dapp/compile.py``.
@@ -643,13 +673,14 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     :raises SystemExit: If any required variable is missing or a step fails.
     """
     abs_target = Path(target_dir).resolve()
-    pip        = shared_venv_bin("pip")
-    python     = shared_venv_bin("python")
+    component_venv = abs_target / ".venv"
+    pip            = component_venv_bin(component_venv, "pip")
+    python         = component_venv_bin(component_venv, "python")
 
-    # ── Step 1: shared root venv + pip install ───────────────────────────────
-    print("[INFO] Installing dark-dapp Python dependencies into shared root venv...")
+    # ── Step 1: isolated venv + pip install ──────────────────────────────────
+    print("[INFO] Installing dark-dapp Python dependencies into component-local venv...")
     run_shell(f"{pip} install -r requirements.txt", cwd=str(abs_target))
-    print(f"[OK] Python dependencies installed into '{SHARED_VENV_DIR}'.\n")
+    print(f"[OK] Python dependencies installed into '{component_venv}'.\n")
 
     # ── Step 2: generate config.ini ───────────────────────────────────────────
     rpc_url     = env.get("RPC_URL", "").strip()
