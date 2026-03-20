@@ -32,10 +32,14 @@ cloned repository directory. Shell syntax (globs, redirects) is supported.
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 import configparser
 import re
 from typing import Optional
+import json
+import urllib.error
+import urllib.request
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -43,29 +47,32 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 SHARED_VENV_DIR = PROJECT_ROOT / "venv"
 
 
-def load_env(filepath: str = ".env") -> dict:
-    """Parse a ``.env`` file and return its contents as a dictionary.
+def parse_env_file(filepath: Path, required: bool = True) -> dict:
+    """Parse an env-style file and return its contents as a dictionary.
 
     Lines starting with ``#`` and empty lines are ignored.
     Only lines containing ``=`` are parsed.
 
-    :param filepath: Path to the ``.env`` file.
-    :type filepath: str
+    :param filepath: Path to the env-style file.
+    :type filepath: Path
+    :param required: Whether missing files should raise a fatal error.
+    :type required: bool
     :returns: Dictionary mapping variable names to their values.
     :rtype: dict
-    :raises SystemExit: If the file does not exist.
+    :raises SystemExit: If the file is required but does not exist.
     """
     env: dict = {}
-    path = Path(filepath)
 
-    if not path.exists():
-        print(
-            f"[ERROR] '{filepath}' not found. "
-            "Copy .env.example to .env and fill in the values."
-        )
-        sys.exit(1)
+    if not filepath.exists():
+        if required:
+            print(
+                f"[ERROR] '{filepath}' not found. "
+                "Copy .env.example to .env and fill in the values."
+            )
+            sys.exit(1)
+        return env
 
-    with open(path) as f:
+    with open(filepath) as f:
         for line in f:
             line = line.strip()
             # Skip empty lines and comments
@@ -78,29 +85,14 @@ def load_env(filepath: str = ".env") -> dict:
     return env
 
 
+def load_env(filepath: str = ".env") -> dict:
+    """Parse a required ``.env`` file and return its contents."""
+    return parse_env_file(Path(filepath), required=True)
+
+
 def load_optional_env(filepath: Path) -> dict:
-    """Parse an env-style file if it exists, returning an empty dict otherwise.
-
-    :param filepath: Path to the env-style file.
-    :type filepath: Path
-    :returns: Parsed environment values preserving file order.
-    :rtype: dict
-    """
-    env: dict = {}
-
-    if not filepath.exists():
-        return env
-
-    with open(filepath) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                key, _, value = line.partition("=")
-                env[key.strip()] = value.strip()
-
-    return env
+    """Parse an optional env-style file, returning an empty dict if absent."""
+    return parse_env_file(filepath, required=False)
 
 
 def run_shell(cmd: str, cwd: str = None) -> None:
@@ -121,6 +113,210 @@ def run_shell(cmd: str, cwd: str = None) -> None:
     if result.returncode != 0:
         print(f"[ERROR] Command failed: {cmd}")
         sys.exit(result.returncode)
+
+
+def ensure_docker_running() -> None:
+    """Fail early when Docker is not available or the daemon is stopped."""
+    result = subprocess.run(
+        "docker info",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return
+
+    stderr = result.stderr.strip() or result.stdout.strip() or "unknown Docker error"
+    print("[ERROR] Docker does not appear to be running or accessible.")
+    print(f"[ERROR] {stderr}")
+    sys.exit(1)
+
+
+def wait_for_rpc(
+    rpc_url: str,
+    timeout_seconds: int = 120,
+    poll_interval: float = 2.0,
+) -> None:
+    """Wait until the configured JSON-RPC endpoint responds successfully."""
+    print(f"[INFO] Waiting for blockchain RPC at '{rpc_url}'...")
+    deadline = time.time() + timeout_seconds
+    last_error = "RPC not ready yet"
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1,
+    }
+
+    while time.time() < deadline:
+        try:
+            request = urllib.request.Request(
+                rpc_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            block_number = body.get("result")
+            if block_number and not body.get("error"):
+                print(f"[OK] Blockchain RPC is ready at block {block_number}.")
+                return
+            last_error = f"Unexpected RPC response: {body}"
+        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+            last_error = str(exc)
+
+        time.sleep(poll_interval)
+
+    print(
+        "[ERROR] Blockchain RPC did not become ready within "
+        f"{timeout_seconds} seconds: {last_error}"
+    )
+    sys.exit(1)
+
+
+def wait_for_http_ready(
+    url: str,
+    service_name: str,
+    timeout_seconds: int = 120,
+    poll_interval: float = 2.0,
+) -> None:
+    """Wait until an HTTP health endpoint responds with a 2xx status code."""
+    print(f"[INFO] Waiting for {service_name} health endpoint at '{url}'...")
+    deadline = time.time() + timeout_seconds
+    last_error = "service not ready yet"
+
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                status_code = getattr(response, "status", None) or response.getcode()
+                if 200 <= status_code < 300:
+                    print(f"[OK] {service_name} is healthy at '{url}'.")
+                    return
+                last_error = f"unexpected HTTP status {status_code}"
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_error = str(exc)
+
+        time.sleep(poll_interval)
+
+    print(
+        f"[ERROR] {service_name} did not become healthy within "
+        f"{timeout_seconds} seconds: {last_error}"
+    )
+    sys.exit(1)
+
+
+def probe_http_status(url: str) -> str:
+    """Return a short status string for an HTTP endpoint."""
+    try:
+        with urllib.request.urlopen(url, timeout=3) as response:
+            status_code = getattr(response, "status", None) or response.getcode()
+        return f"up ({status_code})"
+    except Exception:
+        return "down"
+
+
+def probe_rpc_block(rpc_url: str) -> str:
+    """Return the current block number for a JSON-RPC endpoint or 'down'."""
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1,
+    }
+    try:
+        request = urllib.request.Request(
+            rpc_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        block_number = body.get("result")
+        if not block_number:
+            return "up"
+        return f"up (block {int(block_number, 16)})"
+    except Exception:
+        return "down"
+
+
+def docker_network_exists(network_name: str) -> bool:
+    """Return True when the named Docker network exists."""
+    result = subprocess.run(
+        f"docker network inspect {network_name}",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def compose_up_stack(
+    compose_dir: Path,
+    stack_name: str,
+    health_url: Optional[str] = None,
+) -> None:
+    """Start a Docker Compose stack and optionally wait for its health endpoint."""
+    ensure_docker_running()
+    compose_file = compose_dir / "docker-compose.yml"
+    if not compose_file.exists():
+        print(f"[WARNING] '{compose_file}' not found. Skipping {stack_name} Docker startup.")
+        return
+
+    if not docker_network_exists("dark-net"):
+        print(
+            "[WARNING] Docker network 'dark-net' was not found. "
+            f"Skipping {stack_name} Docker startup. Start blockchain first."
+        )
+        return
+
+    print(f"[INFO] Starting {stack_name} Docker stack...")
+    run_shell("docker compose up -d --build", cwd=str(compose_dir))
+
+    if health_url:
+        wait_for_http_ready(health_url, service_name=stack_name)
+
+
+def print_install_summary(prefix: str, env: dict) -> None:
+    """Print a concise summary of the installed local service endpoints."""
+    print("\n=== Service Summary ===")
+
+    rpc_url = env.get("RPC_URL", "http://localhost:8545").strip() or "http://localhost:8545"
+    explorer_port = env.get("EXPLORER_PORT", "25000").strip() or "25000"
+    explorer_url = f"http://localhost:{explorer_port}"
+    admin_url = "http://localhost:8000"
+    minter_url = "http://localhost:8001"
+
+    print(f"- Blockchain RPC: {rpc_url} [{probe_rpc_block(rpc_url)}]")
+
+    explorer_selected = bool(get_url(env, f"{prefix}_BLOCKCHAIN_DARK_EXPLORADOR_REPOSITORY_URL"))
+    if explorer_selected:
+        print(f"- Block Explorer: {explorer_url} [{probe_http_status(explorer_url)}]")
+
+    admin_selected = bool(get_url(env, f"{prefix}_CORE_ADMIN_API_REPOSITORY_URL"))
+    if admin_selected:
+        print(
+            f"- Core Admin API: {admin_url} "
+            f"[health: {probe_http_status(f'{admin_url}/health')}] "
+            f"[docs: {admin_url}/docs]"
+        )
+
+    minter_selected = bool(get_url(env, f"{prefix}_MINTER_REPOSITORY_URL"))
+    if minter_selected:
+        print(
+            f"- Core Minter API: {minter_url} "
+            f"[health: {probe_http_status(f'{minter_url}/health')}] "
+            f"[docs: {minter_url}/docs]"
+        )
+
+    core_lib_selected = bool(
+        get_url(env, f"{prefix}_CORE_LIB_REPOSITORY_URL")
+        or get_url(env, f"{prefix}_ORCHESTRATOR_REPOSITORY_URL")
+    )
+    if core_lib_selected:
+        core_env_path = Path("components/core/dark-core-lib/.env.integration")
+        print(f"- Core Lib env: {core_env_path}")
 
 
 def run_commands(commands_str: str, cwd: str) -> None:
@@ -509,7 +705,7 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     # so it must run from inside dARK_dapp/ as well.
     # Wait for the node to be ready before deploying — docker compose up -d
     # returns immediately but the node may still be initialising.
-    # wait_for_rpc(rpc_url)
+    wait_for_rpc(rpc_url)
     print("[INFO] Deploying contracts to the network...")
     run_shell(f"{python} deploy.py", cwd=str(dapp_dir))
     print("[OK] Contracts deployed.\n")
@@ -761,50 +957,20 @@ def commands_include_docker_compose_up(commands_str: str) -> bool:
 
 def start_minter_stack(minter_path: Path) -> None:
     """Start minter services via Docker Compose when blockchain network exists."""
-    compose_file = minter_path / "docker-compose.yml"
-    if not compose_file.exists():
-        print(f"[WARNING] '{compose_file}' not found. Skipping minter Docker startup.")
-        return
-
-    network_check = subprocess.run(
-        "docker network inspect dark-net",
-        shell=True,
-        capture_output=True,
-        text=True,
+    compose_up_stack(
+        compose_dir=minter_path,
+        stack_name="minter",
+        health_url="http://localhost:8001/health",
     )
-    if network_check.returncode != 0:
-        print(
-            "[WARNING] Docker network 'dark-net' was not found. "
-            "Skipping minter Docker startup. Start blockchain first."
-        )
-        return
-
-    print("[INFO] Starting minter Docker stack...")
-    run_shell("docker compose up -d --build", cwd=str(minter_path))
 
 
 def start_admin_api_stack(admin_api_path: Path) -> None:
     """Start admin API via Docker Compose when blockchain network exists."""
-    compose_file = admin_api_path / "docker-compose.yml"
-    if not compose_file.exists():
-        print(f"[WARNING] '{compose_file}' not found. Skipping admin API Docker startup.")
-        return
-
-    network_check = subprocess.run(
-        "docker network inspect dark-net",
-        shell=True,
-        capture_output=True,
-        text=True,
+    compose_up_stack(
+        compose_dir=admin_api_path,
+        stack_name="admin API",
+        health_url="http://localhost:8000/health",
     )
-    if network_check.returncode != 0:
-        print(
-            "[WARNING] Docker network 'dark-net' was not found. "
-            "Skipping admin API Docker startup. Start blockchain first."
-        )
-        return
-
-    print("[INFO] Starting admin API Docker stack...")
-    run_shell("docker compose up -d --build", cwd=str(admin_api_path))
 
 
 def install_core_lib(prefix: str, env: dict) -> None:
@@ -1051,7 +1217,9 @@ def main() -> None:
         sys.exit(1)
 
     print(f"[INFO] Profile: {install_type.upper()}")
+    ensure_docker_running()
     install_profile(prefix=prefix, env=env)
+    print_install_summary(prefix=prefix, env=env)
 
     print("=== Installation complete ===")
 
