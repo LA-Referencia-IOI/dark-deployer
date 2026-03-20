@@ -161,7 +161,7 @@ This happens **before** the `COMMANDS` are executed.
 
 When `core-lib` setup is enabled, the installer also generates:
 
-`components/core/dark-core-lib/.env.integration`
+`components/libraries/dark-core-lib/.env.integration`
 
 using values from:
 
@@ -182,7 +182,7 @@ components/
 │   ├── dark-env/
 │   ├── dark-dapp/
 │   └── dark-explorador/
-├── core/
+├── libraries/
 │   ├── dark-core-lib/
 │   │   └── .env.integration
 ├── services/

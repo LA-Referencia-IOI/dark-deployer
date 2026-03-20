@@ -323,7 +323,7 @@ def print_install_summary(prefix: str, env: dict) -> None:
         or get_url(env, f"{prefix}_ORCHESTRATOR_REPOSITORY_URL")
     )
     if core_lib_selected:
-        core_env_path = Path("components/core/dark-core-lib/.env.integration")
+        core_env_path = Path("components/libraries/dark-core-lib/.env.integration")
         print(f"- Core Lib env: {core_env_path}")
 
 
@@ -846,7 +846,7 @@ def read_deployed_contract_addresses(ini_path: Path) -> tuple[str, str]:
 def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     """Generate .env.integration for dark-core-lib from installed blockchain state.
 
-    :param core_path: Path to components/core/dark-core-lib.
+    :param core_path: Path to components/libraries/dark-core-lib.
     :type core_path: Path
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
@@ -1054,7 +1054,7 @@ def install_core_lib(prefix: str, env: dict) -> None:
 
     extra_commands = env.get(core_commands_key, "").strip() or env.get(legacy_commands_key, "").strip()
 
-    core_path = Path("components/core/dark-core-lib")
+    core_path = Path("components/libraries/dark-core-lib")
 
     install_repo(
         name="dark-core-lib",
