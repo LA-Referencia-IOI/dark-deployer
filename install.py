@@ -17,10 +17,12 @@ Supported profiles:
 
 Components installed (per profile):
     - **blockchain** — three sub-repos: ``dark-env``, ``dark-dapp``, ``dark-explorador``
+    - **dark-ipfs**
     - **core-lib**
+    - **admin**
+    - **store-api**
     - **resolver**
     - **minter**
-    - **ipfs**
 
 Command format in ``.env``::
 
@@ -249,6 +251,21 @@ def probe_rpc_block(rpc_url: str) -> str:
         return "down"
 
 
+def probe_ipfs_api_status(ipfs_api_url: str) -> str:
+    """Return a short status string for the configured IPFS API endpoint."""
+    try:
+        request = urllib.request.Request(
+            f"{ipfs_api_url.rstrip('/')}/api/v0/id",
+            data=b"",
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status_code = getattr(response, "status", None) or response.getcode()
+        return f"up ({status_code})"
+    except Exception:
+        return "down"
+
+
 def docker_network_exists(network_name: str) -> bool:
     """Return True when the named Docker network exists."""
     result = subprocess.run(
@@ -293,7 +310,11 @@ def print_install_summary(prefix: str, env: dict) -> None:
     rpc_url = env.get("RPC_URL", "http://localhost:8545").strip() or "http://localhost:8545"
     explorer_port = env.get("EXPLORER_PORT", "25000").strip() or "25000"
     explorer_url = f"http://localhost:{explorer_port}"
+    ipfs_api_url = "http://localhost:5001"
+    cluster_api_url = "http://localhost:9094"
     admin_url = "http://localhost:8000"
+    resolver_url = "http://localhost:8002"
+    store_api_url = "http://localhost:8003"
     minter_url = "http://localhost:8001"
 
     print(f"- Blockchain RPC: {rpc_url} [{probe_rpc_block(rpc_url)}]")
@@ -308,6 +329,27 @@ def print_install_summary(prefix: str, env: dict) -> None:
             f"- Core Admin API: {admin_url} "
             f"[health: {probe_http_status(f'{admin_url}/health')}] "
             f"[docs: {admin_url}/docs]"
+        )
+
+    ipfs_selected = bool(get_url(env, f"{prefix}_IPFS_REPOSITORY_URL"))
+    if ipfs_selected:
+        print(f"- IPFS API: {ipfs_api_url} [{probe_ipfs_api_status(ipfs_api_url)}]")
+        print(f"- IPFS Cluster: {cluster_api_url} [{probe_http_status(f'{cluster_api_url}/id')}]")
+
+    store_api_selected = bool(get_url(env, f"{prefix}_STORE_API_REPOSITORY_URL"))
+    if store_api_selected:
+        print(
+            f"- Store API: {store_api_url} "
+            f"[health: {probe_http_status(f'{store_api_url}/health')}] "
+            f"[docs: {store_api_url}/docs]"
+        )
+
+    resolver_selected = bool(get_url(env, f"{prefix}_RESOLVER_REPOSITORY_URL"))
+    if resolver_selected:
+        print(
+            f"- Core Resolver API: {resolver_url} "
+            f"[health: {probe_http_status(f'{resolver_url}/health')}] "
+            f"[docs: {resolver_url}/docs]"
         )
 
     minter_selected = bool(get_url(env, f"{prefix}_MINTER_REPOSITORY_URL"))
@@ -902,6 +944,13 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         )
 
     template_env = load_optional_env(minter_path / ".env.example")
+    metadata_storage_type = template_env.get("METADATA_STORAGE_TYPE", "store_api").strip()
+    metadata_storage_path = template_env.get("METADATA_STORAGE_PATH", "./metadata_storage").strip()
+
+    if metadata_storage_type == "filesystem":
+        storage_path = Path(metadata_storage_path)
+        if not storage_path.is_absolute():
+            metadata_storage_path = str((minter_path / storage_path).resolve())
 
     integration_env = {
         **template_env,
@@ -919,9 +968,43 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "MASTER_PRIVATE_KEY",
             template_env.get("DARK_ADMIN_PRIVATE_KEY", ""),
         ).strip(),
+        "METADATA_STORAGE_TYPE": metadata_storage_type,
+        "METADATA_STORAGE_PATH": metadata_storage_path,
+        "METADATA_STORE_API_URL": (
+            "http://store-api:8003" if metadata_storage_type == "store_api"
+            else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()
+        ),
     }
 
     env_path = minter_path / ".env.integration"
+    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
+    with open(env_path, "w") as f:
+        f.writelines(lines)
+
+    print(f"[OK] Generated '{env_path}'.")
+
+
+def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
+    """Generate .env.integration for dark-store-api from installed IPFS settings."""
+    template_env = load_optional_env(store_api_path / ".env.example")
+    dark_ipfs_path = Path("components/blockchain/dark-ipfs").resolve()
+    dark_ipfs_env = load_optional_env(dark_ipfs_path / ".env")
+    if not dark_ipfs_env:
+        dark_ipfs_env = load_optional_env(dark_ipfs_path / ".env.example")
+
+    ipfs_api_port = (dark_ipfs_env.get("IPFS0_API_PORT") or "5001").strip()
+    cluster_api_port = (dark_ipfs_env.get("CLUSTER_API_PORT") or "9094").strip()
+
+    integration_env = {
+        **template_env,
+        "STORE_API_HOST": template_env.get("STORE_API_HOST", "0.0.0.0").strip(),
+        "STORE_API_PORT": "8003",
+        "STORAGE_BACKEND": template_env.get("STORAGE_BACKEND", "ipfs_cluster").strip(),
+        "IPFS_API_URL": f"http://host.docker.internal:{ipfs_api_port}",
+        "IPFS_CLUSTER_API_URL": f"http://host.docker.internal:{cluster_api_port}",
+    }
+
+    env_path = store_api_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
     with open(env_path, "w") as f:
         f.writelines(lines)
@@ -978,6 +1061,69 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
     print(f"[OK] Generated '{env_path}'.")
 
 
+def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) -> None:
+    """Generate .env.integration for dark-core-resolver-api.
+
+    Uses the component's ``.env.example`` as a baseline and overlays
+    blockchain values from the active installation. Metadata storage settings
+    are derived from the resolver defaults so the generated environment is
+    deterministic and does not accidentally inherit stale values from a
+    previous minter installation.
+
+    :param resolver_api_path: Path to components/services/dark-core-resolver-api.
+    :type resolver_api_path: Path
+    :param env: Dictionary of environment variables loaded from .env.
+    :type env: dict
+    """
+    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
+    dark_contract, _authority_contract = read_deployed_contract_addresses(ini_path)
+
+    if not dark_contract:
+        print(
+            "[WARNING] Could not read the dARK contract address from "
+            f"'{ini_path}'. Resolver .env.integration may be incomplete."
+        )
+
+    template_env = load_optional_env(resolver_api_path / ".env.example")
+
+    metadata_storage_type = template_env.get("METADATA_STORAGE_TYPE", "store_api").strip()
+    metadata_storage_path = template_env.get("METADATA_STORAGE_PATH", "./metadata_storage").strip()
+
+    if metadata_storage_type == "filesystem":
+        storage_path = Path(metadata_storage_path)
+        if not storage_path.is_absolute():
+            metadata_storage_path = str((minter_path / storage_path).resolve())
+
+    integration_env = {
+        **template_env,
+        "DARK_RPC_URL": env.get(
+            "RPC_URL",
+            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
+        ).strip(),
+        "DARK_CHAIN_ID": env.get(
+            "CHAIN_ID",
+            template_env.get("DARK_CHAIN_ID", "1337"),
+        ).strip(),
+        "DARK_CONTRACT_ADDRESS": dark_contract or template_env.get("DARK_CONTRACT_ADDRESS", "").strip(),
+        "METADATA_STORAGE_TYPE": metadata_storage_type,
+        "METADATA_STORAGE_PATH": metadata_storage_path,
+        "METADATA_STORE_API_URL": (
+            "http://store-api:8003" if metadata_storage_type == "store_api"
+            else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()
+        ),
+        "METADATA_STORE_API_TIMEOUT_SECONDS": (
+            template_env.get("METADATA_STORE_API_TIMEOUT_SECONDS", "10.0")
+        ).strip(),
+    }
+
+    env_path = resolver_api_path / ".env.integration"
+    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
+    with open(env_path, "w") as f:
+        f.writelines(lines)
+
+    print(f"[OK] Generated '{env_path}'.")
+
+
 def commands_include_docker_compose_up(commands_str: str) -> bool:
     """Return True when the command string already handles compose startup."""
     return any(
@@ -1001,6 +1147,24 @@ def start_admin_api_stack(admin_api_path: Path) -> None:
         compose_dir=admin_api_path,
         stack_name="admin API",
         health_url="http://localhost:8000/health",
+    )
+
+
+def start_resolver_api_stack(resolver_api_path: Path) -> None:
+    """Start resolver API via Docker Compose when the component provides it."""
+    compose_up_stack(
+        compose_dir=resolver_api_path,
+        stack_name="resolver API",
+        health_url="http://localhost:8002/health",
+    )
+
+
+def start_store_api_stack(store_api_path: Path) -> None:
+    """Start store API via Docker Compose when the component provides it."""
+    compose_up_stack(
+        compose_dir=store_api_path,
+        stack_name="store API",
+        health_url="http://localhost:8003/health",
     )
 
 
@@ -1130,6 +1294,158 @@ def install_core_admin_api(prefix: str, env: dict) -> None:
     else:
         start_admin_api_stack(admin_api_path=target_path)
 
+
+def install_core_resolver_api(prefix: str, env: dict) -> None:
+    """Clone and set up dark-core-resolver-api as an optional core service."""
+    print("\n── Core Resolver API ──────────────────────────────────────────")
+
+    url_key = f"{prefix}_RESOLVER_REPOSITORY_URL"
+    branch_key = f"{prefix}_RESOLVER_REPOSITORY_BRANCH"
+    setup_key = f"{prefix}_RESOLVER_SETUP"
+    commands_key = f"{prefix}_RESOLVER_COMMANDS"
+
+    repo_url = get_url(env, url_key)
+    if not repo_url:
+        print(f"[SKIP] '{url_key}' is not set — skipping 'dark-core-resolver-api'.")
+        return
+
+    branch = env.get(branch_key, "main").strip() or "main"
+    do_setup = env.get(setup_key, "True").strip().lower() != "false"
+    commands = env.get(commands_key, "").strip()
+    target = "components/services/dark-core-resolver-api"
+    target_path = Path(target).resolve()
+
+    install_repo(
+        name="dark-core-resolver-api",
+        repo_url=repo_url,
+        branch=branch,
+        target_dir=target,
+    )
+
+    generate_resolver_api_env_integration(resolver_api_path=target_path, env=env)
+
+    if not do_setup:
+        print("[INFO] SETUP=False — 'dark-core-resolver-api' cloned, setup skipped.\n")
+        return
+
+    setup_repo(target_dir=target, commands_str="")
+
+    venv_pip = shared_venv_bin("pip")
+
+    print("[INFO] Installing dark-core-resolver-api in editable mode...")
+    try:
+        run_shell(f"{venv_pip} install -e .", cwd=str(target_path))
+    except SystemExit:
+        print(
+            "[WARNING] Editable install failed. "
+            "Falling back to a regular install for compatibility."
+        )
+        run_shell(f"{venv_pip} install .", cwd=str(target_path))
+
+    if commands:
+        commands = commands.replace("pip ", f"{venv_pip} ")
+        run_commands(commands, cwd=str(target_path))
+
+        if commands_include_docker_compose_up(commands):
+            print("[INFO] Resolver API Docker startup already handled by configured commands.")
+        else:
+            start_resolver_api_stack(resolver_api_path=target_path)
+    else:
+        print("[INFO] No resolver COMMANDS configured. Trying Docker Compose startup by convention.")
+        start_resolver_api_stack(resolver_api_path=target_path)
+
+
+def install_dark_store_api(prefix: str, env: dict) -> None:
+    """Clone and set up dark-store-api as an optional storage service."""
+    print("\n── Store API ─────────────────────────────────────────────────")
+
+    url_key = f"{prefix}_STORE_API_REPOSITORY_URL"
+    branch_key = f"{prefix}_STORE_API_REPOSITORY_BRANCH"
+    setup_key = f"{prefix}_STORE_API_SETUP"
+    commands_key = f"{prefix}_STORE_API_COMMANDS"
+
+    repo_url = get_url(env, url_key)
+    if not repo_url:
+        print(f"[SKIP] '{url_key}' is not set — skipping 'dark-store-api'.")
+        return
+
+    branch = env.get(branch_key, "main").strip() or "main"
+    do_setup = env.get(setup_key, "True").strip().lower() != "false"
+    commands = env.get(commands_key, "").strip()
+    target = "components/services/dark-store-api"
+    target_path = Path(target).resolve()
+
+    install_repo(
+        name="dark-store-api",
+        repo_url=repo_url,
+        branch=branch,
+        target_dir=target,
+    )
+
+    generate_store_api_env_integration(store_api_path=target_path, env=env)
+
+    if not do_setup:
+        print("[INFO] SETUP=False — 'dark-store-api' cloned, setup skipped.\n")
+        return
+
+    setup_repo(target_dir=target, commands_str="")
+
+    venv_pip = shared_venv_bin("pip")
+
+    print("[INFO] Installing dark-store-api in editable mode...")
+    try:
+        run_shell(f"{venv_pip} install -e .", cwd=str(target_path))
+    except SystemExit:
+        print(
+            "[WARNING] Editable install failed. "
+            "Falling back to a regular install for compatibility."
+        )
+        run_shell(f"{venv_pip} install .", cwd=str(target_path))
+
+    if commands:
+        commands = commands.replace("pip ", f"{venv_pip} ")
+        run_commands(commands, cwd=str(target_path))
+
+        if commands_include_docker_compose_up(commands):
+            print("[INFO] Store API Docker startup already handled by configured commands.")
+        else:
+            start_store_api_stack(store_api_path=target_path)
+    else:
+        print("[INFO] No store API COMMANDS configured. Trying Docker Compose startup by convention.")
+        start_store_api_stack(store_api_path=target_path)
+
+
+def install_dark_ipfs(prefix: str, env: dict) -> None:
+    """Clone and set up dark-ipfs as the default IPFS backend."""
+    print("\n── IPFS ──────────────────────────────────────────────────────")
+
+    url_key = f"{prefix}_IPFS_REPOSITORY_URL"
+    branch_key = f"{prefix}_IPFS_REPOSITORY_BRANCH"
+    setup_key = f"{prefix}_IPFS_SETUP"
+    commands_key = f"{prefix}_IPFS_COMMANDS"
+
+    repo_url = get_url(env, url_key)
+    if not repo_url:
+        print(f"[SKIP] '{url_key}' is not set — skipping 'dark-ipfs'.")
+        return
+
+    branch = env.get(branch_key, "main").strip() or "main"
+    do_setup = env.get(setup_key, "True").strip().lower() != "false"
+    commands = env.get(commands_key, "make up").strip() or "make up"
+    target = "components/blockchain/dark-ipfs"
+
+    install_repo(
+        name="dark-ipfs",
+        repo_url=repo_url,
+        branch=branch,
+        target_dir=target,
+    )
+
+    if do_setup:
+        setup_repo(target_dir=target, commands_str=commands)
+    else:
+        print("[INFO] SETUP=False — 'dark-ipfs' cloned, setup skipped.\n")
+
 # ─── Generic single-repo component installer ─────────────────────────────────
 
 
@@ -1137,7 +1453,7 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
     """Clone and set up a single-repository component.
 
     :param name: Component name in uppercase, matching the env variable segment
-                 (e.g. ``RESOLVER``, ``MINTER``, ``IPFS``).
+                 (currently used for ``MINTER``).
     :type name: str
     :param prefix: Environment variable prefix (e.g. ``DEVELOPER``).
     :type prefix: str
@@ -1194,9 +1510,10 @@ def install_profile(prefix: str, env: dict) -> None:
     1. Blockchain (``dark-env``, ``dark-dapp``, ``dark-explorador``)
     2. Core Lib
     3. Core Admin API
-    4. Resolver
-    5. Minter
-    6. IPFS
+    4. dark-ipfs
+    5. dark-store-api
+    6. Core Resolver API
+    7. Minter
 
     :param prefix: Environment variable prefix matching the active profile
                    (e.g. ``DEVELOPER``, ``SANDBOX``, ``PRODUCTION``).
@@ -1206,12 +1523,12 @@ def install_profile(prefix: str, env: dict) -> None:
     """
     install_blockchain(prefix=prefix, env=env)
 
-
     install_core_lib(prefix=prefix, env=env)
     install_core_admin_api(prefix=prefix, env=env)
-
-    for component in ("RESOLVER", "MINTER", "IPFS"):
-        install_single_component(name=component, prefix=prefix, env=env)
+    install_dark_ipfs(prefix=prefix, env=env)
+    install_dark_store_api(prefix=prefix, env=env)
+    install_core_resolver_api(prefix=prefix, env=env)
+    install_single_component(name="MINTER", prefix=prefix, env=env)
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────

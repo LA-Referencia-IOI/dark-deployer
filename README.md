@@ -97,7 +97,8 @@ The `blockchain` component has three independent sub-repositories:
 | ------------ | ------------------------- |
 | Core Lib     | `{PROFILE}_CORE_LIB_`     |
 | Core Admin API | `{PROFILE}_CORE_ADMIN_API_` |
-| Resolver     | `{PROFILE}_RESOLVER_`     |
+| Store API    | `{PROFILE}_STORE_API_`    |
+| Resolver API | `{PROFILE}_RESOLVER_`     |
 | Minter       | `{PROFILE}_MINTER_`       |
 | IPFS         | `{PROFILE}_IPFS_`         |
 
@@ -181,15 +182,18 @@ components/
 ├── blockchain/
 │   ├── dark-env/
 │   ├── dark-dapp/
-│   └── dark-explorador/
+│   ├── dark-explorador/
+│   └── dark-ipfs/
 ├── libraries/
 │   ├── dark-core-lib/
 │   │   └── .env.integration
 ├── services/
 │   ├── dark-core-admin-api/
 │   │   └── .env.integration
+│   ├── dark-store-api/
+│   │   └── .env.integration
+│   ├── dark-core-resolver-api/
+│   │   └── .env.integration
 │   └── dark-core-minter-api/
 │       └── .env.integration
-├── resolver/
-└── ipfs/
 ```
