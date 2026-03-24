@@ -1092,6 +1092,10 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
     if metadata_storage_type == "filesystem":
         storage_path = Path(metadata_storage_path)
         if not storage_path.is_absolute():
+            # Resolver filesystem mode must read the same metadata directory that
+            # the minter writes to, so relative paths are resolved from the
+            # minter service workspace rather than the resolver workspace.
+            minter_path = Path("components/services/dark-core-minter-api").resolve()
             metadata_storage_path = str((minter_path / storage_path).resolve())
 
     integration_env = {
