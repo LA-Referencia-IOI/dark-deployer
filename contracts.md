@@ -203,7 +203,7 @@ X-Authority-Id: org-uuid-12345
   "naan": "12345",
   "items": [
     { "client_item_id": "item-1" },
-    { "client_item_id": "item-2", "target": "https://example.org/doc/2" }
+    { "client_item_id": "item-2" }
   ]
 }
 ```
@@ -434,4 +434,3 @@ Campos típicos:
 - El `DELETE` del minter no borra en blockchain; solo hace tombstone local.
 - El resolver tiene un solo endpoint funcional y cambia de comportamiento según query params.
 - El store API es deliberadamente genérico y no modela metadata dARK.
-
