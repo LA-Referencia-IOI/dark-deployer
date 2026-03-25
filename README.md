@@ -6,7 +6,7 @@ Installer for the **dark** ecosystem. It clones and sets up all subcomponent rep
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - Git
 - Docker + Docker Compose
 

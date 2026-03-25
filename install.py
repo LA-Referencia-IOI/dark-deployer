@@ -48,6 +48,21 @@ import urllib.request
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SHARED_VENV_DIR = PROJECT_ROOT / "venv"
+MIN_PYTHON_VERSION = (3, 10)
+
+
+def ensure_supported_python() -> None:
+    """Fail early when the installer is run on an unsupported Python version."""
+    if sys.version_info >= MIN_PYTHON_VERSION:
+        return
+
+    detected = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    required = ".".join(str(part) for part in MIN_PYTHON_VERSION)
+    print(
+        "[ERROR] Unsupported Python runtime. "
+        f"Detected Python {detected}, but dark-developer requires Python {required}+."
+    )
+    sys.exit(1)
 
 
 def parse_env_file(filepath: Path, required: bool = True) -> dict:
@@ -1555,6 +1570,7 @@ def main() -> None:
     """
     print("=== dark-developer installer ===\n")
 
+    ensure_supported_python()
     env = load_env()
     install_type = env.get("TYPE", "").lower()
 
