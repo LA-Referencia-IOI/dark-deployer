@@ -6,7 +6,7 @@ Installer for the **dark** ecosystem. It clones and sets up all subcomponent rep
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - Git
 - Docker + Docker Compose
 
@@ -34,7 +34,7 @@ Then open `.env` and configure it (see [Environment Variables](#environment-vari
 ### 3. Run the installer
 
 ```bash
-python install.py
+python3 install.py
 ```
 
 The script will clone each configured repository into `components/` and run its setup commands automatically.
@@ -43,14 +43,14 @@ The script will clone each configured repository into `components/` and run its 
 
 ### 4 . Clean
 ```bash
-python clean.py
+python3 clean.py
 ```
 ---
 
 ### 5. Restart
 
 ```bash
-python restart.py
+python3 restart.py
 ```
 ## Environment Variables
 
@@ -95,8 +95,10 @@ The `blockchain` component has three independent sub-repositories:
 
 | Component    | Variable prefix           |
 | ------------ | ------------------------- |
-| Orchestrator | `{PROFILE}_ORCHESTRATOR_` |
-| Resolver     | `{PROFILE}_RESOLVER_`     |
+| Core Lib     | `{PROFILE}_CORE_LIB_`     |
+| Core Admin API | `{PROFILE}_CORE_ADMIN_API_` |
+| Store API    | `{PROFILE}_STORE_API_`    |
+| Resolver API | `{PROFILE}_RESOLVER_`     |
 | Minter       | `{PROFILE}_MINTER_`       |
 | IPFS         | `{PROFILE}_IPFS_`         |
 
@@ -149,10 +151,25 @@ DEVELOPER_BLOCKCHAIN_DARK_ENV_SETUP=True
 
 If a repository contains a `requirements.txt`, the installer will automatically:
 
-1. Create a `venv` virtual environment inside that repository directory.
-2. Install all dependencies via `pip install -r requirements.txt`.
+1. Create (or reuse) a shared root virtual environment at `./venv`.
+2. Install dependencies via `./venv/bin/pip install -r requirements.txt`.
 
 This happens **before** the `COMMANDS` are executed.
+
+---
+
+### Core Lib auto-configuration
+
+When `core-lib` setup is enabled, the installer also generates:
+
+`components/libraries/dark-core-lib/.env.integration`
+
+using values from:
+
+- Global `.env`: `RPC_URL`, `CHAIN_ID`, `MASTER_PRIVATE_KEY`
+- Deployed contracts file: `components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini`
+
+This keeps `dark-core-lib` aligned with the blockchain and contract addresses deployed during installation.
 
 ---
 
@@ -165,11 +182,18 @@ components/
 ├── blockchain/
 │   ├── dark-env/
 │   ├── dark-dapp/
-│   └── dark-explorador/
-├── orchestrator/
-    └── dark-core-orchestrator/
-        └── venv/observer-lib/
-├── resolver/
-├── minter/
-└── ipfs/
+│   ├── dark-explorador/
+│   └── dark-ipfs/
+├── libraries/
+│   ├── dark-core-lib/
+│   │   └── .env.integration
+├── services/
+│   ├── dark-core-admin-api/
+│   │   └── .env.integration
+│   ├── dark-store-api/
+│   │   └── .env.integration
+│   ├── dark-core-resolver-api/
+│   │   └── .env.integration
+│   └── dark-core-minter-api/
+│       └── .env.integration
 ```
