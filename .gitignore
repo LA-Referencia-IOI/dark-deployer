@@ -147,3 +147,5 @@ noid_provider_config.ini
 dARK_dapp/compiled/
 
 components/
+
+__pycache__/
