@@ -241,6 +241,23 @@ def probe_http_status(url: str) -> str:
         return "down"
 
 
+def probe_minter_worker_status(minter_url: str) -> str:
+    """Return a short status string for the split minter workers."""
+    try:
+        with urllib.request.urlopen(f"{minter_url.rstrip('/')}/api/v1/worker/status", timeout=3) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return "down"
+
+    workers = body.get("workers") or {}
+    metadata_running = bool((workers.get("metadata") or {}).get("running"))
+    chain_running = bool((workers.get("chain") or {}).get("running"))
+    return (
+        f"metadata={'up' if metadata_running else 'down'}, "
+        f"chain={'up' if chain_running else 'down'}"
+    )
+
+
 def probe_rpc_block(rpc_url: str) -> str:
     """Return the current block number for a JSON-RPC endpoint or 'down'."""
     payload = {
@@ -372,6 +389,7 @@ def print_install_summary(prefix: str, env: dict) -> None:
         print(
             f"- Core Minter API: {minter_url} "
             f"[health: {probe_http_status(f'{minter_url}/health')}] "
+            f"[workers: {probe_minter_worker_status(minter_url)}] "
             f"[docs: {minter_url}/docs]"
         )
 
@@ -967,11 +985,91 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         if not storage_path.is_absolute():
             metadata_storage_path = str((minter_path / storage_path).resolve())
 
+    split_worker_env = {
+        "METADATA_WORKER_ENABLED": env.get(
+            "METADATA_WORKER_ENABLED",
+            template_env.get("METADATA_WORKER_ENABLED", "true"),
+        ).strip(),
+        "METADATA_WORKER_PAGE_SIZE": env.get(
+            "METADATA_WORKER_PAGE_SIZE",
+            template_env.get("METADATA_WORKER_PAGE_SIZE", "100"),
+        ).strip(),
+        "METADATA_WORKER_SLEEP_SECONDS": env.get(
+            "METADATA_WORKER_SLEEP_SECONDS",
+            template_env.get("METADATA_WORKER_SLEEP_SECONDS", "2"),
+        ).strip(),
+        "METADATA_WORKER_MAX_RETRIES": env.get(
+            "METADATA_WORKER_MAX_RETRIES",
+            template_env.get("METADATA_WORKER_MAX_RETRIES", "5"),
+        ).strip(),
+        "METADATA_WORKER_RETRY_BACKOFF_BASE": env.get(
+            "METADATA_WORKER_RETRY_BACKOFF_BASE",
+            template_env.get("METADATA_WORKER_RETRY_BACKOFF_BASE", "2.0"),
+        ).strip(),
+        "METADATA_WORKER_RUNTIME_NAME": env.get(
+            "METADATA_WORKER_RUNTIME_NAME",
+            template_env.get("METADATA_WORKER_RUNTIME_NAME", "metadata-publisher"),
+        ).strip(),
+        "CHAIN_WORKER_ENABLED": env.get(
+            "CHAIN_WORKER_ENABLED",
+            template_env.get("CHAIN_WORKER_ENABLED", "true"),
+        ).strip(),
+        "CHAIN_WORKER_PAGE_SIZE": env.get(
+            "CHAIN_WORKER_PAGE_SIZE",
+            template_env.get("CHAIN_WORKER_PAGE_SIZE", "20"),
+        ).strip(),
+        "CHAIN_WORKER_SLEEP_SECONDS": env.get(
+            "CHAIN_WORKER_SLEEP_SECONDS",
+            template_env.get("CHAIN_WORKER_SLEEP_SECONDS", "5"),
+        ).strip(),
+        "CHAIN_WORKER_RPC_RETRY_SECONDS": env.get(
+            "CHAIN_WORKER_RPC_RETRY_SECONDS",
+            template_env.get("CHAIN_WORKER_RPC_RETRY_SECONDS", "10"),
+        ).strip(),
+        "CHAIN_WORKER_MAX_RETRIES": env.get(
+            "CHAIN_WORKER_MAX_RETRIES",
+            template_env.get("CHAIN_WORKER_MAX_RETRIES", "5"),
+        ).strip(),
+        "CHAIN_WORKER_RETRY_BACKOFF_BASE": env.get(
+            "CHAIN_WORKER_RETRY_BACKOFF_BASE",
+            template_env.get("CHAIN_WORKER_RETRY_BACKOFF_BASE", "2.0"),
+        ).strip(),
+        "CHAIN_WORKER_RUNTIME_NAME": env.get(
+            "CHAIN_WORKER_RUNTIME_NAME",
+            template_env.get("CHAIN_WORKER_RUNTIME_NAME", "chain-publisher"),
+        ).strip(),
+        "WORKER_HEARTBEAT_INTERVAL_SECONDS": env.get(
+            "WORKER_HEARTBEAT_INTERVAL_SECONDS",
+            template_env.get("WORKER_HEARTBEAT_INTERVAL_SECONDS", "10"),
+        ).strip(),
+        "WORKER_HEARTBEAT_STALE_AFTER_SECONDS": env.get(
+            "WORKER_HEARTBEAT_STALE_AFTER_SECONDS",
+            template_env.get("WORKER_HEARTBEAT_STALE_AFTER_SECONDS", "180"),
+        ).strip(),
+    }
+
     integration_env = {
         **template_env,
+        **split_worker_env,
+        "MINTER_API_WORKERS": env.get(
+            "MINTER_API_WORKERS",
+            template_env.get("MINTER_API_WORKERS", "1"),
+        ).strip(),
         "DARK_RPC_URL": env.get(
             "RPC_URL",
             template_env.get("DARK_RPC_URL", "http://localhost:8545"),
+        ).strip(),
+        "DARK_RPC_HEALTH_TIMEOUT_SECONDS": env.get(
+            "DARK_RPC_HEALTH_TIMEOUT_SECONDS",
+            template_env.get("DARK_RPC_HEALTH_TIMEOUT_SECONDS", "2.0"),
+        ).strip(),
+        "DARK_RPC_CONNECT_RETRY_SECONDS": env.get(
+            "DARK_RPC_CONNECT_RETRY_SECONDS",
+            template_env.get("DARK_RPC_CONNECT_RETRY_SECONDS", "30.0"),
+        ).strip(),
+        "DARK_RPC_CONNECT_RETRY_INTERVAL_SECONDS": env.get(
+            "DARK_RPC_CONNECT_RETRY_INTERVAL_SECONDS",
+            template_env.get("DARK_RPC_CONNECT_RETRY_INTERVAL_SECONDS", "2.0"),
         ).strip(),
         "DARK_CHAIN_ID": env.get(
             "CHAIN_ID",
@@ -1152,11 +1250,34 @@ def commands_include_docker_compose_up(commands_str: str) -> bool:
 
 
 def start_minter_stack(minter_path: Path) -> None:
-    """Start minter services via Docker Compose when blockchain network exists."""
-    compose_up_stack(
-        compose_dir=minter_path,
-        stack_name="minter",
-        health_url="http://localhost:8001/health",
+    """Build, migrate, and start minter services via Docker Compose."""
+    ensure_docker_running()
+    compose_file = minter_path / "docker-compose.yml"
+    if not compose_file.exists():
+        print(f"[WARNING] '{compose_file}' not found. Skipping minter Docker startup.")
+        return
+
+    if not docker_network_exists("dark-net"):
+        print(
+            "[WARNING] Docker network 'dark-net' was not found. "
+            "Skipping minter Docker startup. Start blockchain first."
+        )
+        return
+
+    print("[INFO] Building minter Docker images...")
+    run_shell("docker compose build", cwd=str(minter_path))
+
+    print("[INFO] Starting minter Postgres for migration...")
+    run_shell("docker compose up -d postgres", cwd=str(minter_path))
+
+    print("[INFO] Running minter database migrations...")
+    run_shell("docker compose run --rm minter-api migrate", cwd=str(minter_path))
+
+    print("[INFO] Starting minter Docker stack...")
+    run_shell("docker compose up -d", cwd=str(minter_path))
+    wait_for_http_ready(
+        "http://localhost:8001/health",
+        service_name="minter",
     )
 
 
@@ -1493,7 +1614,9 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
 
     branch   = env.get(branch_key, "master").strip()
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = env.get(commands_key, DEFAULT_COMMANDS).strip()
+    commands = env.get(commands_key, "").strip()
+    if not commands and name.upper() != "MINTER":
+        commands = DEFAULT_COMMANDS
     target   = f"components/{name.lower()}"
     repo_name = name.lower()
     if name.upper() == "MINTER":
