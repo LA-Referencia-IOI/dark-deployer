@@ -252,7 +252,7 @@ The SDK is configured via environment variables or a `.env` file:
 | `DARK_CHAIN_ID` | no | — | Expected chain ID; connection is rejected on mismatch |
 | `DARK_READ_ONLY` | no | `true` | Set to `false` to enable write operations |
 | `DARK_VALIDATE_CHAIN_ID` | no | `true` | Disable chain ID check (useful in tests) |
-| `DARK_GAS_LIMIT` | no | `500000` | Default gas limit per transaction |
+| `DARK_GAS_LIMIT` | no | `550000` | Default gas limit per transaction |
 | `DARK_TX_TIMEOUT_SECONDS` | no | `120` | Transaction confirmation timeout |
 
 In **read-only mode** (`DARK_READ_ONLY=true`), only `DARK_RPC_URL` and `DARK_CONTRACT_ADDRESS` are required. No admin key is loaded and write operations raise `ReadOnlyModeError`.

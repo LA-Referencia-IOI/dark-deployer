@@ -601,9 +601,9 @@ auth.functions.register_authority(
 # Authorize NAAN — authority WALLET calls this (not admin)
 auth.functions.authorize_naan("12345").transact({'from': authority_wallet})
 
-# Create ARK (requires ~200k+ gas)
+# Create ARK (gas use depends on payload size; current default is 550k)
 dark.functions.create_ark("12345", "my-doc", url, cid).transact(
-    {'from': authority_wallet, 'gas': 500000}
+    {'from': authority_wallet, 'gas': 550000}
 )
 
 # Resolve (read-only, no gas)

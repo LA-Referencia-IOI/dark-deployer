@@ -9,6 +9,7 @@ runs the per-repo commands defined in the ``COMMANDS`` variables.
 Usage::
 
     python install.py
+    python install.py rebuild store-api
 
 Supported profiles:
     - ``developer``  — installs the full developer infrastructure.
@@ -30,8 +31,15 @@ Command format in ``.env``::
 
 Commands are separated by ``|`` and executed sequentially inside the
 cloned repository directory. Shell syntax (globs, redirects) is supported.
+
+Selective rebuilds::
+
+    python install.py rebuild store-api
+    python install.py rebuild minter --migrate
+    python install.py rebuild core-lib --with-dependents
 """
 
+import argparse
 import subprocess
 import sys
 import time
@@ -943,7 +951,7 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
         "DARK_ADMIN_PRIVATE_KEY": env.get("MASTER_PRIVATE_KEY", "").strip(),
         "DARK_READ_ONLY": "False",
         "DARK_VALIDATE_CHAIN_ID": "True",
-        "DARK_GAS_LIMIT": "500000",
+        "DARK_GAS_LIMIT": "550000",
         "DARK_TX_TIMEOUT_SECONDS": "120",
     }
 
@@ -998,6 +1006,10 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "METADATA_WORKER_SLEEP_SECONDS",
             template_env.get("METADATA_WORKER_SLEEP_SECONDS", "2"),
         ).strip(),
+        "METADATA_WORKER_STORAGE_RETRY_SECONDS": env.get(
+            "METADATA_WORKER_STORAGE_RETRY_SECONDS",
+            template_env.get("METADATA_WORKER_STORAGE_RETRY_SECONDS", "10"),
+        ).strip(),
         "METADATA_WORKER_MAX_RETRIES": env.get(
             "METADATA_WORKER_MAX_RETRIES",
             template_env.get("METADATA_WORKER_MAX_RETRIES", "5"),
@@ -1026,6 +1038,26 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "CHAIN_WORKER_RPC_RETRY_SECONDS",
             template_env.get("CHAIN_WORKER_RPC_RETRY_SECONDS", "10"),
         ).strip(),
+        "CHAIN_WORKER_CONGESTION_RETRY_SECONDS": env.get(
+            "CHAIN_WORKER_CONGESTION_RETRY_SECONDS",
+            template_env.get("CHAIN_WORKER_CONGESTION_RETRY_SECONDS", "30"),
+        ).strip(),
+        "CHAIN_WORKER_BLOCK_STALL_SECONDS": env.get(
+            "CHAIN_WORKER_BLOCK_STALL_SECONDS",
+            template_env.get("CHAIN_WORKER_BLOCK_STALL_SECONDS", "120"),
+        ).strip(),
+        "CHAIN_WORKER_ADAPTIVE_PAGE_ENABLED": env.get(
+            "CHAIN_WORKER_ADAPTIVE_PAGE_ENABLED",
+            template_env.get("CHAIN_WORKER_ADAPTIVE_PAGE_ENABLED", "true"),
+        ).strip(),
+        "CHAIN_WORKER_MIN_PAGE_SIZE": env.get(
+            "CHAIN_WORKER_MIN_PAGE_SIZE",
+            template_env.get("CHAIN_WORKER_MIN_PAGE_SIZE", "1"),
+        ).strip(),
+        "CHAIN_WORKER_RECOVERY_SUCCESS_CYCLES": env.get(
+            "CHAIN_WORKER_RECOVERY_SUCCESS_CYCLES",
+            template_env.get("CHAIN_WORKER_RECOVERY_SUCCESS_CYCLES", "3"),
+        ).strip(),
         "CHAIN_WORKER_MAX_RETRIES": env.get(
             "CHAIN_WORKER_MAX_RETRIES",
             template_env.get("CHAIN_WORKER_MAX_RETRIES", "5"),
@@ -1045,6 +1077,10 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         "WORKER_HEARTBEAT_STALE_AFTER_SECONDS": env.get(
             "WORKER_HEARTBEAT_STALE_AFTER_SECONDS",
             template_env.get("WORKER_HEARTBEAT_STALE_AFTER_SECONDS", "180"),
+        ).strip(),
+        "PERMANENT_RESCUE_MAX_ITEMS": env.get(
+            "PERMANENT_RESCUE_MAX_ITEMS",
+            template_env.get("PERMANENT_RESCUE_MAX_ITEMS", "50"),
         ).strip(),
     }
 
@@ -1075,6 +1111,10 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "CHAIN_ID",
             template_env.get("DARK_CHAIN_ID", "1337"),
         ).strip(),
+        "DARK_GAS_LIMIT": env.get(
+            "DARK_GAS_LIMIT",
+            template_env.get("DARK_GAS_LIMIT", "550000"),
+        ).strip(),
         "DARK_CONTRACT_ADDRESS": dark_contract or template_env.get("DARK_CONTRACT_ADDRESS", "").strip(),
         "DARK_AUTHORITY_ADDRESS": authority_contract or template_env.get("DARK_AUTHORITY_ADDRESS", "").strip(),
         "DARK_ADMIN_PRIVATE_KEY": env.get(
@@ -1100,21 +1140,27 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
 def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
     """Generate .env.integration for dark-store-api from installed IPFS settings."""
     template_env = load_optional_env(store_api_path / ".env.example")
-    dark_ipfs_path = Path("components/blockchain/dark-ipfs").resolve()
-    dark_ipfs_env = load_optional_env(dark_ipfs_path / ".env")
-    if not dark_ipfs_env:
-        dark_ipfs_env = load_optional_env(dark_ipfs_path / ".env.example")
-
-    ipfs_api_port = (dark_ipfs_env.get("IPFS0_API_PORT") or "5001").strip()
-    cluster_api_port = (dark_ipfs_env.get("CLUSTER_API_PORT") or "9094").strip()
 
     integration_env = {
         **template_env,
         "STORE_API_HOST": template_env.get("STORE_API_HOST", "0.0.0.0").strip(),
         "STORE_API_PORT": "8003",
         "STORAGE_BACKEND": template_env.get("STORAGE_BACKEND", "ipfs_cluster").strip(),
-        "IPFS_API_URL": f"http://host.docker.internal:{ipfs_api_port}",
-        "IPFS_CLUSTER_API_URL": f"http://host.docker.internal:{cluster_api_port}",
+        "IPFS_API_URL": "http://ipfs0:5001",
+        "IPFS_CLUSTER_API_URL": "http://cluster0:9094",
+        "IPFS_CLUSTER_PROXY_API_URL": "http://cluster0:9095",
+        "IPFS_ADD_MODE": env.get(
+            "IPFS_ADD_MODE",
+            template_env.get("IPFS_ADD_MODE", "cluster_proxy"),
+        ).strip(),
+        "IPFS_HEALTH_CACHE_TTL_SECONDS": env.get(
+            "IPFS_HEALTH_CACHE_TTL_SECONDS",
+            template_env.get("IPFS_HEALTH_CACHE_TTL_SECONDS", "10"),
+        ).strip(),
+        "IPFS_CLUSTER_MIN_PEERS": env.get(
+            "IPFS_CLUSTER_MIN_PEERS",
+            template_env.get("IPFS_CLUSTER_MIN_PEERS", "2"),
+        ).strip(),
     }
 
     env_path = store_api_path / ".env.integration"
@@ -1305,6 +1351,276 @@ def start_store_api_stack(store_api_path: Path) -> None:
         compose_dir=store_api_path,
         stack_name="store API",
         health_url="http://localhost:8003/health",
+    )
+
+
+# ─── Selective component rebuilds ─────────────────────────────────────────────
+
+
+REBUILD_COMPONENT_ALIASES = {
+    "admin": "admin",
+    "admin-api": "admin",
+    "dark-core-admin-api": "admin",
+    "resolver": "resolver",
+    "resolver-api": "resolver",
+    "dark-core-resolver-api": "resolver",
+    "store": "store-api",
+    "store-api": "store-api",
+    "dark-store-api": "store-api",
+    "minter": "minter",
+    "minter-api": "minter",
+    "dark-core-minter-api": "minter",
+    "core": "core-lib",
+    "core-lib": "core-lib",
+    "dark-core-lib": "core-lib",
+}
+
+
+SERVICE_REBUILD_COMPONENTS = {
+    "admin": {
+        "display": "admin API",
+        "path": Path("components/services/dark-core-admin-api"),
+        "services": ["admin-api"],
+        "health_url": "http://localhost:8000/health",
+        "repo_suffix": "CORE_ADMIN_API",
+        "env_generator": generate_admin_api_env_integration,
+    },
+    "resolver": {
+        "display": "resolver API",
+        "path": Path("components/services/dark-core-resolver-api"),
+        "services": ["resolver-api"],
+        "health_url": "http://localhost:8002/health",
+        "repo_suffix": "RESOLVER",
+        "env_generator": generate_resolver_api_env_integration,
+    },
+    "store-api": {
+        "display": "store API",
+        "path": Path("components/services/dark-store-api"),
+        "services": ["store-api"],
+        "health_url": "http://localhost:8003/health",
+        "repo_suffix": "STORE_API",
+        "env_generator": generate_store_api_env_integration,
+    },
+    "minter": {
+        "display": "minter",
+        "path": Path("components/services/dark-core-minter-api"),
+        "services": [],
+        "health_url": "http://localhost:8001/health",
+        "repo_suffix": "MINTER",
+        "env_generator": generate_minter_env_integration,
+    },
+}
+
+
+def canonical_rebuild_component(component: str) -> str:
+    """Normalize a user-provided component name for selective rebuilds."""
+    normalized = component.strip().lower()
+    canonical = REBUILD_COMPONENT_ALIASES.get(normalized)
+    if canonical:
+        return canonical
+
+    valid = ", ".join(sorted(REBUILD_COMPONENT_ALIASES))
+    print(f"[ERROR] Unknown rebuild component '{component}'.")
+    print(f"[ERROR] Valid components/aliases: {valid}")
+    sys.exit(1)
+
+
+def maybe_pull_rebuild_component(component: str, prefix: str, env: dict) -> None:
+    """Optionally update a component repository before rebuilding it."""
+    if component == "core-lib":
+        core_url_key = f"{prefix}_CORE_LIB_REPOSITORY_URL"
+        core_branch_key = f"{prefix}_CORE_LIB_REPOSITORY_BRANCH"
+        legacy_url_key = f"{prefix}_ORCHESTRATOR_REPOSITORY_URL"
+        legacy_branch_key = f"{prefix}_ORCHESTRATOR_REPOSITORY_BRANCH"
+
+        repo_url = get_url(env, core_url_key) or get_url(env, legacy_url_key)
+        branch = (
+            env.get(core_branch_key, "").strip()
+            or env.get(legacy_branch_key, "main").strip()
+            or "main"
+        )
+        target = "components/libraries/dark-core-lib"
+        repo_name = "dark-core-lib"
+    else:
+        spec = SERVICE_REBUILD_COMPONENTS[component]
+        repo_suffix = str(spec["repo_suffix"])
+        url_key = f"{prefix}_{repo_suffix}_REPOSITORY_URL"
+        branch_key = f"{prefix}_{repo_suffix}_REPOSITORY_BRANCH"
+        repo_url = get_url(env, url_key)
+        branch = env.get(branch_key, "main").strip() or "main"
+        target = str(spec["path"])
+        repo_name = str(spec["display"])
+
+    if not repo_url:
+        print(f"[WARNING] No repository URL configured for '{component}'. Skipping pull.")
+        return
+
+    install_repo(
+        name=repo_name,
+        repo_url=repo_url,
+        branch=branch,
+        target_dir=target,
+    )
+
+
+def require_component_path(component: str, path: Path) -> Path:
+    """Return a resolved component path or fail with a helpful message."""
+    resolved = path.resolve()
+    if resolved.exists():
+        return resolved
+
+    print(f"[ERROR] Component '{component}' is not installed at '{resolved}'.")
+    print("[ERROR] Run the full installer first, or rerun rebuild with --pull if the repo URL is configured.")
+    sys.exit(1)
+
+
+def run_compose_build(compose_dir: Path, services: list[str], no_cache: bool) -> None:
+    """Build one component stack or the selected services in that stack."""
+    compose_file = compose_dir / "docker-compose.yml"
+    if not compose_file.exists():
+        print(f"[ERROR] '{compose_file}' not found.")
+        sys.exit(1)
+
+    command = "docker compose build"
+    if no_cache:
+        command += " --no-cache"
+    if services:
+        command += " " + " ".join(services)
+    run_shell(command, cwd=str(compose_dir))
+
+
+def rebuild_service_component(
+    component: str,
+    env: dict,
+    no_cache: bool = False,
+    no_start: bool = False,
+    migrate: bool = False,
+) -> None:
+    """Rebuild and optionally restart a Dockerized service component."""
+    spec = SERVICE_REBUILD_COMPONENTS[component]
+    display = str(spec["display"])
+    component_path = require_component_path(component, Path(spec["path"]))
+
+    print(f"\n── Rebuild {display} ─────────────────────────────────────────")
+    env_generator = spec["env_generator"]
+    env_generator(component_path, env)
+
+    ensure_docker_running()
+    run_compose_build(
+        compose_dir=component_path,
+        services=list(spec["services"]),
+        no_cache=no_cache,
+    )
+
+    if no_start:
+        print(f"[OK] Built {display}. Startup skipped because --no-start was provided.")
+        return
+
+    if not docker_network_exists("dark-net"):
+        print(
+            "[WARNING] Docker network 'dark-net' was not found. "
+            f"Built {display}, but startup was skipped. Start blockchain first."
+        )
+        return
+
+    if component == "minter":
+        print("[INFO] Starting minter Postgres...")
+        run_shell("docker compose up -d postgres", cwd=str(component_path))
+
+        if migrate:
+            print("[INFO] Running minter database migrations...")
+            run_shell("docker compose run --rm minter-api migrate", cwd=str(component_path))
+
+        print("[INFO] Starting minter API and workers...")
+        run_shell(
+            "docker compose up -d minter-api minter-metadata-worker minter-chain-worker",
+            cwd=str(component_path),
+        )
+    else:
+        service_names = " ".join(spec["services"])
+        print(f"[INFO] Starting {display}...")
+        run_shell(f"docker compose up -d {service_names}", cwd=str(component_path))
+
+    wait_for_http_ready(str(spec["health_url"]), service_name=display)
+    print(f"[OK] Rebuild complete for {display}.")
+
+
+def rebuild_core_lib(
+    prefix: str,
+    env: dict,
+    no_cache: bool = False,
+    no_start: bool = False,
+    with_dependents: bool = False,
+) -> None:
+    """Reinstall dark-core-lib locally and optionally rebuild dependent services."""
+    if no_cache:
+        print("[WARNING] --no-cache only applies to Docker builds; ignoring it for core-lib.")
+
+    core_path = require_component_path("core-lib", Path("components/libraries/dark-core-lib"))
+
+    print("\n── Rebuild core-lib ──────────────────────────────────────────")
+    setup_repo(target_dir=str(core_path), commands_str="")
+
+    venv_pip = shared_venv_bin("pip")
+    print("[INFO] Reinstalling dark-core-lib in editable mode...")
+    try:
+        run_shell(f"{venv_pip} install -e .", cwd=str(core_path))
+    except SystemExit:
+        print(
+            "[WARNING] Editable install failed. "
+            "Falling back to a regular install for compatibility."
+        )
+        run_shell(f"{venv_pip} install .", cwd=str(core_path))
+
+    generate_core_lib_env_integration(core_path=core_path, env=env)
+    print("[OK] Rebuild complete for core-lib.")
+
+    if not with_dependents:
+        print(
+            "[INFO] Docker services that bundle core-lib keep their previous image. "
+            "Use --with-dependents to rebuild admin, resolver, and minter too."
+        )
+        return
+
+    for dependent in ("admin", "resolver", "minter"):
+        rebuild_service_component(
+            component=dependent,
+            env=env,
+            no_cache=no_cache,
+            no_start=no_start,
+            migrate=False,
+        )
+
+
+def rebuild_component(args: argparse.Namespace, prefix: str, env: dict) -> None:
+    """Dispatch selective rebuilds by component."""
+    component = canonical_rebuild_component(args.component)
+
+    if args.migrate and component != "minter":
+        print("[WARNING] --migrate only applies to minter; ignoring it.")
+
+    if args.pull:
+        maybe_pull_rebuild_component(component=component, prefix=prefix, env=env)
+
+    if component == "core-lib":
+        rebuild_core_lib(
+            prefix=prefix,
+            env=env,
+            no_cache=args.no_cache,
+            no_start=args.no_start,
+            with_dependents=args.with_dependents,
+        )
+        return
+
+    if args.with_dependents:
+        print("[WARNING] --with-dependents only applies to core-lib; ignoring it.")
+
+    rebuild_service_component(
+        component=component,
+        env=env,
+        no_cache=args.no_cache,
+        no_start=args.no_start,
+        migrate=args.migrate and component == "minter",
     )
 
 
@@ -1683,18 +1999,55 @@ PROFILE_PREFIXES: dict = {
 }
 
 
-def main() -> None:
-    """Entry point for the dark-developer installer.
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build the installer command-line parser."""
+    parser = argparse.ArgumentParser(
+        description="Install or selectively rebuild dARK deployer components.",
+    )
+    subparsers = parser.add_subparsers(dest="command")
 
-    Loads the ``.env`` file, reads the ``TYPE`` variable, and dispatches
-    execution to the appropriate profile installer.
+    rebuild_parser = subparsers.add_parser(
+        "rebuild",
+        help="Rebuild one installed component without reinstalling the whole stack.",
+    )
+    rebuild_parser.add_argument(
+        "component",
+        help=(
+            "Component to rebuild: store-api, minter, resolver, admin, or core-lib. "
+            "Common aliases such as store, minter-api, and dark-core-lib are accepted."
+        ),
+    )
+    rebuild_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Pass --no-cache to Docker Compose builds.",
+    )
+    rebuild_parser.add_argument(
+        "--no-start",
+        action="store_true",
+        help="Build/regenerate local artifacts but do not restart containers.",
+    )
+    rebuild_parser.add_argument(
+        "--migrate",
+        action="store_true",
+        help="For minter only: run database migrations before restarting services.",
+    )
+    rebuild_parser.add_argument(
+        "--pull",
+        action="store_true",
+        help="Pull or clone the configured repository before rebuilding.",
+    )
+    rebuild_parser.add_argument(
+        "--with-dependents",
+        action="store_true",
+        help="For core-lib only: also rebuild admin, resolver, and minter Docker images.",
+    )
 
-    :raises SystemExit: If ``TYPE`` is missing or not a recognised profile.
-    """
-    print("=== dark-developer installer ===\n")
+    return parser
 
-    ensure_supported_python()
-    env = load_env()
+
+def resolve_profile_prefix(env: dict) -> tuple[str, str]:
+    """Resolve TYPE from the loaded env into its installer prefix."""
     install_type = env.get("TYPE", "").lower()
 
     if not install_type:
@@ -1707,7 +2060,31 @@ def main() -> None:
         print(f"[ERROR] Unknown TYPE '{install_type}'. Valid options: {valid}")
         sys.exit(1)
 
+    return install_type, prefix
+
+
+def main() -> None:
+    """Entry point for the dark-developer installer.
+
+    Loads the ``.env`` file, reads the ``TYPE`` variable, and dispatches
+    execution to the appropriate profile installer.
+
+    :raises SystemExit: If ``TYPE`` is missing or not a recognised profile.
+    """
+    print("=== dark-developer installer ===\n")
+
+    ensure_supported_python()
+    args = build_arg_parser().parse_args()
+    env = load_env()
+    install_type, prefix = resolve_profile_prefix(env)
+
     print(f"[INFO] Profile: {install_type.upper()}")
+
+    if args.command == "rebuild":
+        rebuild_component(args=args, prefix=prefix, env=env)
+        print("=== Rebuild complete ===")
+        return
+
     ensure_docker_running()
     install_profile(prefix=prefix, env=env)
     print_install_summary(prefix=prefix, env=env)
