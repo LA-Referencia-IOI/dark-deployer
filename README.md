@@ -18,6 +18,7 @@ This repository is the **dark-deployer**: an orchestrator that clones, configure
 - 🏗 **[Architecture](DARK_2.0_ARCHITECTURE.md)**: Full system architecture — two-contract design, service layer, minter worker lifecycle, resolver resolution modes, storage layer (IPFS + store-api), and SDK pipelining.
 - ⚙️ **[API Reference](DARK_2.0_API_REFERENCE.md)**: All REST APIs (Admin :8000, Minter :8001, Resolver :8002, Store :8003), smart contract interfaces, events, and integration guidelines.
 - 🗄 **[IPFS, Cluster and Store API](docs/ipfs-cluster-store-api-real-environment.md)**: How the Store API, local IPFS node, IPFS Cluster peer, Cluster Proxy, Docker networks, health checks, and replication policy fit together in a real environment.
+- 🔐 **[Minter Signed Client Keys](docs/minter-signed-client-keys.md)**: Deployment-key style authentication for Minter clients using authority-bound public keys, signed headers, replay protection, and Admin API key registry.
 
 ---
 
