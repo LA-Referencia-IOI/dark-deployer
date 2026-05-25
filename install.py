@@ -57,6 +57,8 @@ import urllib.request
 PROJECT_ROOT = Path(__file__).resolve().parent
 SHARED_VENV_DIR = PROJECT_ROOT / "venv"
 MIN_PYTHON_VERSION = (3, 10)
+STORE_API_IPFS_NETWORK = "dark-ipfs-store-node"
+DARK_IPFS_COMPONENT_DIR = PROJECT_ROOT / "components/blockchain/dark-ipfs"
 
 
 def ensure_supported_python() -> None:
@@ -315,6 +317,31 @@ def docker_network_exists(network_name: str) -> bool:
         text=True,
     )
     return result.returncode == 0
+
+
+def ensure_store_api_ipfs_network() -> None:
+    """Ensure the Store API can attach to the local IPFS node network."""
+    if docker_network_exists(STORE_API_IPFS_NETWORK):
+        return
+
+    compose_file = DARK_IPFS_COMPONENT_DIR / "docker-compose.yml"
+    if compose_file.exists():
+        print(
+            f"[INFO] Docker network '{STORE_API_IPFS_NETWORK}' was not found. "
+            "Starting dark-ipfs to create the Store API node network..."
+        )
+        run_shell("docker compose up -d", cwd=str(DARK_IPFS_COMPONENT_DIR))
+
+        if docker_network_exists(STORE_API_IPFS_NETWORK):
+            print(f"[OK] Docker network '{STORE_API_IPFS_NETWORK}' is available.")
+            return
+
+    print(
+        f"[ERROR] Docker network '{STORE_API_IPFS_NETWORK}' was not found. "
+        "Start dark-ipfs before Store API:"
+    )
+    print("[ERROR]   cd components/blockchain/dark-ipfs && docker compose up -d")
+    sys.exit(1)
 
 
 def compose_up_stack(
@@ -1347,6 +1374,8 @@ def start_resolver_api_stack(resolver_api_path: Path) -> None:
 
 def start_store_api_stack(store_api_path: Path) -> None:
     """Start store API via Docker Compose when the component provides it."""
+    ensure_docker_running()
+    ensure_store_api_ipfs_network()
     compose_up_stack(
         compose_dir=store_api_path,
         stack_name="store API",
@@ -1522,6 +1551,9 @@ def rebuild_service_component(
             f"Built {display}, but startup was skipped. Start blockchain first."
         )
         return
+
+    if component == "store-api":
+        ensure_store_api_ipfs_network()
 
     if component == "minter":
         print("[INFO] Starting minter Postgres...")
