@@ -319,9 +319,65 @@ def docker_network_exists(network_name: str) -> bool:
     return result.returncode == 0
 
 
+def wait_for_docker_network(network_name: str, timeout_seconds: int = 30) -> bool:
+    """Wait briefly for a Docker network to appear."""
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if docker_network_exists(network_name):
+            return True
+        time.sleep(1)
+    return docker_network_exists(network_name)
+
+
+def docker_container_is_on_network(container_name: str, network_name: str) -> bool:
+    """Return True if a Docker container is attached to a named network."""
+    result = subprocess.run(
+        f"docker inspect {container_name}",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False
+
+    try:
+        containers = json.loads(result.stdout)
+        networks = containers[0]["NetworkSettings"]["Networks"]
+        return network_name in networks
+    except (KeyError, IndexError, json.JSONDecodeError):
+        return False
+
+
+def ensure_container_on_network(container_name: str, alias: str, network_name: str) -> None:
+    """Attach an existing container to a network with a stable DNS alias."""
+    if docker_container_is_on_network(container_name, network_name):
+        return
+
+    print(
+        f"[INFO] Connecting container '{container_name}' to '{network_name}' "
+        f"with alias '{alias}'..."
+    )
+    run_shell(f"docker network connect --alias {alias} {network_name} {container_name}")
+
+
+def ensure_store_api_ipfs_network_members() -> None:
+    """Ensure local IPFS and Cluster containers are reachable from Store API."""
+    ensure_container_on_network(
+        container_name="dark-ipfs-ipfs0",
+        alias="ipfs0",
+        network_name=STORE_API_IPFS_NETWORK,
+    )
+    ensure_container_on_network(
+        container_name="dark-ipfs-cluster0",
+        alias="cluster0",
+        network_name=STORE_API_IPFS_NETWORK,
+    )
+
+
 def ensure_store_api_ipfs_network() -> None:
     """Ensure the Store API can attach to the local IPFS node network."""
     if docker_network_exists(STORE_API_IPFS_NETWORK):
+        ensure_store_api_ipfs_network_members()
         return
 
     compose_file = DARK_IPFS_COMPONENT_DIR / "docker-compose.yml"
@@ -332,9 +388,20 @@ def ensure_store_api_ipfs_network() -> None:
         )
         run_shell("docker compose up -d", cwd=str(DARK_IPFS_COMPONENT_DIR))
 
-        if docker_network_exists(STORE_API_IPFS_NETWORK):
+        if wait_for_docker_network(STORE_API_IPFS_NETWORK):
             print(f"[OK] Docker network '{STORE_API_IPFS_NETWORK}' is available.")
+            ensure_store_api_ipfs_network_members()
             return
+
+        print(
+            f"[WARNING] dark-ipfs started, but Docker network "
+            f"'{STORE_API_IPFS_NETWORK}' was not created by Compose. "
+            "Creating it as a local fallback..."
+        )
+        run_shell(f"docker network create {STORE_API_IPFS_NETWORK}")
+        ensure_store_api_ipfs_network_members()
+        print(f"[OK] Docker network '{STORE_API_IPFS_NETWORK}' is available.")
+        return
 
     print(
         f"[ERROR] Docker network '{STORE_API_IPFS_NETWORK}' was not found. "

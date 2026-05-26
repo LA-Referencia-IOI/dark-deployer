@@ -200,6 +200,15 @@ docker compose up -d
 
 The root installer enforces this dependency for the standard local stack. Before starting or rebuilding Store API, `install.py` checks whether `dark-ipfs-store-node` exists. If it is missing and `components/blockchain/dark-ipfs/docker-compose.yml` is present, the installer starts `dark-ipfs` first so Docker Compose can create the network.
 
+If Docker Compose starts the IPFS containers but still does not create the expected external network, the installer creates `dark-ipfs-store-node` as a local fallback and connects `dark-ipfs-ipfs0` and `dark-ipfs-cluster0` to it with stable DNS aliases:
+
+```text
+ipfs0
+cluster0
+```
+
+This fallback is meant for local/development recovery. A clean deployment should still prefer the network defined by the `dark-ipfs` compose file.
+
 The root installer should generate the Store API integration env with:
 
 ```text
@@ -252,10 +261,12 @@ cd components/blockchain/dark-ipfs
 docker compose config | grep -A20 'networks:'
 ```
 
-As a last resort for local development only, create the network manually:
+As a last resort for local development only, create the network manually and attach the local IPFS/Cluster containers:
 
 ```bash
 docker network create dark-ipfs-store-node
+docker network connect --alias ipfs0 dark-ipfs-store-node dark-ipfs-ipfs0
+docker network connect --alias cluster0 dark-ipfs-store-node dark-ipfs-cluster0
 ```
 
 But the preferred fix is to let `dark-ipfs` create and own it.
