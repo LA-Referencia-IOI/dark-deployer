@@ -86,13 +86,13 @@ From the Store API point of view, only the local IPFS and local Cluster peer are
 
 ## Local Docker simulation
 
-The local `dark-ipfs` compose simulates that production shape with three network zones:
+The local `dark-ipfs` compose simulates that production shape with the shared `dark-net` integration network plus the IPFS/Cluster internal networks:
 
-- `dark-ipfs-store-node`: contains `ipfs0`, `cluster0`, and the Store API.
+- `dark-net`: integration network shared by dARK services. `dark-store-api`, `ipfs0`, and `cluster0` join this network.
 - `dark-ipfs-backbone`: connects all IPFS and Cluster peers.
 - `dark-ipfs-remote-node-1` and `dark-ipfs-remote-node-2`: simulate remote storage nodes.
 
-The Store API joins `dark-ipfs-store-node`, so it can resolve:
+The Store API joins `dark-net`, so it can resolve:
 
 ```text
 http://ipfs0:5001
@@ -188,26 +188,20 @@ Cluster itself owns the actual placement and replication rules.
 
 The IPFS/Cluster substrate must exist before Store API starts.
 
-For local Docker:
+For local Docker, start the shared dARK network first, then the IPFS substrate, then Store API:
 
 ```bash
-cd components/blockchain/dark-ipfs
+cd components/blockchain/dark-env
+docker compose up -d
+
+cd ../dark-ipfs
 docker compose up -d
 
 cd ../../services/dark-store-api
 docker compose up -d
 ```
 
-The root installer enforces this dependency for the standard local stack. Before starting or rebuilding Store API, `install.py` checks whether `dark-ipfs-store-node` exists. If it is missing and `components/blockchain/dark-ipfs/docker-compose.yml` is present, the installer starts `dark-ipfs` first so Docker Compose can create the network.
-
-If Docker Compose starts the IPFS containers but still does not create the expected external network, the installer creates `dark-ipfs-store-node` as a local fallback and connects `dark-ipfs-ipfs0` and `dark-ipfs-cluster0` to it with stable DNS aliases:
-
-```text
-ipfs0
-cluster0
-```
-
-This fallback is meant for local/development recovery. A clean deployment should still prefer the network defined by the `dark-ipfs` compose file.
+The root installer installs components in that order. `dark-env` creates `dark-net`; then `dark-ipfs` connects `ipfs0` and `cluster0` to it; then Store API starts and reaches those services through stable Docker DNS aliases.
 
 The root installer should generate the Store API integration env with:
 
@@ -219,22 +213,21 @@ IPFS_ADD_MODE=cluster_proxy
 IPFS_HEALTH_CACHE_TTL_SECONDS=10
 ```
 
-## Common error: external network not found
+## Common error: dark-net not found
 
 Error:
 
 ```text
-network dark-ipfs-store-node declared as external, but could not be found
+network dark-net declared as external, but could not be found
 ```
 
-This means `dark-store-api/docker-compose.yml` is trying to attach the Store API container to a Docker network that Compose does not own. The network is declared as external because it is created by the `dark-ipfs` compose project.
+This means a component is trying to attach to the shared dARK integration network before the blockchain stack has created it.
 
 Usually one of these is true:
 
-- `dark-ipfs` was not started yet;
-- `dark-ipfs` was started with a compose file that does not create `dark-ipfs-store-node`;
-- the network was removed with `docker network rm` or a Docker cleanup command;
-- Docker is using a different context or engine than the one where `dark-ipfs` was started.
+- `dark-env` was not started yet;
+- `dark-net` was removed with `docker network rm` or a Docker cleanup command;
+- Docker is using a different context or engine than the one where `dark-env` was started.
 
 Fix:
 
@@ -245,31 +238,26 @@ python3 install.py
 or manually:
 
 ```bash
-cd components/blockchain/dark-ipfs
+cd components/blockchain/dark-env
 docker compose up -d
 
-docker network ls | grep dark-ipfs-store-node
+cd ../dark-ipfs
+docker compose up -d
+
+docker network ls | grep dark-net
 
 cd ../../services/dark-store-api
 docker compose up -d
 ```
 
-If the network still does not exist, inspect the rendered IPFS compose:
+If the Store API cannot resolve `ipfs0` or `cluster0`, inspect the rendered IPFS compose and the `dark-net` attachments:
 
 ```bash
 cd components/blockchain/dark-ipfs
 docker compose config | grep -A20 'networks:'
+docker inspect dark-ipfs-ipfs0 --format '{{json .NetworkSettings.Networks}}'
+docker inspect dark-ipfs-cluster0 --format '{{json .NetworkSettings.Networks}}'
 ```
-
-As a last resort for local development only, create the network manually and attach the local IPFS/Cluster containers:
-
-```bash
-docker network create dark-ipfs-store-node
-docker network connect --alias ipfs0 dark-ipfs-store-node dark-ipfs-ipfs0
-docker network connect --alias cluster0 dark-ipfs-store-node dark-ipfs-cluster0
-```
-
-But the preferred fix is to let `dark-ipfs` create and own it.
 
 ## Operational notes
 
