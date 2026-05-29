@@ -1089,7 +1089,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         **split_worker_env,
         "MINTER_API_WORKERS": env.get(
             "MINTER_API_WORKERS",
-            template_env.get("MINTER_API_WORKERS", "1"),
+            template_env.get("MINTER_API_WORKERS", "2"),
         ).strip(),
         "DARK_RPC_URL": env.get(
             "RPC_URL",
