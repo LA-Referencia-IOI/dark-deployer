@@ -121,7 +121,12 @@ def load_optional_env(filepath: Path) -> dict:
     return parse_env_file(filepath, required=False)
 
 
-def run_shell(cmd: str, cwd: str = None) -> None:
+def run_shell(
+    cmd: str,
+    cwd: str = None,
+    timeout_seconds: int | None = None,
+    compose_plain: bool = False,
+) -> None:
     """Execute a single shell command string and exit the process on failure.
 
     The command is executed through the shell, so globs, pipes, and other
@@ -131,14 +136,44 @@ def run_shell(cmd: str, cwd: str = None) -> None:
     :type cmd: str
     :param cwd: Working directory for the command. Defaults to ``None``.
     :type cwd: str, optional
+    :param timeout_seconds: Optional timeout for commands that should not run forever.
+    :type timeout_seconds: int, optional
+    :param compose_plain: Force non-interactive Docker Compose progress output.
+    :type compose_plain: bool
     :raises SystemExit: If the command returns a non-zero exit code.
     """
     print(f"[RUN] {cmd}")
-    result = subprocess.run(cmd, shell=True, cwd=cwd)
+    run_env = None
+    if compose_plain:
+        run_env = os.environ.copy()
+        run_env.setdefault("COMPOSE_PROGRESS", "plain")
+        run_env.setdefault("BUILDKIT_PROGRESS", "plain")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            cwd=cwd,
+            env=run_env,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[ERROR] Command timed out after {timeout_seconds}s: {cmd}")
+        sys.exit(124)
 
     if result.returncode != 0:
         print(f"[ERROR] Command failed: {cmd}")
         sys.exit(result.returncode)
+
+
+def run_compose_up_detached(cmd: str, cwd: str, timeout_seconds: int = 180) -> None:
+    """Run a detached Docker Compose startup without interactive progress output."""
+    run_shell(
+        cmd,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        compose_plain=True,
+    )
 
 
 def ensure_docker_running() -> None:
@@ -337,7 +372,11 @@ def compose_up_stack(
         return
 
     print(f"[INFO] Starting {stack_name} Docker stack...")
-    run_shell("docker compose up -d --build", cwd=str(compose_dir))
+    run_compose_up_detached(
+        "docker compose up -d --build",
+        cwd=str(compose_dir),
+        timeout_seconds=900,
+    )
 
     if health_url:
         wait_for_http_ready(health_url, service_name=stack_name)
@@ -1314,13 +1353,13 @@ def start_minter_stack(minter_path: Path) -> None:
     run_shell("docker compose build", cwd=str(minter_path))
 
     print("[INFO] Starting minter Postgres for migration...")
-    run_shell("docker compose up -d postgres", cwd=str(minter_path))
+    run_compose_up_detached("docker compose up -d postgres", cwd=str(minter_path))
 
     print("[INFO] Running minter database migrations...")
     run_shell("docker compose run --rm minter-api migrate", cwd=str(minter_path))
 
     print("[INFO] Starting minter Docker stack...")
-    run_shell("docker compose up -d", cwd=str(minter_path))
+    run_compose_up_detached("docker compose up -d", cwd=str(minter_path))
     wait_for_http_ready(
         "http://localhost:8001/health",
         service_name="minter",
@@ -1525,21 +1564,21 @@ def rebuild_service_component(
 
     if component == "minter":
         print("[INFO] Starting minter Postgres...")
-        run_shell("docker compose up -d postgres", cwd=str(component_path))
+        run_compose_up_detached("docker compose up -d postgres", cwd=str(component_path))
 
         if migrate:
             print("[INFO] Running minter database migrations...")
             run_shell("docker compose run --rm minter-api migrate", cwd=str(component_path))
 
         print("[INFO] Starting minter API and workers...")
-        run_shell(
+        run_compose_up_detached(
             "docker compose up -d minter-api minter-metadata-worker minter-chain-worker",
             cwd=str(component_path),
         )
     else:
         service_names = " ".join(spec["services"])
         print(f"[INFO] Starting {display}...")
-        run_shell(f"docker compose up -d {service_names}", cwd=str(component_path))
+        run_compose_up_detached(f"docker compose up -d {service_names}", cwd=str(component_path))
 
     wait_for_http_ready(str(spec["health_url"]), service_name=display)
     print(f"[OK] Rebuild complete for {display}.")
