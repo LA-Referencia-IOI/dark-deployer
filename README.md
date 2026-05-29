@@ -165,7 +165,8 @@ python3 restart.py
 
 # Rebuild only one installed component
 python3 install.py rebuild store-api
-python3 install.py rebuild minter --migrate
+python3 install.py rebuild minter
+python3 install.py rebuild minter --skip-migrate
 python3 install.py rebuild core-lib --with-dependents
 
 # Full cleanup: stop + remove containers/volumes, delete components/ and venv/
@@ -174,7 +175,8 @@ python3 clean.py
 
 `install.py rebuild <component>` accepts `store-api`, `minter`, `resolver`, `admin`, and `core-lib`.
 Use `--no-cache` for a clean Docker rebuild, `--no-start` to build without restarting containers,
-and `--pull` to update the configured repository before rebuilding.
+and `--pull` to update the configured repository before rebuilding. Minter rebuilds run database
+migrations by default; use `--skip-migrate` only when you explicitly need to skip them.
 
 ---
 

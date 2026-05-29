@@ -35,7 +35,8 @@ cloned repository directory. Shell syntax (globs, redirects) is supported.
 Selective rebuilds::
 
     python install.py rebuild store-api
-    python install.py rebuild minter --migrate
+    python install.py rebuild minter
+    python install.py rebuild minter --skip-migrate
     python install.py rebuild core-lib --with-dependents
 """
 
@@ -1590,6 +1591,7 @@ def rebuild_core_lib(
     no_cache: bool = False,
     no_start: bool = False,
     with_dependents: bool = False,
+    skip_minter_migrate: bool = False,
 ) -> None:
     """Reinstall dark-core-lib locally and optionally rebuild dependent services."""
     if no_cache:
@@ -1627,7 +1629,7 @@ def rebuild_core_lib(
             env=env,
             no_cache=no_cache,
             no_start=no_start,
-            migrate=False,
+            migrate=(dependent == "minter" and not skip_minter_migrate),
         )
 
 
@@ -1635,8 +1637,18 @@ def rebuild_component(args: argparse.Namespace, prefix: str, env: dict) -> None:
     """Dispatch selective rebuilds by component."""
     component = canonical_rebuild_component(args.component)
 
-    if args.migrate and component != "minter":
-        print("[WARNING] --migrate only applies to minter; ignoring it.")
+    if args.migrate and component not in {"minter", "core-lib"}:
+        print("[WARNING] --migrate only affects minter rebuilds; ignoring it.")
+    elif args.migrate:
+        print("[INFO] --migrate is now the default for minter rebuilds.")
+
+    if args.skip_migrate and args.migrate:
+        print("[WARNING] --skip-migrate takes precedence over --migrate.")
+
+    if args.skip_migrate and component not in {"minter", "core-lib"}:
+        print("[WARNING] --skip-migrate only applies to minter rebuilds; ignoring it.")
+    elif args.skip_migrate and component == "core-lib" and not args.with_dependents:
+        print("[WARNING] --skip-migrate has no effect without --with-dependents.")
 
     if args.pull:
         maybe_pull_rebuild_component(component=component, prefix=prefix, env=env)
@@ -1648,6 +1660,7 @@ def rebuild_component(args: argparse.Namespace, prefix: str, env: dict) -> None:
             no_cache=args.no_cache,
             no_start=args.no_start,
             with_dependents=args.with_dependents,
+            skip_minter_migrate=args.skip_migrate,
         )
         return
 
@@ -1659,7 +1672,7 @@ def rebuild_component(args: argparse.Namespace, prefix: str, env: dict) -> None:
         env=env,
         no_cache=args.no_cache,
         no_start=args.no_start,
-        migrate=args.migrate and component == "minter",
+        migrate=(component == "minter" and not args.skip_migrate),
     )
 
 
@@ -2069,7 +2082,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     rebuild_parser.add_argument(
         "--migrate",
         action="store_true",
-        help="For minter only: run database migrations before restarting services.",
+        help="Deprecated compatibility flag. Minter rebuilds run migrations by default.",
+    )
+    rebuild_parser.add_argument(
+        "--skip-migrate",
+        action="store_true",
+        help="Skip minter database migrations during rebuild.",
     )
     rebuild_parser.add_argument(
         "--pull",
