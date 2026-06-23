@@ -38,6 +38,7 @@ dARK 2.0 is composed of several independent services that this deployer clones a
 | `dark-core-minter-api` | REST API for ARK minting (split metadata + chain workers) | 8001 |
 | `dark-core-resolver-api` | REST API for ARK resolution | 8002 |
 | `dark-store-api` | REST API wrapping IPFS storage | 8003 |
+| `dashboard-web` | Laravel/Vue web dashboard for managing authorities, NAANs, and ARK records | 8081 |
 
 The smart contracts follow a **two-contract modular architecture**:
 
@@ -72,6 +73,8 @@ dark-deployer/
     │   │       └── deployed_contracts.ini  # Deployed addresses (generated)
     │   ├── dark-explorador/    # Block explorer
     │   └── dark-ipfs/          # IPFS + Cluster
+    ├── frontend/
+    │   └── dashboard-web/      # Web dashboard (Laravel + Vue)
     ├── libraries/
     │   └── dark-core-lib/      # Shared Python SDK
     └── services/
@@ -135,7 +138,8 @@ python3 install.py
 3. For `dark-env`: run `setup.sh` and `docker compose up -d`, then extract the master wallet into `.env`.
 4. For `dark-dapp`: create an isolated venv, generate `config.ini`, compile Solidity contracts, wait for the RPC node, and deploy contracts.
 5. For each service: generate a `.env.integration` file from the deployed contract addresses, install Python packages, and start the Docker Compose stack.
-6. Print a live service summary with health status for every endpoint.
+6. For `dashboard-web`: clone the repository and delegate setup to its own `install.py`, which builds the Docker stack, runs migrations, and seeds initial users.
+7. Print a live service summary with health status for every endpoint.
 
 ---
 
@@ -151,6 +155,7 @@ python3 install.py
 | Store API | `http://localhost:8003` | `/docs` |
 | IPFS API | `http://localhost:5001` | — |
 | IPFS Cluster | `http://localhost:9094` | — |
+| Dashboard | `http://localhost:8081` | — |
 
 ---
 

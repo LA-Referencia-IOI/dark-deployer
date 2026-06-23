@@ -16,6 +16,7 @@ def run_shell(cmd: str, cwd: str = None) -> None:
 def clean_docker_containers():
     print("=== Removing Docker Containers & Volumes ===\n")
     components = [
+        "components/frontend/dashboard-web",
         "components/services/dark-core-admin-api",
         "components/services/dark-core-resolver-api",
         "components/services/dark-store-api",
