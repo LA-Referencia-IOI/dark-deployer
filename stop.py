@@ -14,6 +14,7 @@ def main():
     
     components_to_stop = [
         # It's usually a good practice to stop services before the core infrastructure (blockchain/ipfs)
+        "components/frontend/dashboard-web",
         "components/services/dark-core-admin-api",
         "components/services/dark-core-resolver-api",
         "components/services/dark-store-api",

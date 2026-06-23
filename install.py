@@ -24,6 +24,7 @@ Components installed (per profile):
     - **store-api**
     - **resolver**
     - **minter**
+    - **dashboard**
 
 Command format in ``.env``::
 
@@ -805,6 +806,15 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     print("[INFO] Installing dark-dapp Python dependencies into component-local venv...")
     run_shell(f"{pip} install -r requirements.txt", cwd=str(abs_target))
     print(f"[OK] Python dependencies installed into '{component_venv}'.\n")
+
+    # Pre-download solc on the host so the AMD64 container can reuse the cache
+    # via a volume mount, bypassing SSL issues inside the emulated environment.
+    print("[INFO] Pre-downloading solc v0.8.17 on host...")
+    run_shell(
+        f"{python} -c \"import solcx; solcx.install_solc('0.8.17')\"",
+        cwd=str(abs_target),
+    )
+    print("[OK] solc v0.8.17 ready in host cache.\n")
 
     # ── Step 2: generate config.ini ───────────────────────────────────────────
     rpc_url     = env.get("RPC_URL", "").strip()
@@ -2010,6 +2020,44 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
             start_minter_stack(minter_path=target_path)
 
 
+# ─── Dashboard installer ──────────────────────────────────────────────────────
+
+
+def install_dashboard(prefix: str, env: dict) -> None:
+    """Clone dashboard-web and run its own install.py.
+
+    :param prefix: Environment variable prefix (e.g. ``DEVELOPER``).
+    :type prefix: str
+    :param env: Dictionary of environment variables loaded from ``.env``.
+    :type env: dict
+    """
+    print("\n── Dashboard ─────────────────────────────────────────────────")
+
+    url_key      = f"{prefix}_DASHBOARD_REPOSITORY_URL"
+    branch_key   = f"{prefix}_DASHBOARD_REPOSITORY_BRANCH"
+    setup_key    = f"{prefix}_DASHBOARD_SETUP"
+    commands_key = f"{prefix}_DASHBOARD_COMMANDS"
+
+    repo_url = get_url(env, url_key)
+    if not repo_url:
+        print(f"[SKIP] '{url_key}' is not set — skipping 'dashboard-web'.")
+        return
+
+    branch   = env.get(branch_key, "main").strip() or "main"
+    do_setup = env.get(setup_key, "True").strip().lower() != "false"
+    commands = env.get(commands_key, "").strip() or "python3 install.py"
+    target   = "components/frontend/dashboard-web"
+
+    install_repo(name="dashboard-web", repo_url=repo_url, branch=branch, target_dir=target)
+
+    if not do_setup:
+        print("[INFO] SETUP=False — 'dashboard-web' cloned, setup skipped.\n")
+        return
+
+    run_commands(commands, cwd=str(Path(target).resolve()))
+    print("[OK] 'dashboard-web' is up.\n")
+
+
 # ─── Profile installer ────────────────────────────────────────────────────────
 
 
@@ -2040,6 +2088,7 @@ def install_profile(prefix: str, env: dict) -> None:
     install_dark_store_api(prefix=prefix, env=env)
     install_core_resolver_api(prefix=prefix, env=env)
     install_single_component(name="MINTER", prefix=prefix, env=env)
+    install_dashboard(prefix=prefix, env=env)
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
