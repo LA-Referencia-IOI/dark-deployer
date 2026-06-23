@@ -2045,7 +2045,7 @@ def install_dashboard(prefix: str, env: dict) -> None:
 
     branch   = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = env.get(commands_key, "").strip() or "python install.py"
+    commands = env.get(commands_key, "").strip() or "python3 install.py"
     target   = "components/frontend/dashboard-web"
 
     install_repo(name="dashboard-web", repo_url=repo_url, branch=branch, target_dir=target)
