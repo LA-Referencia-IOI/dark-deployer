@@ -2098,135 +2098,268 @@ def _ask_choice(question: str, options: list[str], default: int = 1) -> int:
     """Print a numbered menu and return the 1-based index of the chosen option."""
     print(f"\n{question}")
     for i, opt in enumerate(options, 1):
-        marker = " (padrão)" if i == default else ""
+        marker = " (default)" if i == default else ""
         print(f"  [{i}] {opt}{marker}")
     while True:
-        raw = input(f"\nEscolha [1-{len(options)}]: ").strip()
+        raw = input(f"\nChoice [1-{len(options)}]: ").strip()
         if raw == "" and default:
             return default
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return int(raw)
-        print(f"    Opção inválida. Digite um número entre 1 e {len(options)}.")
+        print(f"    Invalid option. Enter a number between 1 and {len(options)}.")
 
 
-def _ask_text(question: str, default: str = "") -> str:
+def _ask_text(question: str, default: str = "", required: bool = False) -> str:
     """Ask for free-form text input, accepting Enter to use the default."""
     hint = f" [{default}]" if default else ""
-    raw = input(f"  {question}{hint}: ").strip()
-    return raw if raw else default
+    while True:
+        raw = input(f"  {question}{hint}: ").strip()
+        value = raw if raw else default
+        if required and not value:
+            print("    This field is required.")
+            continue
+        return value
 
 
 def _ask_confirm(question: str, default: bool = True) -> bool:
     """Ask a yes/no question and return True for yes."""
-    hint = "[S/n]" if default else "[s/N]"
+    hint = "[Y/n]" if default else "[y/N]"
     raw = input(f"  {question} {hint}: ").strip().lower()
     if raw == "":
         return default
-    return raw in ("s", "sim", "y", "yes")
+    return raw in ("y", "yes")
+
+
+def _wizard_blockchain_remote_standard(prefix: str, host: str, env: dict) -> dict:
+    """Standard remote blockchain: derive URLs from the host IP using default ports."""
+    env[f"{prefix}_BLOCKCHAIN_HOST"] = host
+    env["RPC_URL"] = f"http://{host}:8545"
+    print(f"  [INFO] RPC URL set to http://{host}:8545 (default port).")
+    print(  "  [INFO] Contract addresses will be read from .env.integration if available.")
+    return env
+
+
+def _wizard_blockchain_remote_advanced(prefix: str, host: str, env: dict) -> dict:
+    """Advanced remote blockchain: collect all connection and contract details."""
+    env[f"{prefix}_BLOCKCHAIN_HOST"] = host
+
+    env["RPC_URL"] = _ask_text(
+        "RPC URL (Node 1 endpoint or load balancer)",
+        default=f"http://{host}:8545",
+    )
+    env["CHAIN_ID"] = _ask_text(
+        "Chain ID",
+        default=env.get("CHAIN_ID", "2025"),
+    )
+
+    extra = _ask_text(
+        "Additional validator node IPs (comma-separated, min 2 more for fault tolerance)",
+        default=env.get(f"{prefix}_BLOCKCHAIN_EXTRA_NODES", ""),
+    )
+    if extra:
+        env[f"{prefix}_BLOCKCHAIN_EXTRA_NODES"] = extra
+
+    enodes = _ask_text(
+        "Enode URLs for peer discovery (comma-separated, optional)",
+        default=env.get(f"{prefix}_BLOCKCHAIN_ENODES", ""),
+    )
+    if enodes:
+        env[f"{prefix}_BLOCKCHAIN_ENODES"] = enodes
+
+    print("\n  -- Contract addresses (from the blockchain server after dark-dapp deployment) --")
+    dark_addr = _ask_text(
+        "dARK contract address (DARK_CONTRACT_ADDRESS)",
+        default=env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", ""),
+        required=True,
+    )
+    auth_addr = _ask_text(
+        "Authority contract address (AUTHORITY_CONTRACT_ADDRESS)",
+        default=env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", ""),
+        required=True,
+    )
+    env[f"{prefix}_DARK_CONTRACT_ADDRESS"]      = dark_addr
+    env[f"{prefix}_AUTHORITY_CONTRACT_ADDRESS"] = auth_addr
+
+    print("\n  -- Master wallet (exported from dark-env on the blockchain server) --")
+    env["MASTER_WALLET_ADDRESS"] = _ask_text(
+        "Master wallet address",
+        default=env.get("MASTER_WALLET_ADDRESS", ""),
+        required=True,
+    )
+    env["MASTER_PRIVATE_KEY"] = _ask_text(
+        "Master private key",
+        default=env.get("MASTER_PRIVATE_KEY", ""),
+        required=True,
+    )
+    env["MASTER_PUBLIC_KEY"] = _ask_text(
+        "Master public key",
+        default=env.get("MASTER_PUBLIC_KEY", ""),
+    )
+    return env
 
 
 def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
-    """Collect blockchain tier configuration interactively."""
-    choice = _ask_choice(
-        "Onde será instalado o tier de BLOCKCHAIN?",
+    """Collect blockchain tier topology and connection details interactively."""
+    location = _ask_choice(
+        "Where will the BLOCKCHAIN tier be installed?",
         [
-            "Neste servidor (instalar localmente — mínimo 1 nó)",
-            "Servidor remoto (já instalado ou a ser instalado separadamente)",
+            "This server  — install locally (single node)",
+            "Remote server — already deployed or will be deployed separately",
         ],
     )
-    if choice == 1:
-        env.pop(f"{prefix}_BLOCKCHAIN_HOST", None)
-        env.pop(f"{prefix}_BLOCKCHAIN_EXTRA_NODES", None)
+    if location == 1:
+        for key in (
+            f"{prefix}_BLOCKCHAIN_HOST",
+            f"{prefix}_BLOCKCHAIN_EXTRA_NODES",
+            f"{prefix}_BLOCKCHAIN_ENODES",
+            f"{prefix}_DARK_CONTRACT_ADDRESS",
+            f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
+        ):
+            env.pop(key, None)
         return env
 
-    host = _ask_text("IP ou hostname do Node 1 (bootnode + RPC)", default="")
-    while not host:
-        print("    O host não pode ser vazio.")
-        host = _ask_text("IP ou hostname do Node 1 (bootnode + RPC)", default="")
+    host = _ask_text("Node 1 IP or hostname (bootnode + RPC entry point)", required=True)
 
-    rpc_url  = _ask_text("URL RPC", default=f"http://{host}:8545")
-    extra    = _ask_text("Nós adicionais (IPs separados por vírgula, mínimo mais 2)", default="")
-    dark_addr = _ask_text("Endereço do contrato dARK  (DARK_CONTRACT_ADDRESS)", default="")
-    auth_addr = _ask_text("Endereço do contrato Authority (AUTHORITY_CONTRACT_ADDRESS)", default="")
+    mode = _ask_choice(
+        "Configuration mode for remote blockchain:",
+        [
+            "Standard  — use defaults from .env.integration (ports 8545)",
+            "Advanced  — enter all details manually (RPC, enodes, contracts, wallet)",
+        ],
+    )
+    if mode == 1:
+        return _wizard_blockchain_remote_standard(prefix=prefix, host=host, env=env)
+    return _wizard_blockchain_remote_advanced(prefix=prefix, host=host, env=env)
 
-    env[f"{prefix}_BLOCKCHAIN_HOST"]        = host
-    env[f"{prefix}_BLOCKCHAIN_EXTRA_NODES"] = extra
-    env["RPC_URL"]                          = rpc_url
-    if dark_addr:
-        env[f"{prefix}_DARK_CONTRACT_ADDRESS"]      = dark_addr
-    if auth_addr:
-        env[f"{prefix}_AUTHORITY_CONTRACT_ADDRESS"] = auth_addr
+
+def _wizard_ipfs_remote_standard(prefix: str, host: str, env: dict) -> dict:
+    """Standard remote IPFS: derive URLs from the host IP using default ports."""
+    env[f"{prefix}_IPFS_HOST"]        = host
+    env[f"{prefix}_IPFS_API_URL"]     = f"http://{host}:5001"
+    env[f"{prefix}_IPFS_CLUSTER_URL"] = f"http://{host}:9094"
+    print(f"  [INFO] IPFS API set to http://{host}:5001 (default port).")
+    print(f"  [INFO] IPFS Cluster set to http://{host}:9094 (default port).")
+    return env
+
+
+def _wizard_ipfs_remote_advanced(prefix: str, host: str, env: dict) -> dict:
+    """Advanced remote IPFS: collect all API and cluster connection details."""
+    env[f"{prefix}_IPFS_HOST"] = host
+
+    extra = _ask_text(
+        "Additional IPFS node IPs joining the cluster (comma-separated, optional)",
+        default=env.get(f"{prefix}_IPFS_EXTRA_NODES", ""),
+    )
+    if extra:
+        env[f"{prefix}_IPFS_EXTRA_NODES"] = extra
+
+    env[f"{prefix}_IPFS_API_URL"] = _ask_text(
+        "IPFS API URL",
+        default=f"http://{host}:5001",
+    )
+    env[f"{prefix}_IPFS_CLUSTER_URL"] = _ask_text(
+        "IPFS Cluster API URL",
+        default=f"http://{host}:9094",
+    )
+    env[f"{prefix}_IPFS_CLUSTER_PROXY_URL"] = _ask_text(
+        "IPFS Cluster Proxy URL",
+        default=f"http://{host}:9095",
+    )
+    env["IPFS_ADD_MODE"] = _ask_text(
+        "IPFS add mode (cluster_proxy / direct)",
+        default=env.get("IPFS_ADD_MODE", "cluster_proxy"),
+    )
+    env["IPFS_CLUSTER_MIN_PEERS"] = _ask_text(
+        "Minimum IPFS Cluster peers required",
+        default=env.get("IPFS_CLUSTER_MIN_PEERS", "1"),
+    )
     return env
 
 
 def _wizard_ipfs_tier(prefix: str, env: dict) -> dict:
-    """Collect IPFS tier configuration interactively."""
-    choice = _ask_choice(
-        "Onde será instalado o tier de IPFS?",
+    """Collect IPFS tier topology and connection details interactively."""
+    location = _ask_choice(
+        "Where will the IPFS tier be installed?",
         [
-            "Neste servidor (instalar localmente — mínimo 1 nó)",
-            "Servidor remoto (já instalado ou a ser instalado separadamente)",
+            "This server  — install locally (single node)",
+            "Remote server — already deployed or will be deployed separately",
         ],
     )
-    if choice == 1:
-        env.pop(f"{prefix}_IPFS_HOST", None)
-        env.pop(f"{prefix}_IPFS_EXTRA_NODES", None)
-        env.pop(f"{prefix}_IPFS_API_URL", None)
-        env.pop(f"{prefix}_IPFS_CLUSTER_URL", None)
+    if location == 1:
+        for key in (
+            f"{prefix}_IPFS_HOST",
+            f"{prefix}_IPFS_EXTRA_NODES",
+            f"{prefix}_IPFS_API_URL",
+            f"{prefix}_IPFS_CLUSTER_URL",
+            f"{prefix}_IPFS_CLUSTER_PROXY_URL",
+        ):
+            env.pop(key, None)
         return env
 
-    host = _ask_text("IP ou hostname do Node 1 IPFS", default="")
-    while not host:
-        print("    O host não pode ser vazio.")
-        host = _ask_text("IP ou hostname do Node 1 IPFS", default="")
+    host = _ask_text("Node 1 IP or hostname (primary IPFS node)", required=True)
 
-    extra       = _ask_text("Nós IPFS adicionais (IPs separados por vírgula)", default="")
-    ipfs_api    = _ask_text("URL da API IPFS", default=f"http://{host}:5001")
-    ipfs_cluster = _ask_text("URL do Cluster IPFS", default=f"http://{host}:9094")
-
-    env[f"{prefix}_IPFS_HOST"]        = host
-    env[f"{prefix}_IPFS_EXTRA_NODES"] = extra
-    env[f"{prefix}_IPFS_API_URL"]     = ipfs_api
-    env[f"{prefix}_IPFS_CLUSTER_URL"] = ipfs_cluster
-    return env
+    mode = _ask_choice(
+        "Configuration mode for remote IPFS:",
+        [
+            "Standard  — use defaults from .env.integration (ports 5001 / 9094)",
+            "Advanced  — enter all details manually (API, cluster, proxy, add mode)",
+        ],
+    )
+    if mode == 1:
+        return _wizard_ipfs_remote_standard(prefix=prefix, host=host, env=env)
+    return _wizard_ipfs_remote_advanced(prefix=prefix, host=host, env=env)
 
 
 def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
-    """Print a summary of the wizard choices before proceeding."""
+    """Print a summary of all wizard choices before proceeding."""
     print("\n" + "─" * 60)
-    print("  Resumo da configuração")
+    print("  Configuration Summary")
     print("─" * 60)
-    print(f"  Perfil          : {install_type.upper()}")
-    print(f"  RPC URL         : {env.get('RPC_URL', '(local)')}")
+    print(f"  Profile         : {install_type.upper()}")
+    print(f"  RPC URL         : {env.get('RPC_URL', '(local default)')}")
 
     blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "")
     if blockchain_host:
+        print(f"  Blockchain      : remote — {blockchain_host}")
         extra = env.get(f"{prefix}_BLOCKCHAIN_EXTRA_NODES", "")
-        print(f"  Blockchain      : remoto — {blockchain_host}")
         if extra:
-            print(f"  Nós adicionais  : {extra}")
-        dark_addr = env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", "(não informado)")
-        auth_addr = env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", "(não informado)")
+            print(f"  Extra nodes     : {extra}")
+        enodes = env.get(f"{prefix}_BLOCKCHAIN_ENODES", "")
+        if enodes:
+            print(f"  Enodes          : {enodes}")
+        dark_addr = env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", "(not provided)")
+        auth_addr = env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", "(not provided)")
         print(f"  dARK contract   : {dark_addr}")
         print(f"  Auth contract   : {auth_addr}")
+        wallet = env.get("MASTER_WALLET_ADDRESS", "")
+        if wallet:
+            print(f"  Master wallet   : {wallet}")
     else:
         print("  Blockchain      : local")
 
     ipfs_host = env.get(f"{prefix}_IPFS_HOST", "")
     if ipfs_host:
-        print(f"  IPFS            : remoto — {ipfs_host}")
-        print(f"  IPFS API URL    : {env.get(f'{prefix}_IPFS_API_URL', '')}")
-        print(f"  IPFS Cluster URL: {env.get(f'{prefix}_IPFS_CLUSTER_URL', '')}")
+        print(f"  IPFS            : remote — {ipfs_host}")
+        print(f"  IPFS API        : {env.get(f'{prefix}_IPFS_API_URL', '')}")
+        print(f"  IPFS Cluster    : {env.get(f'{prefix}_IPFS_CLUSTER_URL', '')}")
+        proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", "")
+        if proxy:
+            print(f"  Cluster proxy   : {proxy}")
+        extra = env.get(f"{prefix}_IPFS_EXTRA_NODES", "")
+        if extra:
+            print(f"  Extra IPFS nodes: {extra}")
     else:
         print("  IPFS            : local")
     print("─" * 60)
 
 
 def run_setup_wizard(env: dict) -> dict:
-    """Interactive setup wizard — asks profile and infrastructure topology.
+    """Interactive setup wizard — collect profile and infrastructure topology.
 
-    Updates the in-memory ``env`` dict with the user's choices and writes
-    them back to ``.env`` before returning.
+    Prompts the user for the installation profile (developer / sandbox /
+    production) and, for non-developer profiles, the location and connection
+    details for the blockchain and IPFS tiers.  Writes the chosen values back
+    to ``.env`` before returning the updated env dict.
 
     :param env: Environment dictionary loaded from ``.env``.
     :type env: dict
@@ -2234,15 +2367,15 @@ def run_setup_wizard(env: dict) -> dict:
     :rtype: dict
     """
     print("\n" + "═" * 60)
-    print("  dARK Deployer — Assistente de Configuração")
+    print("  dARK Deployer — Setup Wizard")
     print("═" * 60)
 
     type_choice = _ask_choice(
-        "Qual tipo de setup deseja realizar?",
+        "Which setup profile do you want to install?",
         [
-            "Developer  — stack completa em um único servidor (local)",
-            "Sandbox    — ambiente de testes com infraestrutura separada",
-            "Production — ambiente de produção com infraestrutura separada",
+            "Developer  — full stack on a single local server",
+            "Sandbox    — test environment with decoupled infrastructure",
+            "Production — production environment with decoupled infrastructure",
         ],
         default={"developer": 1, "sandbox": 2, "production": 3}.get(
             env.get("TYPE", "developer").lower(), 1
@@ -2254,18 +2387,18 @@ def run_setup_wizard(env: dict) -> dict:
     env["TYPE"] = install_type
 
     if install_type in ("sandbox", "production"):
-        print(f"\n  Configurando infraestrutura para perfil {install_type.upper()}:")
+        print(f"\n  Configuring infrastructure for {install_type.upper()} profile:")
         env = _wizard_blockchain_tier(prefix=prefix, env=env)
         env = _wizard_ipfs_tier(prefix=prefix, env=env)
 
     _print_wizard_summary(install_type=install_type, prefix=prefix, env=env)
 
-    if not _ask_confirm("Salvar configuração no .env e iniciar instalação?", default=True):
-        print("\n[INFO] Instalação cancelada pelo usuário.")
+    if not _ask_confirm("Save configuration to .env and start installation?", default=True):
+        print("\n[INFO] Installation cancelled by user.")
         sys.exit(0)
 
     update_env_file(".env", env)
-    print("[OK] Configuração salva em .env.\n")
+    print("[OK] Configuration saved to .env.\n")
     return env
 
 
