@@ -977,6 +977,26 @@ def read_deployed_contract_addresses(ini_path: Path) -> tuple[str, str]:
     return dark_address, authority_address
 
 
+def resolve_contract_addresses(env: dict) -> tuple[str, str]:
+    """Return (dark_address, authority_address).
+
+    Checks prefixed .env vars first (set by operator for remote blockchain),
+    then falls back to deployed_contracts.ini for local installs.
+    """
+    _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
+    prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+
+    dark_addr      = env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", "").strip()
+    authority_addr = env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", "").strip()
+
+    if dark_addr and authority_addr:
+        return dark_addr, authority_addr
+
+    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
+    dark_from_ini, auth_from_ini = read_deployed_contract_addresses(ini_path)
+    return dark_addr or dark_from_ini, authority_addr or auth_from_ini
+
+
 def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     """Generate .env.integration for dark-core-lib from installed blockchain state.
 
@@ -985,8 +1005,7 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
+    dark_contract, authority_contract = resolve_contract_addresses(env)
 
     if not dark_contract or not authority_contract:
         print(
@@ -1026,14 +1045,10 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
+    dark_contract, authority_contract = resolve_contract_addresses(env)
 
     if not dark_contract or not authority_contract:
-        print(
-            "[WARNING] Could not read full contract addresses from "
-            f"'{ini_path}'. .env.integration may be incomplete."
-        )
+        print("[WARNING] Contract addresses not found in .env or deployed_contracts.ini. .env.integration may be incomplete.")
 
     template_env = load_optional_env(minter_path / ".env.example")
     metadata_storage_type = template_env.get("METADATA_STORAGE_TYPE", "store_api").strip()
@@ -1192,14 +1207,33 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
     """Generate .env.integration for dark-store-api from installed IPFS settings."""
     template_env = load_optional_env(store_api_path / ".env.example")
 
+    _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
+    prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+
+    ipfs_host    = env.get(f"{prefix}_IPFS_HOST", "").strip()
+    ipfs_api_env = env.get(f"{prefix}_IPFS_API_URL", "").strip()
+
+    if ipfs_host:
+        ipfs_api_url       = ipfs_api_env or f"http://{ipfs_host}:5001"
+        ipfs_cluster_url   = env.get(f"{prefix}_IPFS_CLUSTER_URL", f"http://{ipfs_host}:9094").strip()
+        ipfs_cluster_proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", ipfs_cluster_url.replace(":9094", ":9095")).strip()
+    elif ipfs_api_env:
+        ipfs_api_url       = ipfs_api_env
+        ipfs_cluster_url   = env.get(f"{prefix}_IPFS_CLUSTER_URL", "http://localhost:9094").strip()
+        ipfs_cluster_proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", "http://localhost:9095").strip()
+    else:
+        ipfs_api_url       = "http://ipfs0:5001"
+        ipfs_cluster_url   = "http://cluster0:9094"
+        ipfs_cluster_proxy = "http://cluster0:9095"
+
     integration_env = {
         **template_env,
         "STORE_API_HOST": template_env.get("STORE_API_HOST", "0.0.0.0").strip(),
         "STORE_API_PORT": "8003",
         "STORAGE_BACKEND": template_env.get("STORAGE_BACKEND", "ipfs_cluster").strip(),
-        "IPFS_API_URL": "http://ipfs0:5001",
-        "IPFS_CLUSTER_API_URL": "http://cluster0:9094",
-        "IPFS_CLUSTER_PROXY_API_URL": "http://cluster0:9095",
+        "IPFS_API_URL":               ipfs_api_url,
+        "IPFS_CLUSTER_API_URL":       ipfs_cluster_url,
+        "IPFS_CLUSTER_PROXY_API_URL": ipfs_cluster_proxy,
         "IPFS_ADD_MODE": env.get(
             "IPFS_ADD_MODE",
             template_env.get("IPFS_ADD_MODE", "cluster_proxy"),
@@ -1234,14 +1268,10 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
+    dark_contract, authority_contract = resolve_contract_addresses(env)
 
     if not dark_contract or not authority_contract:
-        print(
-            "[WARNING] Could not read full contract addresses from "
-            f"'{ini_path}'. .env.integration may be incomplete."
-        )
+        print("[WARNING] Contract addresses not found in .env or deployed_contracts.ini. .env.integration may be incomplete.")
 
     template_env = load_optional_env(admin_api_path / ".env.example")
 
@@ -1285,14 +1315,10 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_contract, _authority_contract = read_deployed_contract_addresses(ini_path)
+    dark_contract, _ = resolve_contract_addresses(env)
 
     if not dark_contract:
-        print(
-            "[WARNING] Could not read the dARK contract address from "
-            f"'{ini_path}'. Resolver .env.integration may be incomplete."
-        )
+        print("[WARNING] dARK contract address not found in .env or deployed_contracts.ini. Resolver .env.integration may be incomplete.")
 
     template_env = load_optional_env(resolver_api_path / ".env.example")
 
@@ -2080,15 +2106,40 @@ def install_profile(prefix: str, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from ``.env``.
     :type env: dict
     """
-    install_blockchain(prefix=prefix, env=env)
+    components_str = env.get(f"{prefix}_INSTALL_COMPONENTS", "all").strip()
+    components     = {c.strip().lower() for c in components_str.split(",")}
+    install_all    = "all" in components
+    install_bc     = install_all or "blockchain" in components
+    install_ipfs   = install_all or "storage"    in components
+    install_apps   = install_all or "apps"       in components
 
-    install_core_lib(prefix=prefix, env=env)
-    install_core_admin_api(prefix=prefix, env=env)
-    install_dark_ipfs(prefix=prefix, env=env)
-    install_dark_store_api(prefix=prefix, env=env)
-    install_core_resolver_api(prefix=prefix, env=env)
-    install_single_component(name="MINTER", prefix=prefix, env=env)
-    install_dashboard(prefix=prefix, env=env)
+    if install_bc:
+        blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
+        if blockchain_host:
+            print(f"[INFO] Blockchain tier is remote ({blockchain_host}) — skipping local install.")
+        else:
+            install_blockchain(prefix=prefix, env=env)
+    else:
+        print("[INFO] Blockchain not selected — skipping.")
+
+    if install_apps:
+        install_core_lib(prefix=prefix, env=env)
+        install_core_admin_api(prefix=prefix, env=env)
+
+    if install_ipfs:
+        ipfs_host = env.get(f"{prefix}_IPFS_HOST", "").strip()
+        if ipfs_host:
+            print(f"[INFO] IPFS tier is remote ({ipfs_host}) — skipping local install.")
+        else:
+            install_dark_ipfs(prefix=prefix, env=env)
+    else:
+        print("[INFO] Storage not selected — skipping.")
+
+    if install_apps:
+        install_dark_store_api(prefix=prefix, env=env)
+        install_core_resolver_api(prefix=prefix, env=env)
+        install_single_component(name="MINTER", prefix=prefix, env=env)
+        install_dashboard(prefix=prefix, env=env)
 
 
 # ─── Setup wizard ────────────────────────────────────────────────────────────
@@ -2195,6 +2246,100 @@ def _wizard_blockchain_remote_advanced(prefix: str, host: str, env: dict) -> dic
         "Master public key",
         default=env.get("MASTER_PUBLIC_KEY", ""),
     )
+    return env
+
+
+def _wizard_apps_blockchain_info(prefix: str, env: dict) -> dict:
+    """Collect or confirm blockchain connection details for apps-only install.
+
+    Reads existing values from the loaded .env dict and falls back to
+    deployed_contracts.ini when contract addresses are missing.  Only asks
+    the user for what is still absent.
+    """
+    rpc_url        = env.get("RPC_URL", "").strip()
+    chain_id       = env.get("CHAIN_ID", "2025").strip()
+    dark_contract  = env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", "").strip()
+    auth_contract  = env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", "").strip()
+    master_key     = env.get("MASTER_PRIVATE_KEY", "").strip()
+    master_wallet  = env.get("MASTER_WALLET_ADDRESS", "").strip()
+    master_pub     = env.get("MASTER_PUBLIC_KEY", "").strip()
+    blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
+
+    if not dark_contract or not auth_contract:
+        ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
+        dark_ini, auth_ini = read_deployed_contract_addresses(ini_path)
+        if dark_ini or auth_ini:
+            dark_contract = dark_contract or dark_ini
+            auth_contract = auth_contract or auth_ini
+            print("  [INFO] Contract addresses loaded from local deployed_contracts.ini.")
+
+    all_present = all([rpc_url, dark_contract, auth_contract, master_key])
+
+    if all_present and blockchain_host:
+        print(f"\n  Blockchain configuration found in .env:")
+        print(f"    Host          : {blockchain_host}")
+        print(f"    RPC URL       : {rpc_url}")
+        print(f"    dARK contract : {dark_contract}")
+        print(f"    Auth contract : {auth_contract}")
+        print(f"    Master wallet : {master_wallet or '(not set)'}")
+        if _ask_confirm("Use this blockchain configuration?", default=True):
+            env[f"{prefix}_DARK_CONTRACT_ADDRESS"]      = dark_contract
+            env[f"{prefix}_AUTHORITY_CONTRACT_ADDRESS"] = auth_contract
+            return env
+
+    print("\n  Blockchain connection details (required for apps install):")
+    host = _ask_text("Blockchain host (Node 1 IP or hostname)", default=blockchain_host, required=True)
+    env[f"{prefix}_BLOCKCHAIN_HOST"] = host
+    env["RPC_URL"]   = _ask_text("RPC URL",  default=rpc_url  or f"http://{host}:8545")
+    env["CHAIN_ID"]  = _ask_text("Chain ID", default=chain_id)
+
+    print("\n  Contract addresses (from deployed_contracts.ini on the blockchain server):")
+    env[f"{prefix}_DARK_CONTRACT_ADDRESS"]      = _ask_text("dARK contract address",      default=dark_contract, required=True)
+    env[f"{prefix}_AUTHORITY_CONTRACT_ADDRESS"] = _ask_text("Authority contract address", default=auth_contract,  required=True)
+
+    print("\n  Master wallet (from dark-env on the blockchain server):")
+    env["MASTER_PRIVATE_KEY"]    = _ask_text("Master private key",        default=master_key,    required=True)
+    env["MASTER_WALLET_ADDRESS"] = _ask_text("Master wallet address",     default=master_wallet)
+    env["MASTER_PUBLIC_KEY"]     = _ask_text("Master public key",         default=master_pub)
+
+    return env
+
+
+def _wizard_apps_ipfs_info(prefix: str, env: dict) -> dict:
+    """Collect or confirm IPFS connection details for apps-only install.
+
+    Reads existing values from the loaded .env dict.  If dark-ipfs is
+    installed locally it is detected automatically.  Only asks the user for
+    what is still absent.
+    """
+    ipfs_host        = env.get(f"{prefix}_IPFS_HOST", "").strip()
+    ipfs_api_url     = env.get(f"{prefix}_IPFS_API_URL", "").strip()
+    ipfs_cluster_url = env.get(f"{prefix}_IPFS_CLUSTER_URL", "").strip()
+
+    if not ipfs_api_url and Path("components/blockchain/dark-ipfs").exists():
+        ipfs_api_url     = "http://localhost:5001"
+        ipfs_cluster_url = "http://localhost:9094"
+        print("  [INFO] Local dark-ipfs installation detected — using localhost URLs.")
+
+    if ipfs_api_url:
+        print(f"\n  IPFS configuration found:")
+        if ipfs_host:
+            print(f"    Host          : {ipfs_host}")
+        print(f"    IPFS API      : {ipfs_api_url}")
+        print(f"    Cluster API   : {ipfs_cluster_url or '(not set)'}")
+        if _ask_confirm("Use this IPFS configuration?", default=True):
+            env[f"{prefix}_IPFS_API_URL"]     = ipfs_api_url
+            if ipfs_cluster_url:
+                env[f"{prefix}_IPFS_CLUSTER_URL"] = ipfs_cluster_url
+            return env
+
+    print("\n  IPFS connection details (required for store-api):")
+    host = _ask_text("IPFS host (Node 1 IP or hostname)", default=ipfs_host, required=True)
+    env[f"{prefix}_IPFS_HOST"]              = host
+    env[f"{prefix}_IPFS_API_URL"]           = _ask_text("IPFS API URL",           default=f"http://{host}:5001")
+    env[f"{prefix}_IPFS_CLUSTER_URL"]       = _ask_text("IPFS Cluster API URL",   default=f"http://{host}:9094")
+    env[f"{prefix}_IPFS_CLUSTER_PROXY_URL"] = _ask_text("IPFS Cluster Proxy URL", default=f"http://{host}:9095")
+
     return env
 
 
@@ -2316,6 +2461,8 @@ def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
     print("  Configuration Summary")
     print("─" * 60)
     print(f"  Profile         : {install_type.upper()}")
+    components = env.get(f"{prefix}_INSTALL_COMPONENTS", "all")
+    print(f"  Components      : {components}")
     print(f"  RPC URL         : {env.get('RPC_URL', '(local default)')}")
 
     blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "")
@@ -2388,8 +2535,29 @@ def run_setup_wizard(env: dict) -> dict:
 
     if install_type in ("sandbox", "production"):
         print(f"\n  Configuring infrastructure for {install_type.upper()} profile:")
-        env = _wizard_blockchain_tier(prefix=prefix, env=env)
-        env = _wizard_ipfs_tier(prefix=prefix, env=env)
+
+        component_choice = _ask_choice(
+            "Which components will be installed on this server?",
+            [
+                "All               — blockchain + apps + storage",
+                "Apps only         — application services (blockchain and IPFS are elsewhere)",
+                "Blockchain only   — only the blockchain tier",
+                "Storage only      — only the IPFS storage tier",
+            ],
+            default={"all": 1, "apps": 2, "blockchain": 3, "storage": 4}.get(
+                env.get(f"{prefix}_INSTALL_COMPONENTS", "all").strip(), 1
+            ),
+        )
+        component_map = {1: "all", 2: "apps", 3: "blockchain", 4: "storage"}
+        selected = component_map[component_choice]
+        env[f"{prefix}_INSTALL_COMPONENTS"] = selected
+
+        if selected == "all":
+            env = _wizard_blockchain_tier(prefix=prefix, env=env)
+            env = _wizard_ipfs_tier(prefix=prefix, env=env)
+        elif selected == "apps":
+            env = _wizard_apps_blockchain_info(prefix=prefix, env=env)
+            env = _wizard_apps_ipfs_info(prefix=prefix, env=env)
 
     _print_wizard_summary(install_type=install_type, prefix=prefix, env=env)
 
