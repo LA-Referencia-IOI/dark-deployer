@@ -149,3 +149,5 @@ dARK_dapp/compiled/
 components/
 
 __pycache__/
+
+guide.txt
