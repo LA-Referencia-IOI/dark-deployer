@@ -138,6 +138,16 @@ def detect_curl() -> dict:
     return {"status": OK if rc == 0 else MISSING}
 
 
+def detect_qemu(arch: str) -> dict:
+    """On non-x86_64 hosts, check if QEMU binfmt support is configured for AMD64 images."""
+    if arch == "amd64":
+        return {"needed": False}
+    rc, _, _ = _run("ls /proc/sys/fs/binfmt_misc/qemu-x86_64 2>/dev/null")
+    if rc == 0:
+        return {"needed": True, "status": OK}
+    return {"needed": True, "status": MISSING}
+
+
 def detect_python_packages(py_versions: dict) -> list[str]:
     """Return list of missing python3.12 support packages when 3.12 is present."""
     if "3.12" not in py_versions:
@@ -168,6 +178,7 @@ def print_report(
     gcc: dict,
     curl: dict,
     missing_py_pkgs: list[str],
+    qemu: dict,
 ) -> list[str]:
     """Print detection table and return the list of actions required."""
 
@@ -211,6 +222,11 @@ def print_report(
 
     # Build action list
     actions = []
+    if qemu["needed"]:
+        icon = ICON[qemu["status"]]
+        label = "configured" if qemu["status"] == OK else "not configured (needed for AMD64 Docker images)"
+        print(f"    {icon} QEMU binfmt (AMD64 emulation): {label}")
+
     if curl["status"] == MISSING:
         actions.append("install_curl")
     if docker["status"] in (MISSING, INCOMPATIBLE):
@@ -227,6 +243,8 @@ def print_report(
         actions.append("install_python312_extras")
     if gcc["status"] == MISSING:
         actions.append("install_build_essential")
+    if qemu["needed"] and qemu["status"] == MISSING:
+        actions.append("install_qemu")
 
     print("\n" + "-" * 60)
     if not actions:
@@ -242,6 +260,7 @@ def print_report(
             "install_python312":         "Install Python 3.12 + venv + dev headers",
             "install_python312_extras":  "Install python3.12-venv and python3.12-dev",
             "install_build_essential":   "Install build-essential (gcc, make, …)",
+            "install_qemu":              "Configure QEMU binfmt for AMD64 Docker images on ARM64",
         }
         for a in actions:
             print(f"    * {labels.get(a, a)}")
@@ -318,6 +337,22 @@ def do_install_build_essential() -> bool:
     return _apt_get("build-essential")
 
 
+def do_install_qemu() -> bool:
+    print("\n[INSTALL] Configuring QEMU binfmt for AMD64 Docker images on ARM64...")
+    ok = _apt_get("qemu-user-static binfmt-support")
+    if not ok:
+        return False
+    rc = _run_live(
+        "docker run --privileged --rm tonistiigi/binfmt --install amd64"
+    )
+    if rc != 0:
+        print("[WARNING] binfmt Docker registration failed — try manually:")
+        print("          docker run --privileged --rm tonistiigi/binfmt --install all")
+        return False
+    print("[OK] QEMU binfmt for AMD64 registered.")
+    return True
+
+
 # ─── Prompt helpers ───────────────────────────────────────────────────────────
 
 def _ask_confirm(question: str, default: bool = True) -> bool:
@@ -359,10 +394,11 @@ def main() -> None:
     gcc      = detect_gcc(arch)
     curl     = detect_curl()
     py_pkgs  = detect_python_packages(py_vers)
+    qemu     = detect_qemu(arch)
 
     actions = print_report(
         os_info, arch, py_vers, docker, comp_v2, comp_v1,
-        git, gcc, curl, py_pkgs,
+        git, gcc, curl, py_pkgs, qemu,
     )
 
     if not actions:
@@ -393,6 +429,7 @@ def main() -> None:
     apt_actions = {
         "install_curl", "install_compose_v2", "install_git",
         "install_python312", "install_python312_extras", "install_build_essential",
+        "install_qemu",
     }
     if any(a in actions for a in apt_actions) and os_info["id"] in ("ubuntu", "debian"):
         print("\n[INFO] Updating package index...")
@@ -409,6 +446,7 @@ def main() -> None:
         "install_python312":        (lambda: do_install_python312(os_info), "Python 3.12"),
         "install_python312_extras": (do_install_python312_extras,  "python3.12-dev/venv"),
         "install_build_essential":  (do_install_build_essential,   "build-essential"),
+        "install_qemu":             (do_install_qemu,              "QEMU binfmt"),
     }
 
     for action in actions:

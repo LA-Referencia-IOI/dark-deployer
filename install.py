@@ -405,8 +405,8 @@ def print_install_summary(prefix: str, env: dict) -> None:
     rpc_url = env.get("RPC_URL", "http://localhost:8545").strip() or "http://localhost:8545"
     explorer_port = env.get("EXPLORER_PORT", "25000").strip() or "25000"
     explorer_url = f"http://localhost:{explorer_port}"
-    ipfs_api_url = "http://localhost:5001"
-    cluster_api_url = "http://localhost:9094"
+    ipfs_api_url    = env.get(f"{prefix}_IPFS_API_URL",     "http://localhost:5001").strip() or "http://localhost:5001"
+    cluster_api_url = env.get(f"{prefix}_IPFS_CLUSTER_URL", "http://localhost:9094").strip() or "http://localhost:9094"
     admin_url = "http://localhost:8000"
     resolver_url = "http://localhost:8002"
     store_api_url = "http://localhost:8003"
@@ -426,7 +426,11 @@ def print_install_summary(prefix: str, env: dict) -> None:
             f"[docs: {admin_url}/docs]"
         )
 
-    ipfs_selected = bool(get_url(env, f"{prefix}_IPFS_REPOSITORY_URL"))
+    ipfs_selected = (
+        bool(get_url(env, f"{prefix}_IPFS_REPOSITORY_URL"))
+        or bool(env.get(f"{prefix}_IPFS_HOST", "").strip())
+        or bool(env.get(f"{prefix}_IPFS_API_URL", "").strip())
+    )
     if ipfs_selected:
         print(f"- IPFS API: {ipfs_api_url} [{probe_ipfs_api_status(ipfs_api_url)}]")
         print(f"- IPFS Cluster: {cluster_api_url} [{probe_http_status(f'{cluster_api_url}/id')}]")
@@ -1304,7 +1308,7 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
         ).strip(),
         "IPFS_CLUSTER_MIN_PEERS": env.get(
             "IPFS_CLUSTER_MIN_PEERS",
-            template_env.get("IPFS_CLUSTER_MIN_PEERS", "2"),
+            template_env.get("IPFS_CLUSTER_MIN_PEERS", "1"),
         ).strip(),
     }
 
@@ -2038,6 +2042,14 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = env.get(commands_key, "make up").strip() or "make up"
     target = "components/blockchain/dark-ipfs"
+
+    if platform.machine() != "x86_64":
+        print(
+            f"[INFO] Host architecture is {platform.machine()}. "
+            "dark-ipfs Docker images are AMD64 — they will run via QEMU emulation. "
+            "Ensure 'qemu-user-static' is installed and binfmt_misc is configured "
+            "(docker run --privileged --rm tonistiigi/binfmt --install all)."
+        )
 
     install_repo(
         name="dark-ipfs",
