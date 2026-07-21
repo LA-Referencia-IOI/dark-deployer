@@ -489,7 +489,8 @@ def ensure_shared_venv() -> Path:
     """
     if not SHARED_VENV_DIR.exists():
         print(f"[INFO] Creating shared venv at '{SHARED_VENV_DIR}'...")
-        run_shell(f"{sys.executable} -m venv {SHARED_VENV_DIR}")
+        python = find_web3_compatible_python()
+        run_shell(f"{python} -m venv {SHARED_VENV_DIR}")
     else:
         print(f"[INFO] Shared venv already exists at '{SHARED_VENV_DIR}', reusing it.")
 
@@ -502,15 +503,49 @@ def shared_venv_bin(bin_name: str) -> str:
     return str(venv_dir / "bin" / bin_name)
 
 
+def find_web3_compatible_python() -> str:
+    """Return a Python 3.10–3.12 interpreter path suitable for web3/eth venvs.
+
+    web3 and several of its dependencies (pyunormalize, eth-hash, …) do not
+    yet support Python 3.13+.  If the current interpreter is too new, try to
+    find an older one installed on the system.  Falls back to sys.executable
+    when nothing better is available, letting pip report the incompatibility.
+    """
+    if sys.version_info < (3, 13):
+        return sys.executable
+
+    for candidate in ("python3.12", "python3.11", "python3.10"):
+        result = subprocess.run(
+            ["which", candidate],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            path = result.stdout.strip()
+            print(f"[INFO] Using {candidate} ({path}) for component venv (web3 compat).")
+            return path
+
+    print(
+        f"[WARNING] Python {sys.version_info.major}.{sys.version_info.minor} is not "
+        "supported by web3 / eth packages.  Install python3.12 or python3.11 to avoid "
+        "build errors:\n"
+        "    sudo apt-get install python3.12 python3.12-venv"
+    )
+    return sys.executable
+
+
 def ensure_component_venv(venv_dir: Path) -> Path:
     """Create or reuse a component-local virtual environment.
 
     This is used for components whose pinned dependencies would otherwise
     downgrade packages in the shared developer venv.
+    Uses a Python ≤ 3.12 interpreter when the system Python is newer,
+    because web3 and its dependencies do not yet support Python 3.13+.
     """
     if not venv_dir.exists():
         print(f"[INFO] Creating component venv at '{venv_dir}'...")
-        run_shell(f"{sys.executable} -m venv {venv_dir}")
+        python = find_web3_compatible_python()
+        run_shell(f"{python} -m venv {venv_dir}")
     else:
         print(f"[INFO] Component venv already exists at '{venv_dir}', reusing it.")
 
