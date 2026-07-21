@@ -62,15 +62,23 @@ import urllib.request
 
 def _ensure_docker_group() -> None:
     """Re-exec with the docker group if the user is a member but the current
-    session doesn't have it active (common right after a fresh Docker install)."""
+    session doesn't have it active (common right after a fresh Docker install).
+
+    sg docker sets the *effective* GID, not a supplementary group, so we check
+    getgid()/getegid() in addition to getgroups(). A _DARK_DOCKER_REEXEC env
+    flag prevents looping when sg still can't provide docker access.
+    """
+    if os.environ.get("_DARK_DOCKER_REEXEC"):
+        return  # already tried once — avoid infinite loop
     try:
         docker_gid = grp.getgrnam("docker").gr_gid
     except KeyError:
-        return  # docker group doesn't exist — nothing to do
-    if docker_gid in os.getgroups():
-        return  # already active
+        return  # docker group doesn't exist
+    if docker_gid in (os.getgid(), os.getegid(), *os.getgroups()):
+        return  # already active in this session
     cmd = " ".join(shlex.quote(a) for a in [sys.executable] + sys.argv)
     print("[INFO] docker group not active in this session — re-launching automatically...")
+    os.environ["_DARK_DOCKER_REEXEC"] = "1"
     os.execvp("sg", ["sg", "docker", "-c", cmd])
 
 PROJECT_ROOT = Path(__file__).resolve().parent
