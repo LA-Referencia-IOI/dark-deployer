@@ -2343,6 +2343,29 @@ def _wizard_apps_ipfs_info(prefix: str, env: dict) -> dict:
     return env
 
 
+_BLOCKCHAIN_REPO_DEFAULTS: dict = {
+    "DARK_ENV":        "https://github.com/LA-Referencia-IOI/dark-env",
+    "DARK_DAPP":       "https://github.com/LA-Referencia-IOI/dark-dapp",
+    "DARK_EXPLORADOR": "https://github.com/LA-Referencia-IOI/dark-explorer.git",
+}
+
+
+def _wizard_blockchain_repos(prefix: str, env: dict) -> dict:
+    """Ask for any blockchain repository URLs that are not yet configured."""
+    missing = [
+        (suffix, f"{prefix}_BLOCKCHAIN_{suffix}_REPOSITORY_URL", default)
+        for suffix, default in _BLOCKCHAIN_REPO_DEFAULTS.items()
+        if not env.get(f"{prefix}_BLOCKCHAIN_{suffix}_REPOSITORY_URL", "").strip()
+    ]
+    if not missing:
+        return env
+    print("\n  Blockchain repository URLs (Enter to accept defaults):")
+    for suffix, key, default in missing:
+        label = suffix.lower().replace("_", "-")
+        env[key] = _ask_text(f"{label} repository URL", default=default)
+    return env
+
+
 def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
     """Collect blockchain tier topology and connection details interactively."""
     location = _ask_choice(
@@ -2361,7 +2384,7 @@ def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
             f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
         ):
             env.pop(key, None)
-        return env
+        return _wizard_blockchain_repos(prefix=prefix, env=env)
 
     host = _ask_text("Node 1 IP or hostname (bootnode + RPC entry point)", required=True)
 
@@ -2567,6 +2590,7 @@ def run_setup_wizard(env: dict) -> dict:
                 f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
             ):
                 env.pop(key, None)
+            env = _wizard_blockchain_repos(prefix=prefix, env=env)
         elif selected == "storage":
             for key in (
                 f"{prefix}_IPFS_HOST",
