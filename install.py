@@ -395,6 +395,28 @@ def docker_network_exists(network_name: str) -> bool:
     return result.returncode == 0
 
 
+def ensure_dark_net() -> None:
+    """Create the shared Docker network 'dark-net' if it doesn't already exist.
+
+    In a full install dark-env creates this network. In decoupled/storage-only
+    installs dark-env is absent, so we create the network here so that other
+    components (dark-ipfs, app services) can join it.
+    """
+    if docker_network_exists("dark-net"):
+        return
+    print("[INFO] Docker network 'dark-net' not found — creating it...")
+    result = subprocess.run(
+        "docker network create dark-net",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"[ERROR] Failed to create Docker network 'dark-net': {result.stderr.strip()}")
+        sys.exit(1)
+    print("[OK] Docker network 'dark-net' created.")
+
+
 def compose_up_stack(
     compose_dir: Path,
     stack_name: str,
@@ -407,12 +429,7 @@ def compose_up_stack(
         print(f"[WARNING] '{compose_file}' not found. Skipping {stack_name} Docker startup.")
         return
 
-    if not docker_network_exists("dark-net"):
-        print(
-            "[WARNING] Docker network 'dark-net' was not found. "
-            f"Skipping {stack_name} Docker startup. Start blockchain first."
-        )
-        return
+    ensure_dark_net()
 
     print(f"[INFO] Starting {stack_name} Docker stack...")
     run_compose_up_detached(
@@ -1471,12 +1488,7 @@ def start_minter_stack(minter_path: Path) -> None:
         print(f"[WARNING] '{compose_file}' not found. Skipping minter Docker startup.")
         return
 
-    if not docker_network_exists("dark-net"):
-        print(
-            "[WARNING] Docker network 'dark-net' was not found. "
-            "Skipping minter Docker startup. Start blockchain first."
-        )
-        return
+    ensure_dark_net()
 
     print("[INFO] Building minter Docker images...")
     run_shell("docker compose build", cwd=str(minter_path))
@@ -1684,12 +1696,7 @@ def rebuild_service_component(
         print(f"[OK] Built {display}. Startup skipped because --no-start was provided.")
         return
 
-    if not docker_network_exists("dark-net"):
-        print(
-            "[WARNING] Docker network 'dark-net' was not found. "
-            f"Built {display}, but startup was skipped. Start blockchain first."
-        )
-        return
+    ensure_dark_net()
 
     if component == "minter":
         print("[INFO] Starting minter Postgres...")
@@ -2086,6 +2093,7 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
     )
 
     if do_setup:
+        ensure_dark_net()
         setup_repo(target_dir=target, commands_str=commands)
     else:
         print("[INFO] SETUP=False — 'dark-ipfs' cloned, setup skipped.\n")
