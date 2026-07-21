@@ -490,8 +490,19 @@ def main() -> None:
             print("\n[INFO] Compose v2 not detected after Docker install — installing plugin...")
             _apt_get("docker-compose-plugin")
 
-    print("\n  Next step:")
-    print("    python3 install.py")
+    docker_was_installed = "install_docker" in actions
+    print("\n" + "=" * 60)
+    if docker_was_installed:
+        print("  IMPORTANT: Docker was just installed.")
+        print("  Your current shell session does not have 'docker' group permissions.")
+        print()
+        print("  Run the following to activate without logging out:")
+        print("    newgrp docker")
+        print("  Then, inside that new shell:")
+        print("    python3 install.py")
+    else:
+        print("  Next step:")
+        print("    python3 install.py")
     print("=" * 60 + "\n")
 
 

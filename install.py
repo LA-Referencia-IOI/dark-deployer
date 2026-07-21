@@ -191,8 +191,18 @@ def ensure_docker_running() -> None:
     )
     if result.returncode != 0:
         stderr = result.stderr.strip() or result.stdout.strip() or "unknown Docker error"
-        print("[ERROR] Docker does not appear to be running or accessible.")
-        print(f"[ERROR] {stderr}")
+        if "permission denied" in stderr.lower():
+            print("[ERROR] Permission denied connecting to Docker.")
+            print("[ERROR] Your user is not in the 'docker' group for this session.")
+            print()
+            print("  Option 1 (recommended): activate the group without re-login:")
+            print("    newgrp docker")
+            print("    python3 install.py  # run inside the new shell")
+            print()
+            print("  Option 2: log out and back in, then re-run install.py.")
+        else:
+            print("[ERROR] Docker does not appear to be running or accessible.")
+            print(f"[ERROR] {stderr}")
         sys.exit(1)
 
     compose_result = subprocess.run(
