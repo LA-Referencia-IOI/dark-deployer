@@ -180,20 +180,32 @@ def run_compose_up_detached(cmd: str, cwd: str, timeout_seconds: int = 180) -> N
 
 
 def ensure_docker_running() -> None:
-    """Fail early when Docker is not available or the daemon is stopped."""
+    """Fail early when Docker is not available, the daemon is stopped, or
+    the Docker Compose v2 plugin is missing."""
     result = subprocess.run(
         "docker info",
         shell=True,
         capture_output=True,
         text=True,
     )
-    if result.returncode == 0:
-        return
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown Docker error"
+        print("[ERROR] Docker does not appear to be running or accessible.")
+        print(f"[ERROR] {stderr}")
+        sys.exit(1)
 
-    stderr = result.stderr.strip() or result.stdout.strip() or "unknown Docker error"
-    print("[ERROR] Docker does not appear to be running or accessible.")
-    print(f"[ERROR] {stderr}")
-    sys.exit(1)
+    compose_result = subprocess.run(
+        "docker compose version",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if compose_result.returncode != 0:
+        print("[ERROR] Docker Compose v2 plugin not found.")
+        print("[ERROR] Install it with:")
+        print("        sudo apt-get install docker-compose-plugin")
+        print("        # or follow https://docs.docker.com/compose/install/")
+        sys.exit(1)
 
 
 def wait_for_rpc(
