@@ -2558,6 +2558,24 @@ def run_setup_wizard(env: dict) -> dict:
         elif selected == "apps":
             env = _wizard_apps_blockchain_info(prefix=prefix, env=env)
             env = _wizard_apps_ipfs_info(prefix=prefix, env=env)
+        elif selected == "blockchain":
+            for key in (
+                f"{prefix}_BLOCKCHAIN_HOST",
+                f"{prefix}_BLOCKCHAIN_EXTRA_NODES",
+                f"{prefix}_BLOCKCHAIN_ENODES",
+                f"{prefix}_DARK_CONTRACT_ADDRESS",
+                f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
+            ):
+                env.pop(key, None)
+        elif selected == "storage":
+            for key in (
+                f"{prefix}_IPFS_HOST",
+                f"{prefix}_IPFS_EXTRA_NODES",
+                f"{prefix}_IPFS_API_URL",
+                f"{prefix}_IPFS_CLUSTER_URL",
+                f"{prefix}_IPFS_CLUSTER_PROXY_URL",
+            ):
+                env.pop(key, None)
 
     _print_wizard_summary(install_type=install_type, prefix=prefix, env=env)
 
