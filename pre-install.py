@@ -339,18 +339,37 @@ def do_install_build_essential() -> bool:
 
 def do_install_qemu() -> bool:
     print("\n[INSTALL] Configuring QEMU binfmt for AMD64 Docker images on ARM64...")
-    ok = _apt_get("qemu-user-static binfmt-support")
-    if not ok:
-        return False
-    rc = _run_live(
-        "docker run --privileged --rm tonistiigi/binfmt --install amd64"
-    )
-    if rc != 0:
-        print("[WARNING] binfmt Docker registration failed — try manually:")
-        print("          docker run --privileged --rm tonistiigi/binfmt --install all")
-        return False
-    print("[OK] QEMU binfmt for AMD64 registered.")
-    return True
+
+    # Install packages — qemu-user-static registers binfmt entries on install
+    _apt_get("qemu-user-static binfmt-support")
+
+    # Check if the apt post-install hook already registered it
+    rc, _, _ = _run("test -f /proc/sys/fs/binfmt_misc/qemu-x86_64 2>/dev/null")
+    if rc == 0:
+        print("[OK] QEMU binfmt for AMD64 is active (registered by qemu-user-static).")
+        return True
+
+    # Fallback: Docker-based registration. Try without sudo first (user in docker
+    # group), then with sudo (works when the group change hasn't taken effect yet).
+    print("[INFO] Attempting Docker-based binfmt registration...")
+    for docker_cmd in ("docker", "sudo docker"):
+        rc = _run_live(
+            f"{docker_cmd} run --privileged --rm tonistiigi/binfmt --install amd64"
+        )
+        if rc == 0:
+            break
+
+    # Final check — the Docker run may have registered it even if its exit code was
+    # non-zero (image output differences between versions)
+    rc_check, _, _ = _run("test -f /proc/sys/fs/binfmt_misc/qemu-x86_64 2>/dev/null")
+    if rc_check == 0:
+        print("[OK] QEMU binfmt for AMD64 is active.")
+        return True
+
+    print("[WARN] QEMU binfmt registration failed. AMD64 Docker images may not run on this host.")
+    print("       Fix manually after re-login:")
+    print("         sudo docker run --privileged --rm tonistiigi/binfmt --install all")
+    return False
 
 
 # ─── Prompt helpers ───────────────────────────────────────────────────────────
