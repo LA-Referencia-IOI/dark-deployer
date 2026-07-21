@@ -2239,6 +2239,10 @@ def install_profile(prefix: str, env: dict) -> None:
             print(f"[INFO] IPFS tier is remote ({ipfs_host}) — skipping local install.")
         else:
             install_dark_ipfs(prefix=prefix, env=env)
+        # store-api is the IPFS gateway; install it with the storage tier
+        # when apps are not already being installed (which would include it too)
+        if not install_apps:
+            install_dark_store_api(prefix=prefix, env=env)
     else:
         print("[INFO] Storage not selected — skipping.")
 
