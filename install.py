@@ -43,6 +43,7 @@ Selective rebuilds::
 
 import argparse
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -856,12 +857,24 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
 
     # Pre-download solc on the host so the AMD64 container can reuse the cache
     # via a volume mount, bypassing SSL issues inside the emulated environment.
-    print("[INFO] Pre-downloading solc v0.8.17 on host...")
-    run_shell(
-        f"{python} -c \"import solcx; solcx.install_solc('0.8.17')\"",
-        cwd=str(abs_target),
-    )
-    print("[OK] solc v0.8.17 ready in host cache.\n")
+    # On non-x86_64 hosts (e.g. aarch64) the AMD64 binary cannot execute on the
+    # host — skip the pre-download and let the emulated container handle it.
+    if platform.machine() == "x86_64":
+        print("[INFO] Pre-downloading solc v0.8.17 on host...")
+        # Remove any stale binary from a previous run before re-downloading.
+        solcx_cache = Path.home() / ".solcx" / "solc-v0.8.17"
+        if solcx_cache.exists():
+            solcx_cache.unlink()
+        run_shell(
+            f"{python} -c \"import solcx; solcx.install_solc('0.8.17')\"",
+            cwd=str(abs_target),
+        )
+        print("[OK] solc v0.8.17 ready in host cache.\n")
+    else:
+        print(
+            f"[INFO] Skipping host-side solc pre-download on {platform.machine()} "
+            "— the AMD64 container will download solc inside its own environment.\n"
+        )
 
     # ── Step 2: generate config.ini ───────────────────────────────────────────
     rpc_url     = env.get("RPC_URL", "").strip()
