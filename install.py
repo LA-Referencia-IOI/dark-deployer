@@ -42,8 +42,10 @@ Selective rebuilds::
 """
 
 import argparse
+import grp
 import os
 import platform
+import shlex
 import subprocess
 import sys
 import time
@@ -57,6 +59,19 @@ import urllib.error
 import urllib.request
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _ensure_docker_group() -> None:
+    """Re-exec with the docker group if the user is a member but the current
+    session doesn't have it active (common right after a fresh Docker install)."""
+    try:
+        docker_gid = grp.getgrnam("docker").gr_gid
+    except KeyError:
+        return  # docker group doesn't exist — nothing to do
+    if docker_gid in os.getgroups():
+        return  # already active
+    cmd = " ".join(shlex.quote(a) for a in [sys.executable] + sys.argv)
+    print("[INFO] docker group not active in this session — re-launching automatically...")
+    os.execvp("sg", ["sg", "docker", "-c", cmd])
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SHARED_VENV_DIR = PROJECT_ROOT / "venv"
@@ -191,18 +206,12 @@ def ensure_docker_running() -> None:
     )
     if result.returncode != 0:
         stderr = result.stderr.strip() or result.stdout.strip() or "unknown Docker error"
+        print("[ERROR] Docker does not appear to be running or accessible.")
+        print(f"[ERROR] {stderr}")
         if "permission denied" in stderr.lower():
-            print("[ERROR] Permission denied connecting to Docker.")
-            print("[ERROR] Your user is not in the 'docker' group for this session.")
             print()
-            print("  Option 1 (recommended): activate the group without re-login:")
-            print("    newgrp docker")
-            print("    python3 install.py  # run inside the new shell")
-            print()
-            print("  Option 2: log out and back in, then re-run install.py.")
-        else:
-            print("[ERROR] Docker does not appear to be running or accessible.")
-            print(f"[ERROR] {stderr}")
+            print("  If you were just added to the 'docker' group, log out and back in,")
+            print("  or run:  newgrp docker  — then retry.")
         sys.exit(1)
 
     compose_result = subprocess.run(
@@ -2781,6 +2790,8 @@ def main() -> None:
 
     :raises SystemExit: If ``TYPE`` is missing or not a recognised profile.
     """
+    _ensure_docker_group()
+
     print("=== dark-developer installer ===\n")
 
     ensure_supported_python()

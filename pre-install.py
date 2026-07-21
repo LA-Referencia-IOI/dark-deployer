@@ -12,14 +12,29 @@ Usage:
 """
 
 import argparse
+import grp
 import os
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 
 # ─── Constants ────────────────────────────────────────────────────────────────
+
+def _ensure_docker_group() -> None:
+    """Re-exec with the docker group if the user is a member but the current
+    session doesn't have it active (common right after a fresh Docker install)."""
+    try:
+        docker_gid = grp.getgrnam("docker").gr_gid
+    except KeyError:
+        return
+    if docker_gid in os.getgroups():
+        return
+    cmd = " ".join(shlex.quote(a) for a in [sys.executable] + sys.argv)
+    print("[INFO] docker group not active in this session — re-launching automatically...")
+    os.execvp("sg", ["sg", "docker", "-c", cmd])
 
 MIN_DOCKER_VERSION  = (20, 10)
 COMPATIBLE_PYTHON   = (10, 11, 12)   # minor versions of Python 3.x supported by web3
@@ -394,6 +409,8 @@ def _ask_confirm(question: str, default: bool = True) -> bool:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    _ensure_docker_group()
+
     parser = argparse.ArgumentParser(
         description="Check and install dARK Deployer server prerequisites."
     )
@@ -490,19 +507,9 @@ def main() -> None:
             print("\n[INFO] Compose v2 not detected after Docker install — installing plugin...")
             _apt_get("docker-compose-plugin")
 
-    docker_was_installed = "install_docker" in actions
     print("\n" + "=" * 60)
-    if docker_was_installed:
-        print("  IMPORTANT: Docker was just installed.")
-        print("  Your current shell session does not have 'docker' group permissions.")
-        print()
-        print("  Run the following to activate without logging out:")
-        print("    newgrp docker")
-        print("  Then, inside that new shell:")
-        print("    python3 install.py")
-    else:
-        print("  Next step:")
-        print("    python3 install.py")
+    print("  Next step:")
+    print("    python3 install.py")
     print("=" * 60 + "\n")
 
 
