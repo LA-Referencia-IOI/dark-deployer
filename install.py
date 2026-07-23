@@ -1085,6 +1085,16 @@ def read_deployed_contract_addresses(ini_path: Path) -> tuple[str, str]:
     return dark_address, authority_address
 
 
+_DEPLOYED_CONTRACTS_INI_PATH = Path(
+    "components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini"
+)
+
+
+def find_deployed_contracts_ini() -> tuple[str, str]:
+    """Read deployed_contracts.ini from the canonical path inside components/."""
+    return read_deployed_contract_addresses(_DEPLOYED_CONTRACTS_INI_PATH)
+
+
 def resolve_contract_addresses(env: dict) -> tuple[str, str]:
     """Return (dark_address, authority_address).
 
@@ -1100,8 +1110,7 @@ def resolve_contract_addresses(env: dict) -> tuple[str, str]:
     if dark_addr and authority_addr:
         return dark_addr, authority_addr
 
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_from_ini, auth_from_ini = read_deployed_contract_addresses(ini_path)
+    dark_from_ini, auth_from_ini = find_deployed_contracts_ini()
     return dark_addr or dark_from_ini, authority_addr or auth_from_ini
 
 
@@ -2380,12 +2389,21 @@ def _wizard_apps_blockchain_info(prefix: str, env: dict) -> dict:
     blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
 
     if not dark_contract or not auth_contract:
-        ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-        dark_ini, auth_ini = read_deployed_contract_addresses(ini_path)
+        dark_ini, auth_ini = find_deployed_contracts_ini()
         if dark_ini or auth_ini:
             dark_contract = dark_contract or dark_ini
             auth_contract = auth_contract or auth_ini
-            print("  [INFO] Contract addresses loaded from local deployed_contracts.ini.")
+            print("  [INFO] Contract addresses loaded from deployed_contracts.ini.")
+        else:
+            _DEPLOYED_CONTRACTS_INI_PATH.parent.mkdir(parents=True, exist_ok=True)
+            print(
+                f"\n[ERROR] Contract addresses not found in .env and "
+                f"'deployed_contracts.ini' is missing.\n"
+                f"\n  Copy the file from the blockchain server to:\n"
+                f"    {_DEPLOYED_CONTRACTS_INI_PATH.resolve()}\n"
+                f"\n  Then run the installer again."
+            )
+            sys.exit(1)
 
     all_present = all([rpc_url, dark_contract, auth_contract, master_key])
 
