@@ -1153,6 +1153,9 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
+    _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
+    prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+
     dark_contract, authority_contract = resolve_contract_addresses(env)
 
     if not dark_contract or not authority_contract:
@@ -1297,10 +1300,9 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         ).strip(),
         "METADATA_STORAGE_TYPE": metadata_storage_type,
         "METADATA_STORAGE_PATH": metadata_storage_path,
-        "METADATA_STORE_API_URL": (
-            "http://store-api:8003" if metadata_storage_type == "store_api"
-            else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()
-        ),
+        "METADATA_STORE_API_URL": env.get(f"{prefix}_STORE_API_URL", "").strip()
+            or ("http://store-api:8003" if metadata_storage_type == "store_api"
+                else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()),
     }
 
     env_path = minter_path / ".env.integration"
@@ -1423,6 +1425,9 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
+    _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
+    prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+
     dark_contract, _ = resolve_contract_addresses(env)
 
     if not dark_contract:
@@ -1455,10 +1460,9 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
         "DARK_CONTRACT_ADDRESS": dark_contract or template_env.get("DARK_CONTRACT_ADDRESS", "").strip(),
         "METADATA_STORAGE_TYPE": metadata_storage_type,
         "METADATA_STORAGE_PATH": metadata_storage_path,
-        "METADATA_STORE_API_URL": (
-            "http://store-api:8003" if metadata_storage_type == "store_api"
-            else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()
-        ),
+        "METADATA_STORE_API_URL": env.get(f"{prefix}_STORE_API_URL", "").strip()
+            or ("http://store-api:8003" if metadata_storage_type == "store_api"
+                else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()),
         "METADATA_STORE_API_TIMEOUT_SECONDS": (
             template_env.get("METADATA_STORE_API_TIMEOUT_SECONDS", "10.0")
         ).strip(),
@@ -2417,39 +2421,59 @@ def _wizard_apps_blockchain_info(prefix: str, env: dict) -> dict:
 
 
 def _wizard_apps_ipfs_info(prefix: str, env: dict) -> dict:
-    """Collect or confirm IPFS connection details for apps-only install.
+    """Collect or confirm IPFS/storage connection details for apps-only install.
 
     Reads existing values from the loaded .env dict.  If dark-ipfs is
     installed locally it is detected automatically.  Only asks the user for
     what is still absent.
+
+    Also collects the external store-api URL used by minter and resolver to
+    upload/retrieve metadata.  When store-api is on the same host as the apps
+    its Docker service name (http://store-api:8003) works; when it is on a
+    separate storage server the external URL must be provided explicitly.
     """
     ipfs_host        = env.get(f"{prefix}_IPFS_HOST", "").strip()
     ipfs_api_url     = env.get(f"{prefix}_IPFS_API_URL", "").strip()
     ipfs_cluster_url = env.get(f"{prefix}_IPFS_CLUSTER_URL", "").strip()
+    store_api_url    = env.get(f"{prefix}_STORE_API_URL", "").strip()
 
-    if not ipfs_api_url and Path("components/blockchain/dark-ipfs").exists():
+    local_ipfs = Path("components/blockchain/dark-ipfs").exists()
+    local_store = Path("components/services/dark-store-api").exists()
+
+    if not ipfs_api_url and local_ipfs:
         ipfs_api_url     = "http://localhost:5001"
         ipfs_cluster_url = "http://localhost:9094"
         print("  [INFO] Local dark-ipfs installation detected — using localhost URLs.")
 
+    if not store_api_url and local_store:
+        store_api_url = "http://store-api:8003"
+        print("  [INFO] Local dark-store-api installation detected — using Docker service name.")
+
     if ipfs_api_url:
-        print(f"\n  IPFS configuration found:")
+        print(f"\n  IPFS / storage configuration found:")
         if ipfs_host:
-            print(f"    Host          : {ipfs_host}")
+            print(f"    Storage host  : {ipfs_host}")
         print(f"    IPFS API      : {ipfs_api_url}")
         print(f"    Cluster API   : {ipfs_cluster_url or '(not set)'}")
-        if _ask_confirm("Use this IPFS configuration?", default=True):
+        print(f"    Store API URL : {store_api_url or '(not set — will use Docker service name)'}")
+        if _ask_confirm("Use this storage configuration?", default=True):
             env[f"{prefix}_IPFS_API_URL"]     = ipfs_api_url
             if ipfs_cluster_url:
                 env[f"{prefix}_IPFS_CLUSTER_URL"] = ipfs_cluster_url
+            if store_api_url:
+                env[f"{prefix}_STORE_API_URL"] = store_api_url
             return env
 
-    print("\n  IPFS connection details (required for store-api):")
-    host = _ask_text("IPFS host (Node 1 IP or hostname)", default=ipfs_host, required=True)
+    print("\n  IPFS / storage connection details:")
+    host = _ask_text("Storage host (IP or hostname of the storage server)", default=ipfs_host, required=True)
     env[f"{prefix}_IPFS_HOST"]              = host
     env[f"{prefix}_IPFS_API_URL"]           = _ask_text("IPFS API URL",           default=f"http://{host}:5001")
     env[f"{prefix}_IPFS_CLUSTER_URL"]       = _ask_text("IPFS Cluster API URL",   default=f"http://{host}:9094")
     env[f"{prefix}_IPFS_CLUSTER_PROXY_URL"] = _ask_text("IPFS Cluster Proxy URL", default=f"http://{host}:9095")
+    env[f"{prefix}_STORE_API_URL"]          = _ask_text(
+        "Store API URL (used by minter and resolver)",
+        default=store_api_url or f"http://{host}:8003",
+    )
 
     return env
 
