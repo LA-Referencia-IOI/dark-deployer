@@ -2243,15 +2243,14 @@ def install_profile(prefix: str, env: dict) -> None:
             print(f"[INFO] IPFS tier is remote ({ipfs_host}) — skipping local install.")
         else:
             install_dark_ipfs(prefix=prefix, env=env)
-        # store-api is the IPFS gateway; install it with the storage tier
-        # when apps are not already being installed (which would include it too)
-        if not install_apps:
-            install_dark_store_api(prefix=prefix, env=env)
+        # dark-store-api belongs exclusively to the storage tier: it runs on the
+        # same server as dark-ipfs regardless of whether apps are also being installed.
+        install_dark_store_api(prefix=prefix, env=env)
     else:
         print("[INFO] Storage not selected — skipping.")
 
     if install_apps:
-        install_dark_store_api(prefix=prefix, env=env)
+        # store-api is not installed here: it lives on the storage server.
         install_core_resolver_api(prefix=prefix, env=env)
         install_single_component(name="MINTER", prefix=prefix, env=env)
         install_dashboard(prefix=prefix, env=env)
@@ -2484,6 +2483,12 @@ _BLOCKCHAIN_REPO_DEFAULTS: dict = {
     "DARK_EXPLORADOR": "https://github.com/LA-Referencia-IOI/dark-explorer.git",
 }
 
+# Each entry: label → (env-key suffix after prefix, default URL)
+_STORAGE_REPO_DEFAULTS: dict = {
+    "dark-ipfs":      ("_IPFS_REPOSITORY_URL",      "git@github.com:LA-Referencia-IOI/dark-ipfs.git"),
+    "dark-store-api": ("_STORE_API_REPOSITORY_URL",  "git@github.com:LA-Referencia-IOI/dark-store-api.git"),
+}
+
 
 def _wizard_blockchain_repos(prefix: str, env: dict) -> dict:
     """Ask for any blockchain repository URLs that are not yet configured."""
@@ -2497,6 +2502,21 @@ def _wizard_blockchain_repos(prefix: str, env: dict) -> dict:
     print("\n  Blockchain repository URLs (Enter to accept defaults):")
     for suffix, key, default in missing:
         label = suffix.lower().replace("_", "-")
+        env[key] = _ask_text(f"{label} repository URL", default=default)
+    return env
+
+
+def _wizard_storage_repos(prefix: str, env: dict) -> dict:
+    """Ask for any storage repository URLs (dark-ipfs, dark-store-api) not yet configured."""
+    missing = [
+        (label, f"{prefix}{suffix}", default)
+        for label, (suffix, default) in _STORAGE_REPO_DEFAULTS.items()
+        if not env.get(f"{prefix}{suffix}", "").strip()
+    ]
+    if not missing:
+        return env
+    print("\n  Storage repository URLs (Enter to accept defaults):")
+    for label, key, default in missing:
         env[key] = _ask_text(f"{label} repository URL", default=default)
     return env
 
@@ -2735,6 +2755,7 @@ def run_setup_wizard(env: dict) -> dict:
                 f"{prefix}_IPFS_CLUSTER_PROXY_URL",
             ):
                 env.pop(key, None)
+            env = _wizard_storage_repos(prefix=prefix, env=env)
 
     _print_wizard_summary(install_type=install_type, prefix=prefix, env=env)
 
