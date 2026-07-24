@@ -2488,16 +2488,6 @@ def _wizard_apps_blockchain_info(prefix: str, env: dict) -> dict:
             dark_contract = dark_contract or dark_ini
             auth_contract = auth_contract or auth_ini
             print("  [INFO] Contract addresses loaded from deployed_contracts.ini.")
-        else:
-            _DEPLOYED_CONTRACTS_INI_PATH.parent.mkdir(parents=True, exist_ok=True)
-            print(
-                f"\n[ERROR] Contract addresses not found in .env and "
-                f"'deployed_contracts.ini' is missing.\n"
-                f"\n  Copy the file from the blockchain server to:\n"
-                f"    {_DEPLOYED_CONTRACTS_INI_PATH.resolve()}\n"
-                f"\n  Then run the installer again."
-            )
-            sys.exit(1)
 
     all_present = all([rpc_url, dark_contract, auth_contract, master_key])
 
@@ -2854,6 +2844,8 @@ def run_setup_wizard(env: dict) -> dict:
             env = _wizard_blockchain_tier(prefix=prefix, env=env)
             env = _wizard_ipfs_tier(prefix=prefix, env=env)
         elif selected == "apps":
+            validate_root_env_integration()
+            _merge_root_env_integration_into_env(env=env, prefix=prefix)
             env = _wizard_apps_blockchain_info(prefix=prefix, env=env)
             env = _wizard_apps_ipfs_info(prefix=prefix, env=env)
         elif selected == "blockchain":
