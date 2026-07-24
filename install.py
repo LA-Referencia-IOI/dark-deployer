@@ -1125,9 +1125,16 @@ def _generate_root_env_integration_blockchain(env: dict) -> None:
 
 
 def _update_root_env_integration_storage(env: dict, prefix: str) -> None:
-    store_api_url = (
-        env.get(f"{prefix}_STORE_API_URL", "").strip() or "http://store-api:8003"
-    )
+    store_api_url = env.get(f"{prefix}_STORE_API_URL", "").strip()
+    if not store_api_url:
+        # Fallback: Docker service name — only correct when apps and storage share
+        # the same server (install_all). The wizard should have set STORE_API_URL
+        # to the external address for dedicated storage servers.
+        store_api_url = "http://store-api:8003"
+        print(
+            "[WARNING] STORE_API_URL not set — using Docker service name 'http://store-api:8003'.\n"
+            f"          Set {prefix}_STORE_API_URL in .env if apps run on a separate server."
+        )
     _write_root_env_integration({
         "METADATA_STORAGE_TYPE":  "store_api",
         "METADATA_STORE_API_URL": store_api_url,
@@ -2722,6 +2729,14 @@ def _wizard_ipfs_tier(prefix: str, env: dict) -> dict:
             f"{prefix}_IPFS_CLUSTER_PROXY_URL",
         ):
             env.pop(key, None)
+        # Ask for the external URL that the apps server will use to reach store-api.
+        # On a single-server install (install_all) this defaults to the Docker service
+        # name; on a dedicated storage server it must be the server's external address.
+        current = env.get(f"{prefix}_STORE_API_URL", "").strip()
+        env[f"{prefix}_STORE_API_URL"] = _ask_text(
+            "External store-api URL (used by the apps server to reach this server's store-api)",
+            default=current or "http://store-api:8003",
+        )
         return env
 
     host = _ask_text("Node 1 IP or hostname (primary IPFS node)", required=True)
