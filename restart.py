@@ -44,7 +44,7 @@ def main():
     components_to_restart = [
         "components/blockchain/dark-env",
         "components/blockchain/dark-explorador",
-        "components/blockchain/dark-ipfs",
+        "components/storage/dark-ipfs",
         "components/services/dark-core-admin-api",
         "components/services/dark-core-resolver-api",
         "components/services/dark-store-api",

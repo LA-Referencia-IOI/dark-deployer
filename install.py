@@ -1109,7 +1109,7 @@ def _write_root_env_integration(new_vars: dict) -> None:
         f.writelines(lines)
 
 
-def _generate_root_env_integration_blockchain(env: dict, prefix: str) -> None:
+def _generate_root_env_integration_blockchain(env: dict) -> None:
     dark_contract, authority_contract = resolve_contract_addresses(env)
     _write_root_env_integration({
         "DARK_RPC_URL":           env.get("RPC_URL", "http://localhost:8545").strip(),
@@ -1206,7 +1206,7 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     if not dark_contract or not authority_contract:
         print(
             "[WARNING] Could not read full contract addresses from "
-            f"'{ini_path}'. .env.integration may be incomplete."
+            f"'{_DEPLOYED_CONTRACTS_INI_PATH}'. .env.integration may be incomplete."
         )
 
     integration_env = {
@@ -2167,7 +2167,7 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = env.get(commands_key, "make up").strip() or "make up"
-    target = "components/blockchain/dark-ipfs"
+    target = "components/storage/dark-ipfs"
 
     if platform.machine() != "x86_64":
         print(
@@ -2318,7 +2318,7 @@ def install_profile(prefix: str, env: dict) -> None:
             print(f"[INFO] Blockchain tier is remote ({blockchain_host}) — skipping local install.")
         else:
             install_blockchain(prefix=prefix, env=env)
-            _generate_root_env_integration_blockchain(env=env, prefix=prefix)
+            _generate_root_env_integration_blockchain(env=env)
     else:
         print("[INFO] Blockchain not selected — skipping.")
 
@@ -2541,7 +2541,7 @@ def _wizard_apps_ipfs_info(prefix: str, env: dict) -> dict:
     ipfs_cluster_url = env.get(f"{prefix}_IPFS_CLUSTER_URL", "").strip()
     store_api_url    = env.get(f"{prefix}_STORE_API_URL", "").strip()
 
-    local_ipfs = Path("components/blockchain/dark-ipfs").exists()
+    local_ipfs = Path("components/storage/dark-ipfs").exists()
     local_store = Path("components/services/dark-store-api").exists()
 
     if not ipfs_api_url and local_ipfs:

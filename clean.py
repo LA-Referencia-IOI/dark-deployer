@@ -21,7 +21,7 @@ def clean_docker_containers():
         "components/services/dark-core-resolver-api",
         "components/services/dark-store-api",
         "components/services/dark-core-minter-api",
-        "components/blockchain/dark-ipfs",
+        "components/storage/dark-ipfs",
         "components/blockchain/dark-explorador",
         "components/blockchain/dark-env"
     ]
