@@ -1274,6 +1274,25 @@ def _derive_host_from_url(url: str) -> str:
     return urllib.parse.urlparse(url).hostname or url
 
 
+#: dark-env's docker-compose service name for the RPC node, reachable by other
+#: containers on the shared 'dark-net' network — NOT the same as the host-facing
+#: RPC_URL (usually 'localhost'), which is unreachable from inside a container.
+_LOCAL_BLOCKCHAIN_DOCKER_RPC_URL = "http://rpc01:8545"
+
+
+def _docker_rpc_url(env: dict) -> str:
+    """Return the RPC URL that Docker services on 'dark-net' should use to reach the chain.
+
+    When the blockchain tier is installed locally as part of this same run
+    (``install_profile`` sets ``_BLOCKCHAIN_CO_LOCATED``), its RPC node lives in
+    the same Docker network under a fixed service name. Otherwise the blockchain
+    is remote/decoupled, so the operator-provided RPC_URL is used as-is.
+    """
+    if env.get("_BLOCKCHAIN_CO_LOCATED") == "true":
+        return _LOCAL_BLOCKCHAIN_DOCKER_RPC_URL
+    return env.get("RPC_URL", "").strip()
+
+
 def resolve_contract_addresses(env: dict) -> tuple[str, str]:
     """Return (dark_address, authority_address).
 
@@ -1456,10 +1475,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "MINTER_API_WORKERS",
             template_env.get("MINTER_API_WORKERS", "2"),
         ).strip(),
-        "DARK_RPC_URL": env.get(
-            "RPC_URL",
-            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
-        ).strip(),
+        "DARK_RPC_URL": _docker_rpc_url(env) or template_env.get("DARK_RPC_URL", "http://localhost:8545").strip(),
         "DARK_RPC_HEALTH_TIMEOUT_SECONDS": env.get(
             "DARK_RPC_HEALTH_TIMEOUT_SECONDS",
             template_env.get("DARK_RPC_HEALTH_TIMEOUT_SECONDS", "2.0"),
@@ -1575,10 +1591,7 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
 
     integration_env = {
         **template_env,
-        "DARK_RPC_URL": env.get(
-            "RPC_URL",
-            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
-        ).strip(),
+        "DARK_RPC_URL": _docker_rpc_url(env) or template_env.get("DARK_RPC_URL", "http://localhost:8545").strip(),
         "DARK_CHAIN_ID": env.get(
             "CHAIN_ID",
             template_env.get("DARK_CHAIN_ID", "1337"),
@@ -1637,10 +1650,7 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
 
     integration_env = {
         **template_env,
-        "DARK_RPC_URL": env.get(
-            "RPC_URL",
-            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
-        ).strip(),
+        "DARK_RPC_URL": _docker_rpc_url(env) or template_env.get("DARK_RPC_URL", "http://localhost:8545").strip(),
         "DARK_CHAIN_ID": env.get(
             "CHAIN_ID",
             template_env.get("DARK_CHAIN_ID", "1337"),
@@ -2416,11 +2426,14 @@ def install_profile(prefix: str, env: dict) -> None:
         blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
         if blockchain_host:
             print(f"[INFO] Blockchain tier is remote ({blockchain_host}) — skipping local install.")
+            env["_BLOCKCHAIN_CO_LOCATED"] = "false"
         else:
             install_blockchain(prefix=prefix, env=env)
             _generate_root_env_integration_blockchain(env=env)
+            env["_BLOCKCHAIN_CO_LOCATED"] = "true"
     else:
         print("[INFO] Blockchain not selected — skipping.")
+        env["_BLOCKCHAIN_CO_LOCATED"] = "false"
 
     # Pure apps mode: root .env.integration must be provided by the operator
     # (generated on blockchain + storage servers and copied here).
