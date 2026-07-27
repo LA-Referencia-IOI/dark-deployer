@@ -199,6 +199,58 @@ Each profile reads component URLs and settings from its own set of prefixed vari
 
 ---
 
+## Decoupled Setup (Sandbox / Production)
+
+`sandbox` and `production` profiles support installing the **blockchain**, **storage**, and **apps** tiers on separate servers. The setup wizard (`python3 install.py`) only ever asks you to **pick from a menu** — profile, which components go on this server, whether a tier is local or remote. It never asks you to type a URL, address, or key.
+
+**All connection information must already be in place before you run the wizard.** If a required field is missing for the selection you make, the installer prints exactly which fields are empty and where to put them, then exits — it does not fall back to asking interactively.
+
+### The `.env.integration` handoff file
+
+This is how information moves between servers without anyone typing it twice:
+
+1. On the **blockchain** server, after a local install, `install.py` writes a root `.env.integration` file with the blockchain connection vars.
+2. On the **storage** server, running the installer with that same file present appends the storage vars to it.
+3. Copy the resulting `.env.integration` to the **apps** server, in the `dark-deployer` root directory, before running its installer.
+
+| Key in `.env.integration` | Written by | Read by |
+| --- | --- | --- |
+| `DARK_RPC_URL` | blockchain tier | apps tier (`RPC_URL`), remote-blockchain selection |
+| `DARK_CHAIN_ID` | blockchain tier | apps tier (`CHAIN_ID`) |
+| `DARK_CONTRACT_ADDRESS` | blockchain tier | apps tier (`{PREFIX}_DARK_CONTRACT_ADDRESS`) |
+| `DARK_AUTHORITY_ADDRESS` | blockchain tier | apps tier (`{PREFIX}_AUTHORITY_CONTRACT_ADDRESS`) |
+| `DARK_ADMIN_PRIVATE_KEY` | blockchain tier | apps tier (`MASTER_PRIVATE_KEY`) |
+| `METADATA_STORAGE_TYPE` | storage tier | apps tier |
+| `METADATA_STORE_API_URL` | storage tier | apps tier (`{PREFIX}_STORE_API_URL`) |
+
+`.env.integration` contains a private key — it is intentionally excluded from version control (`.gitignore`). Transfer it out-of-band (`scp`, a secrets manager, etc.), never through git.
+
+### What each selection requires
+
+| Selection | Required beforehand | Where to fill it |
+| --- | --- | --- |
+| Components = **apps** | `RPC_URL`, `{PREFIX}_DARK_CONTRACT_ADDRESS`, `{PREFIX}_AUTHORITY_CONTRACT_ADDRESS`, `MASTER_PRIVATE_KEY`, `{PREFIX}_STORE_API_URL` | Copy `.env.integration` from the blockchain/storage servers into this directory (recommended), or set the `{PREFIX}_*` vars directly in `.env` |
+| Blockchain tier = **remote** (within an "all" install) | Same blockchain fields as above | `.env.integration` or `.env` |
+| Blockchain tier = **local** | Nothing — repo URLs default to the public `LA-Referencia-IOI` repos if left blank in `.env` | — |
+| IPFS tier = **remote** (dark-store-api here, IPFS elsewhere) | `{PREFIX}_IPFS_API_URL`, `{PREFIX}_IPFS_CLUSTER_URL` | `.env` |
+| IPFS tier = **local** | Nothing — `{PREFIX}_STORE_API_URL` defaults to the Docker service name `http://store-api:8003` (correct when apps run on the same server) | Only needed if apps run on a *different* server; set `{PREFIX}_STORE_API_URL` in `.env` to this server's external address |
+
+If you run the wizard and a required field is missing, you'll see something like:
+
+```
+[ERROR] Missing required configuration for installing "apps".
+
+  The following fields are not set. Fill them in the root '.env.integration'
+  (copied from the blockchain/storage servers) or directly in '.env', then re-run:
+
+    - RPC_URL                                Blockchain RPC URL
+      .env.integration key: DARK_RPC_URL
+    - SANDBOX_STORE_API_URL                   Store API URL (used by minter/resolver to reach storage)
+      .env.integration key: METADATA_STORE_API_URL
+```
+
+---
+
 ## ARK Lifecycle (Summary)
 
 **Via smart contracts directly (SDK / `dark-core-lib`):**

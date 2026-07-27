@@ -56,6 +56,7 @@ from typing import Optional
 import json
 import http.client
 import urllib.error
+import urllib.parse
 import urllib.request
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1179,6 +1180,98 @@ def _merge_root_env_integration_into_env(env: dict, prefix: str) -> None:
     env.setdefault(f"{prefix}_DARK_CONTRACT_ADDRESS",      root.get("DARK_CONTRACT_ADDRESS", ""))
     env.setdefault(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", root.get("DARK_AUTHORITY_ADDRESS", ""))
     env.setdefault(f"{prefix}_STORE_API_URL",              root.get("METADATA_STORE_API_URL", ""))
+
+
+#: (env_key_template, human description, corresponding key in root .env.integration or None)
+_BLOCKCHAIN_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
+    ("RPC_URL",                          "Blockchain RPC URL",           "DARK_RPC_URL"),
+    ("{prefix}_DARK_CONTRACT_ADDRESS",      "dARK contract address",        "DARK_CONTRACT_ADDRESS"),
+    ("{prefix}_AUTHORITY_CONTRACT_ADDRESS", "Authority contract address",   "DARK_AUTHORITY_ADDRESS"),
+    ("MASTER_PRIVATE_KEY",                "Admin/deployer private key",    "DARK_ADMIN_PRIVATE_KEY"),
+]
+
+_APPS_STORAGE_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
+    ("{prefix}_STORE_API_URL", "Store API URL (used by minter/resolver to reach storage)", "METADATA_STORE_API_URL"),
+]
+
+_REMOTE_IPFS_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
+    ("{prefix}_IPFS_API_URL",     "IPFS HTTP API URL",   None),
+    ("{prefix}_IPFS_CLUSTER_URL", "IPFS Cluster API URL", None),
+]
+
+
+def _missing_required_fields(
+    prefix: str, env: dict, fields: list[tuple[str, str, Optional[str]]]
+) -> list[tuple[str, str, Optional[str]]]:
+    """Return the subset of ``fields`` whose env key is blank in ``env``.
+
+    Each returned tuple has its ``{prefix}`` placeholder already resolved.
+    """
+    missing = []
+    for key_template, description, integration_key in fields:
+        key = key_template.format(prefix=prefix)
+        if not env.get(key, "").strip():
+            missing.append((key, description, integration_key))
+    return missing
+
+
+def _abort_missing_fields(missing: list[tuple[str, str, Optional[str]]], context: str) -> None:
+    """Print an itemized list of missing configuration fields and exit(1)."""
+    if not missing:
+        return
+    print(f"\n[ERROR] Missing required configuration for {context}.")
+    print(
+        "\n  The following fields are not set. Fill them in the root '.env.integration'"
+        "\n  (copied from the blockchain/storage servers) or directly in '.env', then re-run:\n"
+    )
+    for key, description, integration_key in missing:
+        print(f"    - {key:<40} {description}")
+        if integration_key:
+            print(f"      .env.integration key: {integration_key}")
+    print("\n  See README.md → \"Decoupled Setup\" for the full field reference.")
+    sys.exit(1)
+
+
+def _apply_default_blockchain_repo_urls(prefix: str, env: dict) -> None:
+    """Fill any unset blockchain repository URL fields with their public defaults, silently."""
+    applied = []
+    for suffix, default_url in _BLOCKCHAIN_REPO_DEFAULTS.items():
+        key = f"{prefix}_BLOCKCHAIN_{suffix}_REPOSITORY_URL"
+        if not env.get(key, "").strip():
+            env[key] = default_url
+            applied.append((key, default_url))
+    if applied:
+        print("\n  [INFO] Using default blockchain repository URLs (not set in .env):")
+        for key, url in applied:
+            print(f"    - {key} = {url}")
+
+
+def _apply_default_storage_repo_urls(prefix: str, env: dict) -> None:
+    """Fill any unset storage repository URL fields with their public defaults, silently."""
+    applied = []
+    for label, (key_suffix, default_url) in _STORAGE_REPO_DEFAULTS.items():
+        key = f"{prefix}{key_suffix}"
+        if not env.get(key, "").strip():
+            env[key] = default_url
+            applied.append((key, default_url))
+    if applied:
+        print("\n  [INFO] Using default storage repository URLs (not set in .env):")
+        for key, url in applied:
+            print(f"    - {key} = {url}")
+
+
+def _default_store_api_url(env: dict, prefix: str) -> str:
+    """Return the configured store-api URL, or the same-host Docker service name default."""
+    current = env.get(f"{prefix}_STORE_API_URL", "").strip()
+    if current:
+        return current
+    print("  [INFO] STORE_API_URL not set — using Docker service name 'http://store-api:8003'.")
+    return "http://store-api:8003"
+
+
+def _derive_host_from_url(url: str) -> str:
+    """Extract the hostname component from a URL for display/flag purposes."""
+    return urllib.parse.urlparse(url).hostname or url
 
 
 def resolve_contract_addresses(env: dict) -> tuple[str, str]:
@@ -2377,18 +2470,6 @@ def _ask_choice(question: str, options: list[str], default: int = 1) -> int:
         print(f"    Invalid option. Enter a number between 1 and {len(options)}.")
 
 
-def _ask_text(question: str, default: str = "", required: bool = False) -> str:
-    """Ask for free-form text input, accepting Enter to use the default."""
-    hint = f" [{default}]" if default else ""
-    while True:
-        raw = input(f"  {question}{hint}: ").strip()
-        value = raw if raw else default
-        if required and not value:
-            print("    This field is required.")
-            continue
-        return value
-
-
 def _ask_confirm(question: str, default: bool = True) -> bool:
     """Ask a yes/no question and return True for yes."""
     hint = "[Y/n]" if default else "[y/N]"
@@ -2396,187 +2477,6 @@ def _ask_confirm(question: str, default: bool = True) -> bool:
     if raw == "":
         return default
     return raw in ("y", "yes")
-
-
-def _wizard_blockchain_remote_standard(prefix: str, host: str, env: dict) -> dict:
-    """Standard remote blockchain: derive URLs from the host IP using default ports."""
-    env[f"{prefix}_BLOCKCHAIN_HOST"] = host
-    env["RPC_URL"] = f"http://{host}:8545"
-    print(f"  [INFO] RPC URL set to http://{host}:8545 (default port).")
-    print(  "  [INFO] Contract addresses will be read from .env.integration if available.")
-    return env
-
-
-def _wizard_blockchain_remote_advanced(prefix: str, host: str, env: dict) -> dict:
-    """Advanced remote blockchain: collect all connection and contract details."""
-    env[f"{prefix}_BLOCKCHAIN_HOST"] = host
-
-    env["RPC_URL"] = _ask_text(
-        "RPC URL (Node 1 endpoint or load balancer)",
-        default=f"http://{host}:8545",
-    )
-    env["CHAIN_ID"] = _ask_text(
-        "Chain ID",
-        default=env.get("CHAIN_ID", "2025"),
-    )
-
-    extra = _ask_text(
-        "Additional validator node IPs (comma-separated, min 2 more for fault tolerance)",
-        default=env.get(f"{prefix}_BLOCKCHAIN_EXTRA_NODES", ""),
-    )
-    if extra:
-        env[f"{prefix}_BLOCKCHAIN_EXTRA_NODES"] = extra
-
-    enodes = _ask_text(
-        "Enode URLs for peer discovery (comma-separated, optional)",
-        default=env.get(f"{prefix}_BLOCKCHAIN_ENODES", ""),
-    )
-    if enodes:
-        env[f"{prefix}_BLOCKCHAIN_ENODES"] = enodes
-
-    print("\n  -- Contract addresses (from the blockchain server after dark-dapp deployment) --")
-    dark_addr = _ask_text(
-        "dARK contract address (DARK_CONTRACT_ADDRESS)",
-        default=env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", ""),
-        required=True,
-    )
-    auth_addr = _ask_text(
-        "Authority contract address (AUTHORITY_CONTRACT_ADDRESS)",
-        default=env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", ""),
-        required=True,
-    )
-    env[f"{prefix}_DARK_CONTRACT_ADDRESS"]      = dark_addr
-    env[f"{prefix}_AUTHORITY_CONTRACT_ADDRESS"] = auth_addr
-
-    print("\n  -- Master wallet (exported from dark-env on the blockchain server) --")
-    env["MASTER_WALLET_ADDRESS"] = _ask_text(
-        "Master wallet address",
-        default=env.get("MASTER_WALLET_ADDRESS", ""),
-        required=True,
-    )
-    env["MASTER_PRIVATE_KEY"] = _ask_text(
-        "Master private key",
-        default=env.get("MASTER_PRIVATE_KEY", ""),
-        required=True,
-    )
-    env["MASTER_PUBLIC_KEY"] = _ask_text(
-        "Master public key",
-        default=env.get("MASTER_PUBLIC_KEY", ""),
-    )
-    return env
-
-
-def _wizard_apps_blockchain_info(prefix: str, env: dict) -> dict:
-    """Collect or confirm blockchain connection details for apps-only install.
-
-    Reads existing values from the loaded .env dict and falls back to
-    deployed_contracts.ini when contract addresses are missing.  Only asks
-    the user for what is still absent.
-    """
-    rpc_url        = env.get("RPC_URL", "").strip()
-    chain_id       = env.get("CHAIN_ID", "2025").strip()
-    dark_contract  = env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", "").strip()
-    auth_contract  = env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", "").strip()
-    master_key     = env.get("MASTER_PRIVATE_KEY", "").strip()
-    master_wallet  = env.get("MASTER_WALLET_ADDRESS", "").strip()
-    master_pub     = env.get("MASTER_PUBLIC_KEY", "").strip()
-    blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
-
-    if not dark_contract or not auth_contract:
-        dark_ini, auth_ini = find_deployed_contracts_ini()
-        if dark_ini or auth_ini:
-            dark_contract = dark_contract or dark_ini
-            auth_contract = auth_contract or auth_ini
-            print("  [INFO] Contract addresses loaded from deployed_contracts.ini.")
-
-    all_present = all([rpc_url, dark_contract, auth_contract, master_key])
-
-    if all_present and blockchain_host:
-        print(f"\n  Blockchain configuration found in .env:")
-        print(f"    Host          : {blockchain_host}")
-        print(f"    RPC URL       : {rpc_url}")
-        print(f"    dARK contract : {dark_contract}")
-        print(f"    Auth contract : {auth_contract}")
-        print(f"    Master wallet : {master_wallet or '(not set)'}")
-        if _ask_confirm("Use this blockchain configuration?", default=True):
-            env[f"{prefix}_DARK_CONTRACT_ADDRESS"]      = dark_contract
-            env[f"{prefix}_AUTHORITY_CONTRACT_ADDRESS"] = auth_contract
-            return env
-
-    print("\n  Blockchain connection details (required for apps install):")
-    host = _ask_text("Blockchain host (Node 1 IP or hostname)", default=blockchain_host, required=True)
-    env[f"{prefix}_BLOCKCHAIN_HOST"] = host
-    env["RPC_URL"]   = _ask_text("RPC URL",  default=rpc_url  or f"http://{host}:8545")
-    env["CHAIN_ID"]  = _ask_text("Chain ID", default=chain_id)
-
-    print("\n  Contract addresses (from deployed_contracts.ini on the blockchain server):")
-    env[f"{prefix}_DARK_CONTRACT_ADDRESS"]      = _ask_text("dARK contract address",      default=dark_contract, required=True)
-    env[f"{prefix}_AUTHORITY_CONTRACT_ADDRESS"] = _ask_text("Authority contract address", default=auth_contract,  required=True)
-
-    print("\n  Master wallet (from dark-env on the blockchain server):")
-    env["MASTER_PRIVATE_KEY"]    = _ask_text("Master private key",        default=master_key,    required=True)
-    env["MASTER_WALLET_ADDRESS"] = _ask_text("Master wallet address",     default=master_wallet)
-    env["MASTER_PUBLIC_KEY"]     = _ask_text("Master public key",         default=master_pub)
-
-    return env
-
-
-def _wizard_apps_ipfs_info(prefix: str, env: dict) -> dict:
-    """Collect or confirm IPFS/storage connection details for apps-only install.
-
-    Reads existing values from the loaded .env dict.  If dark-ipfs is
-    installed locally it is detected automatically.  Only asks the user for
-    what is still absent.
-
-    Also collects the external store-api URL used by minter and resolver to
-    upload/retrieve metadata.  When store-api is on the same host as the apps
-    its Docker service name (http://store-api:8003) works; when it is on a
-    separate storage server the external URL must be provided explicitly.
-    """
-    ipfs_host        = env.get(f"{prefix}_IPFS_HOST", "").strip()
-    ipfs_api_url     = env.get(f"{prefix}_IPFS_API_URL", "").strip()
-    ipfs_cluster_url = env.get(f"{prefix}_IPFS_CLUSTER_URL", "").strip()
-    store_api_url    = env.get(f"{prefix}_STORE_API_URL", "").strip()
-
-    local_ipfs = Path("components/storage/dark-ipfs").exists()
-    local_store = Path("components/services/dark-store-api").exists()
-
-    if not ipfs_api_url and local_ipfs:
-        ipfs_api_url     = "http://localhost:5001"
-        ipfs_cluster_url = "http://localhost:9094"
-        print("  [INFO] Local dark-ipfs installation detected — using localhost URLs.")
-
-    if not store_api_url and local_store:
-        store_api_url = "http://store-api:8003"
-        print("  [INFO] Local dark-store-api installation detected — using Docker service name.")
-
-    if ipfs_api_url:
-        print(f"\n  IPFS / storage configuration found:")
-        if ipfs_host:
-            print(f"    Storage host  : {ipfs_host}")
-        print(f"    IPFS API      : {ipfs_api_url}")
-        print(f"    Cluster API   : {ipfs_cluster_url or '(not set)'}")
-        print(f"    Store API URL : {store_api_url or '(not set — will use Docker service name)'}")
-        if _ask_confirm("Use this storage configuration?", default=True):
-            env[f"{prefix}_IPFS_API_URL"]     = ipfs_api_url
-            if ipfs_cluster_url:
-                env[f"{prefix}_IPFS_CLUSTER_URL"] = ipfs_cluster_url
-            if store_api_url:
-                env[f"{prefix}_STORE_API_URL"] = store_api_url
-            return env
-
-    print("\n  IPFS / storage connection details:")
-    host = _ask_text("Storage host (IP or hostname of the storage server)", default=ipfs_host, required=True)
-    env[f"{prefix}_IPFS_HOST"]              = host
-    env[f"{prefix}_IPFS_API_URL"]           = _ask_text("IPFS API URL",           default=f"http://{host}:5001")
-    env[f"{prefix}_IPFS_CLUSTER_URL"]       = _ask_text("IPFS Cluster API URL",   default=f"http://{host}:9094")
-    env[f"{prefix}_IPFS_CLUSTER_PROXY_URL"] = _ask_text("IPFS Cluster Proxy URL", default=f"http://{host}:9095")
-    env[f"{prefix}_STORE_API_URL"]          = _ask_text(
-        "Store API URL (used by minter and resolver)",
-        default=store_api_url or f"http://{host}:8003",
-    )
-
-    return env
 
 
 _BLOCKCHAIN_REPO_DEFAULTS: dict = {
@@ -2592,39 +2492,13 @@ _STORAGE_REPO_DEFAULTS: dict = {
 }
 
 
-def _wizard_blockchain_repos(prefix: str, env: dict) -> dict:
-    """Ask for any blockchain repository URLs that are not yet configured."""
-    missing = [
-        (suffix, f"{prefix}_BLOCKCHAIN_{suffix}_REPOSITORY_URL", default)
-        for suffix, default in _BLOCKCHAIN_REPO_DEFAULTS.items()
-        if not env.get(f"{prefix}_BLOCKCHAIN_{suffix}_REPOSITORY_URL", "").strip()
-    ]
-    if not missing:
-        return env
-    print("\n  Blockchain repository URLs (Enter to accept defaults):")
-    for suffix, key, default in missing:
-        label = suffix.lower().replace("_", "-")
-        env[key] = _ask_text(f"{label} repository URL", default=default)
-    return env
-
-
-def _wizard_storage_repos(prefix: str, env: dict) -> dict:
-    """Ask for any storage repository URLs (dark-ipfs, dark-store-api) not yet configured."""
-    missing = [
-        (label, f"{prefix}{suffix}", default)
-        for label, (suffix, default) in _STORAGE_REPO_DEFAULTS.items()
-        if not env.get(f"{prefix}{suffix}", "").strip()
-    ]
-    if not missing:
-        return env
-    print("\n  Storage repository URLs (Enter to accept defaults):")
-    for label, key, default in missing:
-        env[key] = _ask_text(f"{label} repository URL", default=default)
-    return env
-
-
 def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
-    """Collect blockchain tier topology and connection details interactively."""
+    """Collect blockchain tier topology — selection only, no free-text entry.
+
+    "Remote" requires the connection info to already be present in ``env``
+    (merged from the root .env.integration or set directly in .env); if
+    anything is missing, the wizard lists exactly what and exits.
+    """
     location = _ask_choice(
         "Where will the BLOCKCHAIN tier be installed?",
         [
@@ -2641,68 +2515,23 @@ def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
             f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
         ):
             env.pop(key, None)
-        return _wizard_blockchain_repos(prefix=prefix, env=env)
+        _apply_default_blockchain_repo_urls(prefix=prefix, env=env)
+        return env
 
-    host = _ask_text("Node 1 IP or hostname (bootnode + RPC entry point)", required=True)
-
-    mode = _ask_choice(
-        "Configuration mode for remote blockchain:",
-        [
-            "Standard  — use defaults from .env.integration (ports 8545)",
-            "Advanced  — enter all details manually (RPC, enodes, contracts, wallet)",
-        ],
-    )
-    if mode == 1:
-        return _wizard_blockchain_remote_standard(prefix=prefix, host=host, env=env)
-    return _wizard_blockchain_remote_advanced(prefix=prefix, host=host, env=env)
-
-
-def _wizard_ipfs_remote_standard(prefix: str, host: str, env: dict) -> dict:
-    """Standard remote IPFS: derive URLs from the host IP using default ports."""
-    env[f"{prefix}_IPFS_HOST"]        = host
-    env[f"{prefix}_IPFS_API_URL"]     = f"http://{host}:5001"
-    env[f"{prefix}_IPFS_CLUSTER_URL"] = f"http://{host}:9094"
-    print(f"  [INFO] IPFS API set to http://{host}:5001 (default port).")
-    print(f"  [INFO] IPFS Cluster set to http://{host}:9094 (default port).")
-    return env
-
-
-def _wizard_ipfs_remote_advanced(prefix: str, host: str, env: dict) -> dict:
-    """Advanced remote IPFS: collect all API and cluster connection details."""
-    env[f"{prefix}_IPFS_HOST"] = host
-
-    extra = _ask_text(
-        "Additional IPFS node IPs joining the cluster (comma-separated, optional)",
-        default=env.get(f"{prefix}_IPFS_EXTRA_NODES", ""),
-    )
-    if extra:
-        env[f"{prefix}_IPFS_EXTRA_NODES"] = extra
-
-    env[f"{prefix}_IPFS_API_URL"] = _ask_text(
-        "IPFS API URL",
-        default=f"http://{host}:5001",
-    )
-    env[f"{prefix}_IPFS_CLUSTER_URL"] = _ask_text(
-        "IPFS Cluster API URL",
-        default=f"http://{host}:9094",
-    )
-    env[f"{prefix}_IPFS_CLUSTER_PROXY_URL"] = _ask_text(
-        "IPFS Cluster Proxy URL",
-        default=f"http://{host}:9095",
-    )
-    env["IPFS_ADD_MODE"] = _ask_text(
-        "IPFS add mode (cluster_proxy / direct)",
-        default=env.get("IPFS_ADD_MODE", "cluster_proxy"),
-    )
-    env["IPFS_CLUSTER_MIN_PEERS"] = _ask_text(
-        "Minimum IPFS Cluster peers required",
-        default=env.get("IPFS_CLUSTER_MIN_PEERS", "1"),
-    )
+    missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
+    _abort_missing_fields(missing, context="a remote BLOCKCHAIN tier")
+    env[f"{prefix}_BLOCKCHAIN_HOST"] = _derive_host_from_url(env["RPC_URL"])
     return env
 
 
 def _wizard_ipfs_tier(prefix: str, env: dict) -> dict:
-    """Collect IPFS tier topology and connection details interactively."""
+    """Collect IPFS tier topology — selection only, no free-text entry.
+
+    "This server" only needs the store-api URL that the apps tier will use
+    to reach it, which defaults to the Docker service name when unset.
+    "Remote" means dark-store-api runs here but talks to an external IPFS
+    daemon/cluster, so IPFS_API_URL/IPFS_CLUSTER_URL must already be set.
+    """
     location = _ask_choice(
         "Where will the IPFS tier be installed?",
         [
@@ -2719,28 +2548,13 @@ def _wizard_ipfs_tier(prefix: str, env: dict) -> dict:
             f"{prefix}_IPFS_CLUSTER_PROXY_URL",
         ):
             env.pop(key, None)
-        # Ask for the external URL that the apps server will use to reach store-api.
-        # On a single-server install (install_all) this defaults to the Docker service
-        # name; on a dedicated storage server it must be the server's external address.
-        current = env.get(f"{prefix}_STORE_API_URL", "").strip()
-        env[f"{prefix}_STORE_API_URL"] = _ask_text(
-            "External store-api URL (used by the apps server to reach this server's store-api)",
-            default=current or "http://store-api:8003",
-        )
+        env[f"{prefix}_STORE_API_URL"] = _default_store_api_url(env, prefix)
         return env
 
-    host = _ask_text("Node 1 IP or hostname (primary IPFS node)", required=True)
-
-    mode = _ask_choice(
-        "Configuration mode for remote IPFS:",
-        [
-            "Standard  — use defaults from .env.integration (ports 5001 / 9094)",
-            "Advanced  — enter all details manually (API, cluster, proxy, add mode)",
-        ],
-    )
-    if mode == 1:
-        return _wizard_ipfs_remote_standard(prefix=prefix, host=host, env=env)
-    return _wizard_ipfs_remote_advanced(prefix=prefix, host=host, env=env)
+    missing = _missing_required_fields(prefix, env, _REMOTE_IPFS_REQUIRED_FIELDS)
+    _abort_missing_fields(missing, context="a remote IPFS tier")
+    env[f"{prefix}_IPFS_HOST"] = _derive_host_from_url(env[f"{prefix}_IPFS_API_URL"])
+    return env
 
 
 def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
@@ -2824,6 +2638,10 @@ def run_setup_wizard(env: dict) -> dict:
     if install_type in ("sandbox", "production"):
         print(f"\n  Configuring infrastructure for {install_type.upper()} profile:")
 
+        # Always pull in the cross-tier handoff artifact (if present) before any
+        # validation below — the wizard never asks for information it can read here.
+        _merge_root_env_integration_into_env(env=env, prefix=prefix)
+
         component_choice = _ask_choice(
             "Which components will be installed on this server?",
             [
@@ -2844,10 +2662,12 @@ def run_setup_wizard(env: dict) -> dict:
             env = _wizard_blockchain_tier(prefix=prefix, env=env)
             env = _wizard_ipfs_tier(prefix=prefix, env=env)
         elif selected == "apps":
+            # Pure apps mode: blockchain and storage connection info must already
+            # be present (root .env.integration copied here, or set in .env).
             validate_root_env_integration()
-            _merge_root_env_integration_into_env(env=env, prefix=prefix)
-            env = _wizard_apps_blockchain_info(prefix=prefix, env=env)
-            env = _wizard_apps_ipfs_info(prefix=prefix, env=env)
+            missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
+            missing += _missing_required_fields(prefix, env, _APPS_STORAGE_REQUIRED_FIELDS)
+            _abort_missing_fields(missing, context='installing "apps"')
         elif selected == "blockchain":
             for key in (
                 f"{prefix}_BLOCKCHAIN_HOST",
@@ -2857,7 +2677,7 @@ def run_setup_wizard(env: dict) -> dict:
                 f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
             ):
                 env.pop(key, None)
-            env = _wizard_blockchain_repos(prefix=prefix, env=env)
+            _apply_default_blockchain_repo_urls(prefix=prefix, env=env)
         elif selected == "storage":
             for key in (
                 f"{prefix}_IPFS_HOST",
@@ -2867,7 +2687,7 @@ def run_setup_wizard(env: dict) -> dict:
                 f"{prefix}_IPFS_CLUSTER_PROXY_URL",
             ):
                 env.pop(key, None)
-            env = _wizard_storage_repos(prefix=prefix, env=env)
+            _apply_default_storage_repo_urls(prefix=prefix, env=env)
 
     _print_wizard_summary(install_type=install_type, prefix=prefix, env=env)
 
