@@ -1098,6 +1098,42 @@ def find_deployed_contracts_ini() -> tuple[str, str]:
     return read_deployed_contract_addresses(_DEPLOYED_CONTRACTS_INI_PATH)
 
 
+def read_deployed_contract_abis(ini_path: Path) -> tuple[str, str]:
+    """Read dARK and Authority ABI JSON from deployed_contracts.ini, compacted to one line.
+
+    Returns empty strings when the file is absent or the abi field cannot be parsed.
+    """
+    dark_abi_json = ""
+    authority_abi_json = ""
+
+    if not ini_path.exists():
+        return dark_abi_json, authority_abi_json
+
+    deployed = configparser.ConfigParser()
+    deployed.read(ini_path)
+
+    section_map = {section.lower(): section for section in deployed.sections()}
+
+    def _read_abi(section_name: str) -> str:
+        raw = deployed.get(section_name, "abi", fallback="").strip()
+        if not raw:
+            return ""
+        try:
+            return json.dumps(json.loads(raw), separators=(",", ":"))
+        except (json.JSONDecodeError, ValueError):
+            return ""
+
+    dark_section = section_map.get("dark")
+    if dark_section:
+        dark_abi_json = _read_abi(dark_section)
+
+    authority_section = section_map.get("authority")
+    if authority_section:
+        authority_abi_json = _read_abi(authority_section)
+
+    return dark_abi_json, authority_abi_json
+
+
 # ─── Root .env.integration helpers ───────────────────────────────────────────
 
 def _write_root_env_integration(new_vars: dict) -> None:
@@ -1112,15 +1148,25 @@ def _write_root_env_integration(new_vars: dict) -> None:
 
 def _generate_root_env_integration_blockchain(env: dict) -> None:
     dark_contract, authority_contract = resolve_contract_addresses(env)
-    _write_root_env_integration({
+    dark_abi_json, authority_abi_json = read_deployed_contract_abis(_DEPLOYED_CONTRACTS_INI_PATH)
+
+    vars: dict = {
         "DARK_RPC_URL":           env.get("RPC_URL", "http://localhost:8545").strip(),
         "DARK_CHAIN_ID":          env.get("CHAIN_ID", "2025").strip(),
         "DARK_CONTRACT_ADDRESS":  dark_contract,
         "DARK_AUTHORITY_ADDRESS": authority_contract,
         "DARK_ADMIN_PRIVATE_KEY": env.get("MASTER_PRIVATE_KEY", "").strip(),
-    })
+    }
+    if dark_abi_json:
+        vars["DARK_ABI_JSON"] = dark_abi_json
+    if authority_abi_json:
+        vars["AUTHORITY_ABI_JSON"] = authority_abi_json
+
+    _write_root_env_integration(vars)
+
+    abi_note = " (+ ABI)" if dark_abi_json else ""
     print(
-        "[OK] Generated root '.env.integration' with blockchain connection vars.\n"
+        f"[OK] Generated root '.env.integration' with blockchain connection vars{abi_note}.\n"
         "     Copy this file to the storage and/or apps server before running their installs."
     )
 
@@ -1167,9 +1213,8 @@ def validate_root_env_integration() -> None:
 def _merge_root_env_integration_into_env(env: dict, prefix: str) -> None:
     """Load root .env.integration and back-map Docker-facing var names into the env dict.
 
-    Uses setdefault so existing .env values always win.  Intended for pure
-    apps-mode installs where the operator copied the file from the blockchain
-    and storage servers.
+    Uses setdefault so existing .env values always win.  Called after every
+    tier install (blockchain, storage) and in apps-only mode after validation.
     """
     if not _ROOT_ENV_INTEGRATION.exists():
         return
@@ -1180,6 +1225,12 @@ def _merge_root_env_integration_into_env(env: dict, prefix: str) -> None:
     env.setdefault(f"{prefix}_DARK_CONTRACT_ADDRESS",      root.get("DARK_CONTRACT_ADDRESS", ""))
     env.setdefault(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", root.get("DARK_AUTHORITY_ADDRESS", ""))
     env.setdefault(f"{prefix}_STORE_API_URL",              root.get("METADATA_STORE_API_URL", ""))
+    # ABI: propagated from deployed_contracts.ini via the blockchain install step.
+    # setdefault ensures a .env override always wins over .env.integration.
+    if root.get("DARK_ABI_JSON"):
+        env.setdefault("DARK_ABI_JSON", root["DARK_ABI_JSON"])
+    if root.get("AUTHORITY_ABI_JSON"):
+        env.setdefault("AUTHORITY_ABI_JSON", root["AUTHORITY_ABI_JSON"])
 
 
 #: (env_key_template, human description, corresponding key in root .env.integration or None)
@@ -1339,6 +1390,13 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
         "DARK_GAS_LIMIT": "550000",
         "DARK_TX_TIMEOUT_SECONDS": "120",
     }
+
+    dark_abi_json = env.get("DARK_ABI_JSON", "").strip()
+    authority_abi_json = env.get("AUTHORITY_ABI_JSON", "").strip()
+    if dark_abi_json:
+        integration_env["DARK_ABI_JSON"] = dark_abi_json
+    if authority_abi_json:
+        integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     env_path = core_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
@@ -1509,6 +1567,13 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
                 else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()),
     }
 
+    dark_abi_json = env.get("DARK_ABI_JSON", "").strip()
+    authority_abi_json = env.get("AUTHORITY_ABI_JSON", "").strip()
+    if dark_abi_json:
+        integration_env["DARK_ABI_JSON"] = dark_abi_json
+    if authority_abi_json:
+        integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
+
     env_path = minter_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
     with open(env_path, "w") as f:
@@ -1604,6 +1669,13 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
         ).strip(),
     }
 
+    dark_abi_json = env.get("DARK_ABI_JSON", "").strip()
+    authority_abi_json = env.get("AUTHORITY_ABI_JSON", "").strip()
+    if dark_abi_json:
+        integration_env["DARK_ABI_JSON"] = dark_abi_json
+    if authority_abi_json:
+        integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
+
     env_path = admin_api_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
     with open(env_path, "w") as f:
@@ -1665,6 +1737,10 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
             template_env.get("METADATA_STORE_API_TIMEOUT_SECONDS", "10.0")
         ).strip(),
     }
+
+    dark_abi_json = env.get("DARK_ABI_JSON", "").strip()
+    if dark_abi_json:
+        integration_env["DARK_ABI_JSON"] = dark_abi_json
 
     env_path = resolver_api_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
@@ -2430,6 +2506,7 @@ def install_profile(prefix: str, env: dict) -> None:
         else:
             install_blockchain(prefix=prefix, env=env)
             _generate_root_env_integration_blockchain(env=env)
+            _merge_root_env_integration_into_env(env=env, prefix=prefix)
             env["_BLOCKCHAIN_CO_LOCATED"] = "true"
     else:
         print("[INFO] Blockchain not selected — skipping.")
@@ -2455,6 +2532,8 @@ def install_profile(prefix: str, env: dict) -> None:
         # same server as dark-ipfs regardless of whether apps are also being installed.
         install_dark_store_api(prefix=prefix, env=env)
         _update_root_env_integration_storage(env=env, prefix=prefix)
+        # Merge storage URL (and ABI if not yet present) so resolver and minter see them.
+        _merge_root_env_integration_into_env(env=env, prefix=prefix)
     else:
         print("[INFO] Storage not selected — skipping.")
 
