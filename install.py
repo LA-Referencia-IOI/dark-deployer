@@ -42,7 +42,10 @@ Selective rebuilds::
 """
 
 import argparse
+import grp
 import os
+import platform
+import shlex
 import subprocess
 import sys
 import time
@@ -53,9 +56,31 @@ from typing import Optional
 import json
 import http.client
 import urllib.error
+import urllib.parse
 import urllib.request
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _ensure_docker_group() -> None:
+    """Re-exec with the docker group if the user is a member but the current
+    session doesn't have it active (common right after a fresh Docker install).
+
+    sg docker sets the *effective* GID, not a supplementary group, so we check
+    getgid()/getegid() in addition to getgroups(). A _DARK_DOCKER_REEXEC env
+    flag prevents looping when sg still can't provide docker access.
+    """
+    if os.environ.get("_DARK_DOCKER_REEXEC"):
+        return  # already tried once — avoid infinite loop
+    try:
+        docker_gid = grp.getgrnam("docker").gr_gid
+    except KeyError:
+        return  # docker group doesn't exist
+    if docker_gid in (os.getgid(), os.getegid(), *os.getgroups()):
+        return  # already active in this session
+    cmd = " ".join(shlex.quote(a) for a in [sys.executable] + sys.argv)
+    print("[INFO] docker group not active in this session — re-launching automatically...")
+    os.environ["_DARK_DOCKER_REEXEC"] = "1"
+    os.execvp("sg", ["sg", "docker", "-c", cmd])
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SHARED_VENV_DIR = PROJECT_ROOT / "venv"
@@ -180,20 +205,36 @@ def run_compose_up_detached(cmd: str, cwd: str, timeout_seconds: int = 180) -> N
 
 
 def ensure_docker_running() -> None:
-    """Fail early when Docker is not available or the daemon is stopped."""
+    """Fail early when Docker is not available, the daemon is stopped, or
+    the Docker Compose v2 plugin is missing."""
     result = subprocess.run(
         "docker info",
         shell=True,
         capture_output=True,
         text=True,
     )
-    if result.returncode == 0:
-        return
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown Docker error"
+        print("[ERROR] Docker does not appear to be running or accessible.")
+        print(f"[ERROR] {stderr}")
+        if "permission denied" in stderr.lower():
+            print()
+            print("  If you were just added to the 'docker' group, log out and back in,")
+            print("  or run:  newgrp docker  — then retry.")
+        sys.exit(1)
 
-    stderr = result.stderr.strip() or result.stdout.strip() or "unknown Docker error"
-    print("[ERROR] Docker does not appear to be running or accessible.")
-    print(f"[ERROR] {stderr}")
-    sys.exit(1)
+    compose_result = subprocess.run(
+        "docker compose version",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if compose_result.returncode != 0:
+        print("[ERROR] Docker Compose v2 plugin not found.")
+        print("[ERROR] Install it with:")
+        print("        sudo apt-get install docker-compose-plugin")
+        print("        # or follow https://docs.docker.com/compose/install/")
+        sys.exit(1)
 
 
 def wait_for_rpc(
@@ -355,6 +396,28 @@ def docker_network_exists(network_name: str) -> bool:
     return result.returncode == 0
 
 
+def ensure_dark_net() -> None:
+    """Create the shared Docker network 'dark-net' if it doesn't already exist.
+
+    In a full install dark-env creates this network. In decoupled/storage-only
+    installs dark-env is absent, so we create the network here so that other
+    components (dark-ipfs, app services) can join it.
+    """
+    if docker_network_exists("dark-net"):
+        return
+    print("[INFO] Docker network 'dark-net' not found — creating it...")
+    result = subprocess.run(
+        "docker network create dark-net",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"[ERROR] Failed to create Docker network 'dark-net': {result.stderr.strip()}")
+        sys.exit(1)
+    print("[OK] Docker network 'dark-net' created.")
+
+
 def compose_up_stack(
     compose_dir: Path,
     stack_name: str,
@@ -367,12 +430,7 @@ def compose_up_stack(
         print(f"[WARNING] '{compose_file}' not found. Skipping {stack_name} Docker startup.")
         return
 
-    if not docker_network_exists("dark-net"):
-        print(
-            "[WARNING] Docker network 'dark-net' was not found. "
-            f"Skipping {stack_name} Docker startup. Start blockchain first."
-        )
-        return
+    ensure_dark_net()
 
     print(f"[INFO] Starting {stack_name} Docker stack...")
     run_compose_up_detached(
@@ -392,8 +450,8 @@ def print_install_summary(prefix: str, env: dict) -> None:
     rpc_url = env.get("RPC_URL", "http://localhost:8545").strip() or "http://localhost:8545"
     explorer_port = env.get("EXPLORER_PORT", "25000").strip() or "25000"
     explorer_url = f"http://localhost:{explorer_port}"
-    ipfs_api_url = "http://localhost:5001"
-    cluster_api_url = "http://localhost:9094"
+    ipfs_api_url    = env.get(f"{prefix}_IPFS_API_URL",     "http://localhost:5001").strip() or "http://localhost:5001"
+    cluster_api_url = env.get(f"{prefix}_IPFS_CLUSTER_URL", "http://localhost:9094").strip() or "http://localhost:9094"
     admin_url = "http://localhost:8000"
     resolver_url = "http://localhost:8002"
     store_api_url = "http://localhost:8003"
@@ -413,7 +471,11 @@ def print_install_summary(prefix: str, env: dict) -> None:
             f"[docs: {admin_url}/docs]"
         )
 
-    ipfs_selected = bool(get_url(env, f"{prefix}_IPFS_REPOSITORY_URL"))
+    ipfs_selected = (
+        bool(get_url(env, f"{prefix}_IPFS_REPOSITORY_URL"))
+        or bool(env.get(f"{prefix}_IPFS_HOST", "").strip())
+        or bool(env.get(f"{prefix}_IPFS_API_URL", "").strip())
+    )
     if ipfs_selected:
         print(f"- IPFS API: {ipfs_api_url} [{probe_ipfs_api_status(ipfs_api_url)}]")
         print(f"- IPFS Cluster: {cluster_api_url} [{probe_http_status(f'{cluster_api_url}/id')}]")
@@ -477,7 +539,8 @@ def ensure_shared_venv() -> Path:
     """
     if not SHARED_VENV_DIR.exists():
         print(f"[INFO] Creating shared venv at '{SHARED_VENV_DIR}'...")
-        run_shell(f"{sys.executable} -m venv {SHARED_VENV_DIR}")
+        python = find_web3_compatible_python()
+        run_shell(f"{python} -m venv {SHARED_VENV_DIR}")
     else:
         print(f"[INFO] Shared venv already exists at '{SHARED_VENV_DIR}', reusing it.")
 
@@ -490,15 +553,49 @@ def shared_venv_bin(bin_name: str) -> str:
     return str(venv_dir / "bin" / bin_name)
 
 
+def find_web3_compatible_python() -> str:
+    """Return a Python 3.10–3.12 interpreter path suitable for web3/eth venvs.
+
+    web3 and several of its dependencies (pyunormalize, eth-hash, …) do not
+    yet support Python 3.13+.  If the current interpreter is too new, try to
+    find an older one installed on the system.  Falls back to sys.executable
+    when nothing better is available, letting pip report the incompatibility.
+    """
+    if sys.version_info < (3, 13):
+        return sys.executable
+
+    for candidate in ("python3.12", "python3.11", "python3.10"):
+        result = subprocess.run(
+            ["which", candidate],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            path = result.stdout.strip()
+            print(f"[INFO] Using {candidate} ({path}) for component venv (web3 compat).")
+            return path
+
+    print(
+        f"[WARNING] Python {sys.version_info.major}.{sys.version_info.minor} is not "
+        "supported by web3 / eth packages.  Install python3.12 or python3.11 to avoid "
+        "build errors:\n"
+        "    sudo apt-get install python3.12 python3.12-venv"
+    )
+    return sys.executable
+
+
 def ensure_component_venv(venv_dir: Path) -> Path:
     """Create or reuse a component-local virtual environment.
 
     This is used for components whose pinned dependencies would otherwise
     downgrade packages in the shared developer venv.
+    Uses a Python ≤ 3.12 interpreter when the system Python is newer,
+    because web3 and its dependencies do not yet support Python 3.13+.
     """
     if not venv_dir.exists():
         print(f"[INFO] Creating component venv at '{venv_dir}'...")
-        run_shell(f"{sys.executable} -m venv {venv_dir}")
+        python = find_web3_compatible_python()
+        run_shell(f"{python} -m venv {venv_dir}")
     else:
         print(f"[INFO] Component venv already exists at '{venv_dir}', reusing it.")
 
@@ -809,12 +906,24 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
 
     # Pre-download solc on the host so the AMD64 container can reuse the cache
     # via a volume mount, bypassing SSL issues inside the emulated environment.
-    print("[INFO] Pre-downloading solc v0.8.17 on host...")
-    run_shell(
-        f"{python} -c \"import solcx; solcx.install_solc('0.8.17')\"",
-        cwd=str(abs_target),
-    )
-    print("[OK] solc v0.8.17 ready in host cache.\n")
+    # On non-x86_64 hosts (e.g. aarch64) the AMD64 binary cannot execute on the
+    # host — skip the pre-download and let the emulated container handle it.
+    if platform.machine() == "x86_64":
+        print("[INFO] Pre-downloading solc v0.8.17 on host...")
+        # Remove any stale binary from a previous run before re-downloading.
+        solcx_cache = Path.home() / ".solcx" / "solc-v0.8.17"
+        if solcx_cache.exists():
+            solcx_cache.unlink()
+        run_shell(
+            f"{python} -c \"import solcx; solcx.install_solc('0.8.17')\"",
+            cwd=str(abs_target),
+        )
+        print("[OK] solc v0.8.17 ready in host cache.\n")
+    else:
+        print(
+            f"[INFO] Skipping host-side solc pre-download on {platform.machine()} "
+            "— the AMD64 container will download solc inside its own environment.\n"
+        )
 
     # ── Step 2: generate config.ini ───────────────────────────────────────────
     rpc_url     = env.get("RPC_URL", "").strip()
@@ -977,6 +1086,283 @@ def read_deployed_contract_addresses(ini_path: Path) -> tuple[str, str]:
     return dark_address, authority_address
 
 
+_DEPLOYED_CONTRACTS_INI_PATH = Path(
+    "components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini"
+)
+
+_ROOT_ENV_INTEGRATION = Path(".env.integration")
+
+
+def find_deployed_contracts_ini() -> tuple[str, str]:
+    """Read deployed_contracts.ini from the canonical path inside components/."""
+    return read_deployed_contract_addresses(_DEPLOYED_CONTRACTS_INI_PATH)
+
+
+def read_deployed_contract_abis(ini_path: Path) -> tuple[str, str]:
+    """Read dARK and Authority ABI JSON from deployed_contracts.ini, compacted to one line.
+
+    Returns empty strings when the file is absent or the abi field cannot be parsed.
+    """
+    dark_abi_json = ""
+    authority_abi_json = ""
+
+    if not ini_path.exists():
+        return dark_abi_json, authority_abi_json
+
+    deployed = configparser.ConfigParser()
+    deployed.read(ini_path)
+
+    section_map = {section.lower(): section for section in deployed.sections()}
+
+    def _read_abi(section_name: str) -> str:
+        raw = deployed.get(section_name, "abi", fallback="").strip()
+        if not raw:
+            return ""
+        try:
+            return json.dumps(json.loads(raw), separators=(",", ":"))
+        except (json.JSONDecodeError, ValueError):
+            return ""
+
+    dark_section = section_map.get("dark")
+    if dark_section:
+        dark_abi_json = _read_abi(dark_section)
+
+    authority_section = section_map.get("authority")
+    if authority_section:
+        authority_abi_json = _read_abi(authority_section)
+
+    return dark_abi_json, authority_abi_json
+
+
+# ─── Root .env.integration helpers ───────────────────────────────────────────
+
+def _write_root_env_integration(new_vars: dict) -> None:
+    existing: dict = {}
+    if _ROOT_ENV_INTEGRATION.exists():
+        existing = load_optional_env(_ROOT_ENV_INTEGRATION)
+    existing.update(new_vars)
+    lines = [f"{k}={v}\n" for k, v in existing.items()]
+    with open(_ROOT_ENV_INTEGRATION, "w") as f:
+        f.writelines(lines)
+
+
+def _generate_root_env_integration_blockchain(env: dict) -> None:
+    dark_contract, authority_contract = resolve_contract_addresses(env)
+    dark_abi_json, authority_abi_json = read_deployed_contract_abis(_DEPLOYED_CONTRACTS_INI_PATH)
+
+    vars: dict = {
+        "DARK_RPC_URL":           env.get("RPC_URL", "http://localhost:8545").strip(),
+        "DARK_CHAIN_ID":          env.get("CHAIN_ID", "2025").strip(),
+        "DARK_CONTRACT_ADDRESS":  dark_contract,
+        "DARK_AUTHORITY_ADDRESS": authority_contract,
+        "DARK_ADMIN_PRIVATE_KEY": env.get("MASTER_PRIVATE_KEY", "").strip(),
+    }
+    if dark_abi_json:
+        vars["DARK_ABI_JSON"] = dark_abi_json
+    if authority_abi_json:
+        vars["AUTHORITY_ABI_JSON"] = authority_abi_json
+
+    _write_root_env_integration(vars)
+
+    abi_note = " (+ ABI)" if dark_abi_json else ""
+    print(
+        f"[OK] Generated root '.env.integration' with blockchain connection vars{abi_note}.\n"
+        "     Copy this file to the storage and/or apps server before running their installs."
+    )
+
+
+def _update_root_env_integration_storage(env: dict, prefix: str) -> None:
+    store_api_url = env.get(f"{prefix}_STORE_API_URL", "").strip()
+    if not store_api_url:
+        # Fallback: Docker service name — only correct when apps and storage share
+        # the same server (install_all). The wizard should have set STORE_API_URL
+        # to the external address for dedicated storage servers.
+        store_api_url = "http://store-api:8003"
+        print(
+            "[WARNING] STORE_API_URL not set — using Docker service name 'http://store-api:8003'.\n"
+            f"          Set {prefix}_STORE_API_URL in .env if apps run on a separate server."
+        )
+    _write_root_env_integration({
+        "METADATA_STORAGE_TYPE":  "store_api",
+        "METADATA_STORE_API_URL": store_api_url,
+    })
+    print(
+        "[OK] Updated root '.env.integration' with storage connection vars.\n"
+        "     Copy this file to the apps server before running the services install."
+    )
+
+
+def validate_root_env_integration() -> None:
+    if _ROOT_ENV_INTEGRATION.exists():
+        return
+    print(
+        "\n[ERROR] Root '.env.integration' not found.\n"
+        "\n  This file is generated by the blockchain and storage server installs."
+        " Copy it to this server before running the services install.\n"
+        "\n  Steps:\n"
+        "    1. On the blockchain server: run the installer — it generates .env.integration\n"
+        "    2. On the storage server: copy .env.integration there and run the installer"
+        " — it adds storage vars\n"
+        "    3. Copy the final .env.integration to this directory\n"
+        "    4. Re-run the installer\n"
+        f"\n  Expected path: {_ROOT_ENV_INTEGRATION.resolve()}"
+    )
+    sys.exit(1)
+
+
+def _merge_root_env_integration_into_env(env: dict, prefix: str) -> None:
+    """Load root .env.integration and back-map Docker-facing var names into the env dict.
+
+    Uses setdefault so existing .env values always win.  Called after every
+    tier install (blockchain, storage) and in apps-only mode after validation.
+    """
+    if not _ROOT_ENV_INTEGRATION.exists():
+        return
+    root = load_optional_env(_ROOT_ENV_INTEGRATION)
+    env.setdefault("RPC_URL",            root.get("DARK_RPC_URL", ""))
+    env.setdefault("CHAIN_ID",           root.get("DARK_CHAIN_ID", ""))
+    env.setdefault("MASTER_PRIVATE_KEY", root.get("DARK_ADMIN_PRIVATE_KEY", ""))
+    env.setdefault(f"{prefix}_DARK_CONTRACT_ADDRESS",      root.get("DARK_CONTRACT_ADDRESS", ""))
+    env.setdefault(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", root.get("DARK_AUTHORITY_ADDRESS", ""))
+    env.setdefault(f"{prefix}_STORE_API_URL",              root.get("METADATA_STORE_API_URL", ""))
+    # ABI: propagated from deployed_contracts.ini via the blockchain install step.
+    # setdefault ensures a .env override always wins over .env.integration.
+    if root.get("DARK_ABI_JSON"):
+        env.setdefault("DARK_ABI_JSON", root["DARK_ABI_JSON"])
+    if root.get("AUTHORITY_ABI_JSON"):
+        env.setdefault("AUTHORITY_ABI_JSON", root["AUTHORITY_ABI_JSON"])
+
+
+#: (env_key_template, human description, corresponding key in root .env.integration or None)
+_BLOCKCHAIN_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
+    ("RPC_URL",                          "Blockchain RPC URL",           "DARK_RPC_URL"),
+    ("{prefix}_DARK_CONTRACT_ADDRESS",      "dARK contract address",        "DARK_CONTRACT_ADDRESS"),
+    ("{prefix}_AUTHORITY_CONTRACT_ADDRESS", "Authority contract address",   "DARK_AUTHORITY_ADDRESS"),
+    ("MASTER_PRIVATE_KEY",                "Admin/deployer private key",    "DARK_ADMIN_PRIVATE_KEY"),
+]
+
+_APPS_STORAGE_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
+    ("{prefix}_STORE_API_URL", "Store API URL (used by minter/resolver to reach storage)", "METADATA_STORE_API_URL"),
+]
+
+_REMOTE_IPFS_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
+    ("{prefix}_IPFS_API_URL",     "IPFS HTTP API URL",   None),
+    ("{prefix}_IPFS_CLUSTER_URL", "IPFS Cluster API URL", None),
+]
+
+
+def _missing_required_fields(
+    prefix: str, env: dict, fields: list[tuple[str, str, Optional[str]]]
+) -> list[tuple[str, str, Optional[str]]]:
+    """Return the subset of ``fields`` whose env key is blank in ``env``.
+
+    Each returned tuple has its ``{prefix}`` placeholder already resolved.
+    """
+    missing = []
+    for key_template, description, integration_key in fields:
+        key = key_template.format(prefix=prefix)
+        if not env.get(key, "").strip():
+            missing.append((key, description, integration_key))
+    return missing
+
+
+def _abort_missing_fields(missing: list[tuple[str, str, Optional[str]]], context: str) -> None:
+    """Print an itemized list of missing configuration fields and exit(1)."""
+    if not missing:
+        return
+    print(f"\n[ERROR] Missing required configuration for {context}.")
+    print(
+        "\n  The following fields are not set. Fill them in the root '.env.integration'"
+        "\n  (copied from the blockchain/storage servers) or directly in '.env', then re-run:\n"
+    )
+    for key, description, integration_key in missing:
+        print(f"    - {key:<40} {description}")
+        if integration_key:
+            print(f"      .env.integration key: {integration_key}")
+    print("\n  See README.md → \"Decoupled Setup\" for the full field reference.")
+    sys.exit(1)
+
+
+def _apply_default_blockchain_repo_urls(prefix: str, env: dict) -> None:
+    """Fill any unset blockchain repository URL fields with their public defaults, silently."""
+    applied = []
+    for suffix, default_url in _BLOCKCHAIN_REPO_DEFAULTS.items():
+        key = f"{prefix}_BLOCKCHAIN_{suffix}_REPOSITORY_URL"
+        if not env.get(key, "").strip():
+            env[key] = default_url
+            applied.append((key, default_url))
+    if applied:
+        print("\n  [INFO] Using default blockchain repository URLs (not set in .env):")
+        for key, url in applied:
+            print(f"    - {key} = {url}")
+
+
+def _apply_default_storage_repo_urls(prefix: str, env: dict) -> None:
+    """Fill any unset storage repository URL fields with their public defaults, silently."""
+    applied = []
+    for label, (key_suffix, default_url) in _STORAGE_REPO_DEFAULTS.items():
+        key = f"{prefix}{key_suffix}"
+        if not env.get(key, "").strip():
+            env[key] = default_url
+            applied.append((key, default_url))
+    if applied:
+        print("\n  [INFO] Using default storage repository URLs (not set in .env):")
+        for key, url in applied:
+            print(f"    - {key} = {url}")
+
+
+def _default_store_api_url(env: dict, prefix: str) -> str:
+    """Return the configured store-api URL, or the same-host Docker service name default."""
+    current = env.get(f"{prefix}_STORE_API_URL", "").strip()
+    if current:
+        return current
+    print("  [INFO] STORE_API_URL not set — using Docker service name 'http://store-api:8003'.")
+    return "http://store-api:8003"
+
+
+def _derive_host_from_url(url: str) -> str:
+    """Extract the hostname component from a URL for display/flag purposes."""
+    return urllib.parse.urlparse(url).hostname or url
+
+
+#: dark-env's docker-compose service name for the RPC node, reachable by other
+#: containers on the shared 'dark-net' network — NOT the same as the host-facing
+#: RPC_URL (usually 'localhost'), which is unreachable from inside a container.
+_LOCAL_BLOCKCHAIN_DOCKER_RPC_URL = "http://rpc01:8545"
+
+
+def _docker_rpc_url(env: dict) -> str:
+    """Return the RPC URL that Docker services on 'dark-net' should use to reach the chain.
+
+    When the blockchain tier is installed locally as part of this same run
+    (``install_profile`` sets ``_BLOCKCHAIN_CO_LOCATED``), its RPC node lives in
+    the same Docker network under a fixed service name. Otherwise the blockchain
+    is remote/decoupled, so the operator-provided RPC_URL is used as-is.
+    """
+    if env.get("_BLOCKCHAIN_CO_LOCATED") == "true":
+        return _LOCAL_BLOCKCHAIN_DOCKER_RPC_URL
+    return env.get("RPC_URL", "").strip()
+
+
+def resolve_contract_addresses(env: dict) -> tuple[str, str]:
+    """Return (dark_address, authority_address).
+
+    Checks prefixed .env vars first (set by operator for remote blockchain),
+    then falls back to deployed_contracts.ini for local installs.
+    """
+    _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
+    prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+
+    dark_addr      = env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", "").strip()
+    authority_addr = env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", "").strip()
+
+    if dark_addr and authority_addr:
+        return dark_addr, authority_addr
+
+    dark_from_ini, auth_from_ini = find_deployed_contracts_ini()
+    return dark_addr or dark_from_ini, authority_addr or auth_from_ini
+
+
 def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     """Generate .env.integration for dark-core-lib from installed blockchain state.
 
@@ -985,13 +1371,12 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
+    dark_contract, authority_contract = resolve_contract_addresses(env)
 
     if not dark_contract or not authority_contract:
         print(
             "[WARNING] Could not read full contract addresses from "
-            f"'{ini_path}'. .env.integration may be incomplete."
+            f"'{_DEPLOYED_CONTRACTS_INI_PATH}'. .env.integration may be incomplete."
         )
 
     integration_env = {
@@ -1005,6 +1390,13 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
         "DARK_GAS_LIMIT": "550000",
         "DARK_TX_TIMEOUT_SECONDS": "120",
     }
+
+    dark_abi_json = env.get("DARK_ABI_JSON", "").strip()
+    authority_abi_json = env.get("AUTHORITY_ABI_JSON", "").strip()
+    if dark_abi_json:
+        integration_env["DARK_ABI_JSON"] = dark_abi_json
+    if authority_abi_json:
+        integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     env_path = core_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
@@ -1026,14 +1418,13 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
+    _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
+    prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+
+    dark_contract, authority_contract = resolve_contract_addresses(env)
 
     if not dark_contract or not authority_contract:
-        print(
-            "[WARNING] Could not read full contract addresses from "
-            f"'{ini_path}'. .env.integration may be incomplete."
-        )
+        print("[WARNING] Contract addresses not found in .env or deployed_contracts.ini. .env.integration may be incomplete.")
 
     template_env = load_optional_env(minter_path / ".env.example")
     metadata_storage_type = template_env.get("METADATA_STORAGE_TYPE", "store_api").strip()
@@ -1142,10 +1533,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "MINTER_API_WORKERS",
             template_env.get("MINTER_API_WORKERS", "2"),
         ).strip(),
-        "DARK_RPC_URL": env.get(
-            "RPC_URL",
-            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
-        ).strip(),
+        "DARK_RPC_URL": _docker_rpc_url(env) or template_env.get("DARK_RPC_URL", "http://localhost:8545").strip(),
         "DARK_RPC_HEALTH_TIMEOUT_SECONDS": env.get(
             "DARK_RPC_HEALTH_TIMEOUT_SECONDS",
             template_env.get("DARK_RPC_HEALTH_TIMEOUT_SECONDS", "2.0"),
@@ -1174,11 +1562,17 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         ).strip(),
         "METADATA_STORAGE_TYPE": metadata_storage_type,
         "METADATA_STORAGE_PATH": metadata_storage_path,
-        "METADATA_STORE_API_URL": (
-            "http://store-api:8003" if metadata_storage_type == "store_api"
-            else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()
-        ),
+        "METADATA_STORE_API_URL": env.get(f"{prefix}_STORE_API_URL", "").strip()
+            or ("http://store-api:8003" if metadata_storage_type == "store_api"
+                else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()),
     }
+
+    dark_abi_json = env.get("DARK_ABI_JSON", "").strip()
+    authority_abi_json = env.get("AUTHORITY_ABI_JSON", "").strip()
+    if dark_abi_json:
+        integration_env["DARK_ABI_JSON"] = dark_abi_json
+    if authority_abi_json:
+        integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     env_path = minter_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
@@ -1192,14 +1586,33 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
     """Generate .env.integration for dark-store-api from installed IPFS settings."""
     template_env = load_optional_env(store_api_path / ".env.example")
 
+    _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
+    prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+
+    ipfs_host    = env.get(f"{prefix}_IPFS_HOST", "").strip()
+    ipfs_api_env = env.get(f"{prefix}_IPFS_API_URL", "").strip()
+
+    if ipfs_host:
+        ipfs_api_url       = ipfs_api_env or f"http://{ipfs_host}:5001"
+        ipfs_cluster_url   = env.get(f"{prefix}_IPFS_CLUSTER_URL", f"http://{ipfs_host}:9094").strip()
+        ipfs_cluster_proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", ipfs_cluster_url.replace(":9094", ":9095")).strip()
+    elif ipfs_api_env:
+        ipfs_api_url       = ipfs_api_env
+        ipfs_cluster_url   = env.get(f"{prefix}_IPFS_CLUSTER_URL", "http://localhost:9094").strip()
+        ipfs_cluster_proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", "http://localhost:9095").strip()
+    else:
+        ipfs_api_url       = "http://ipfs0:5001"
+        ipfs_cluster_url   = "http://cluster0:9094"
+        ipfs_cluster_proxy = "http://cluster0:9095"
+
     integration_env = {
         **template_env,
         "STORE_API_HOST": template_env.get("STORE_API_HOST", "0.0.0.0").strip(),
         "STORE_API_PORT": "8003",
         "STORAGE_BACKEND": template_env.get("STORAGE_BACKEND", "ipfs_cluster").strip(),
-        "IPFS_API_URL": "http://ipfs0:5001",
-        "IPFS_CLUSTER_API_URL": "http://cluster0:9094",
-        "IPFS_CLUSTER_PROXY_API_URL": "http://cluster0:9095",
+        "IPFS_API_URL":               ipfs_api_url,
+        "IPFS_CLUSTER_API_URL":       ipfs_cluster_url,
+        "IPFS_CLUSTER_PROXY_API_URL": ipfs_cluster_proxy,
         "IPFS_ADD_MODE": env.get(
             "IPFS_ADD_MODE",
             template_env.get("IPFS_ADD_MODE", "cluster_proxy"),
@@ -1210,7 +1623,7 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
         ).strip(),
         "IPFS_CLUSTER_MIN_PEERS": env.get(
             "IPFS_CLUSTER_MIN_PEERS",
-            template_env.get("IPFS_CLUSTER_MIN_PEERS", "2"),
+            template_env.get("IPFS_CLUSTER_MIN_PEERS", "1"),
         ).strip(),
     }
 
@@ -1234,23 +1647,16 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_contract, authority_contract = read_deployed_contract_addresses(ini_path)
+    dark_contract, authority_contract = resolve_contract_addresses(env)
 
     if not dark_contract or not authority_contract:
-        print(
-            "[WARNING] Could not read full contract addresses from "
-            f"'{ini_path}'. .env.integration may be incomplete."
-        )
+        print("[WARNING] Contract addresses not found in .env or deployed_contracts.ini. .env.integration may be incomplete.")
 
     template_env = load_optional_env(admin_api_path / ".env.example")
 
     integration_env = {
         **template_env,
-        "DARK_RPC_URL": env.get(
-            "RPC_URL",
-            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
-        ).strip(),
+        "DARK_RPC_URL": _docker_rpc_url(env) or template_env.get("DARK_RPC_URL", "http://localhost:8545").strip(),
         "DARK_CHAIN_ID": env.get(
             "CHAIN_ID",
             template_env.get("DARK_CHAIN_ID", "1337"),
@@ -1262,6 +1668,13 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
             template_env.get("DARK_ADMIN_PRIVATE_KEY", ""),
         ).strip(),
     }
+
+    dark_abi_json = env.get("DARK_ABI_JSON", "").strip()
+    authority_abi_json = env.get("AUTHORITY_ABI_JSON", "").strip()
+    if dark_abi_json:
+        integration_env["DARK_ABI_JSON"] = dark_abi_json
+    if authority_abi_json:
+        integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     env_path = admin_api_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
@@ -1285,14 +1698,13 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
     """
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
-    dark_contract, _authority_contract = read_deployed_contract_addresses(ini_path)
+    _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
+    prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+
+    dark_contract, _ = resolve_contract_addresses(env)
 
     if not dark_contract:
-        print(
-            "[WARNING] Could not read the dARK contract address from "
-            f"'{ini_path}'. Resolver .env.integration may be incomplete."
-        )
+        print("[WARNING] dARK contract address not found in .env or deployed_contracts.ini. Resolver .env.integration may be incomplete.")
 
     template_env = load_optional_env(resolver_api_path / ".env.example")
 
@@ -1310,10 +1722,7 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
 
     integration_env = {
         **template_env,
-        "DARK_RPC_URL": env.get(
-            "RPC_URL",
-            template_env.get("DARK_RPC_URL", "http://localhost:8545"),
-        ).strip(),
+        "DARK_RPC_URL": _docker_rpc_url(env) or template_env.get("DARK_RPC_URL", "http://localhost:8545").strip(),
         "DARK_CHAIN_ID": env.get(
             "CHAIN_ID",
             template_env.get("DARK_CHAIN_ID", "1337"),
@@ -1321,14 +1730,17 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
         "DARK_CONTRACT_ADDRESS": dark_contract or template_env.get("DARK_CONTRACT_ADDRESS", "").strip(),
         "METADATA_STORAGE_TYPE": metadata_storage_type,
         "METADATA_STORAGE_PATH": metadata_storage_path,
-        "METADATA_STORE_API_URL": (
-            "http://store-api:8003" if metadata_storage_type == "store_api"
-            else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()
-        ),
+        "METADATA_STORE_API_URL": env.get(f"{prefix}_STORE_API_URL", "").strip()
+            or ("http://store-api:8003" if metadata_storage_type == "store_api"
+                else template_env.get("METADATA_STORE_API_URL", "http://localhost:8003").strip()),
         "METADATA_STORE_API_TIMEOUT_SECONDS": (
             template_env.get("METADATA_STORE_API_TIMEOUT_SECONDS", "10.0")
         ).strip(),
     }
+
+    dark_abi_json = env.get("DARK_ABI_JSON", "").strip()
+    if dark_abi_json:
+        integration_env["DARK_ABI_JSON"] = dark_abi_json
 
     env_path = resolver_api_path / ".env.integration"
     lines = [f"{key}={value}\n" for key, value in integration_env.items()]
@@ -1354,12 +1766,7 @@ def start_minter_stack(minter_path: Path) -> None:
         print(f"[WARNING] '{compose_file}' not found. Skipping minter Docker startup.")
         return
 
-    if not docker_network_exists("dark-net"):
-        print(
-            "[WARNING] Docker network 'dark-net' was not found. "
-            "Skipping minter Docker startup. Start blockchain first."
-        )
-        return
+    ensure_dark_net()
 
     print("[INFO] Building minter Docker images...")
     run_shell("docker compose build", cwd=str(minter_path))
@@ -1567,12 +1974,7 @@ def rebuild_service_component(
         print(f"[OK] Built {display}. Startup skipped because --no-start was provided.")
         return
 
-    if not docker_network_exists("dark-net"):
-        print(
-            "[WARNING] Docker network 'dark-net' was not found. "
-            f"Built {display}, but startup was skipped. Start blockchain first."
-        )
-        return
+    ensure_dark_net()
 
     if component == "minter":
         print("[INFO] Starting minter Postgres...")
@@ -1951,7 +2353,15 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = env.get(commands_key, "make up").strip() or "make up"
-    target = "components/blockchain/dark-ipfs"
+    target = "components/storage/dark-ipfs"
+
+    if platform.machine() != "x86_64":
+        print(
+            f"[INFO] Host architecture is {platform.machine()}. "
+            "dark-ipfs Docker images are AMD64 — they will run via QEMU emulation. "
+            "Ensure 'qemu-user-static' is installed and binfmt_misc is configured "
+            "(docker run --privileged --rm tonistiigi/binfmt --install all)."
+        )
 
     install_repo(
         name="dark-ipfs",
@@ -1961,6 +2371,7 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
     )
 
     if do_setup:
+        ensure_dark_net()
         setup_repo(target_dir=target, commands_str=commands)
     else:
         print("[INFO] SETUP=False — 'dark-ipfs' cloned, setup skipped.\n")
@@ -2080,15 +2491,305 @@ def install_profile(prefix: str, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from ``.env``.
     :type env: dict
     """
-    install_blockchain(prefix=prefix, env=env)
+    components_str = env.get(f"{prefix}_INSTALL_COMPONENTS", "all").strip()
+    components     = {c.strip().lower() for c in components_str.split(",")}
+    install_all    = "all" in components
+    install_bc     = install_all or "blockchain" in components
+    install_ipfs   = install_all or "storage"    in components
+    install_apps   = install_all or "apps"       in components
 
-    install_core_lib(prefix=prefix, env=env)
-    install_core_admin_api(prefix=prefix, env=env)
-    install_dark_ipfs(prefix=prefix, env=env)
-    install_dark_store_api(prefix=prefix, env=env)
-    install_core_resolver_api(prefix=prefix, env=env)
-    install_single_component(name="MINTER", prefix=prefix, env=env)
-    install_dashboard(prefix=prefix, env=env)
+    if install_bc:
+        blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
+        if blockchain_host:
+            print(f"[INFO] Blockchain tier is remote ({blockchain_host}) — skipping local install.")
+            env["_BLOCKCHAIN_CO_LOCATED"] = "false"
+        else:
+            install_blockchain(prefix=prefix, env=env)
+            _generate_root_env_integration_blockchain(env=env)
+            _merge_root_env_integration_into_env(env=env, prefix=prefix)
+            env["_BLOCKCHAIN_CO_LOCATED"] = "true"
+    else:
+        print("[INFO] Blockchain not selected — skipping.")
+        env["_BLOCKCHAIN_CO_LOCATED"] = "false"
+
+    # Pure apps mode: root .env.integration must be provided by the operator
+    # (generated on blockchain + storage servers and copied here).
+    if install_apps and not install_bc and not install_ipfs:
+        validate_root_env_integration()
+        _merge_root_env_integration_into_env(env=env, prefix=prefix)
+
+    if install_apps:
+        install_core_lib(prefix=prefix, env=env)
+        install_core_admin_api(prefix=prefix, env=env)
+
+    if install_ipfs:
+        ipfs_host = env.get(f"{prefix}_IPFS_HOST", "").strip()
+        if ipfs_host:
+            print(f"[INFO] IPFS tier is remote ({ipfs_host}) — skipping local install.")
+        else:
+            install_dark_ipfs(prefix=prefix, env=env)
+        # dark-store-api belongs exclusively to the storage tier: it runs on the
+        # same server as dark-ipfs regardless of whether apps are also being installed.
+        install_dark_store_api(prefix=prefix, env=env)
+        _update_root_env_integration_storage(env=env, prefix=prefix)
+        # Merge storage URL (and ABI if not yet present) so resolver and minter see them.
+        _merge_root_env_integration_into_env(env=env, prefix=prefix)
+    else:
+        print("[INFO] Storage not selected — skipping.")
+
+    if install_apps:
+        # store-api is not installed here: it lives on the storage server.
+        install_core_resolver_api(prefix=prefix, env=env)
+        install_single_component(name="MINTER", prefix=prefix, env=env)
+        install_dashboard(prefix=prefix, env=env)
+
+
+# ─── Setup wizard ────────────────────────────────────────────────────────────
+
+
+def _ask_choice(question: str, options: list[str], default: int = 1) -> int:
+    """Print a numbered menu and return the 1-based index of the chosen option."""
+    print(f"\n{question}")
+    for i, opt in enumerate(options, 1):
+        marker = " (default)" if i == default else ""
+        print(f"  [{i}] {opt}{marker}")
+    while True:
+        raw = input(f"\nChoice [1-{len(options)}]: ").strip()
+        if raw == "" and default:
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return int(raw)
+        print(f"    Invalid option. Enter a number between 1 and {len(options)}.")
+
+
+def _ask_confirm(question: str, default: bool = True) -> bool:
+    """Ask a yes/no question and return True for yes."""
+    hint = "[Y/n]" if default else "[y/N]"
+    raw = input(f"  {question} {hint}: ").strip().lower()
+    if raw == "":
+        return default
+    return raw in ("y", "yes")
+
+
+_BLOCKCHAIN_REPO_DEFAULTS: dict = {
+    "DARK_ENV":        "https://github.com/LA-Referencia-IOI/dark-env",
+    "DARK_DAPP":       "https://github.com/LA-Referencia-IOI/dark-dapp",
+    "DARK_EXPLORADOR": "https://github.com/LA-Referencia-IOI/dark-explorer.git",
+}
+
+# Each entry: label → (env-key suffix after prefix, default URL)
+_STORAGE_REPO_DEFAULTS: dict = {
+    "dark-ipfs":      ("_IPFS_REPOSITORY_URL",      "git@github.com:LA-Referencia-IOI/dark-ipfs.git"),
+    "dark-store-api": ("_STORE_API_REPOSITORY_URL",  "git@github.com:LA-Referencia-IOI/dark-store-api.git"),
+}
+
+
+def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
+    """Collect blockchain tier topology — selection only, no free-text entry.
+
+    "Remote" requires the connection info to already be present in ``env``
+    (merged from the root .env.integration or set directly in .env); if
+    anything is missing, the wizard lists exactly what and exits.
+    """
+    location = _ask_choice(
+        "Where will the BLOCKCHAIN tier be installed?",
+        [
+            "This server  — install locally (single node)",
+            "Remote server — already deployed or will be deployed separately",
+        ],
+    )
+    if location == 1:
+        for key in (
+            f"{prefix}_BLOCKCHAIN_HOST",
+            f"{prefix}_BLOCKCHAIN_EXTRA_NODES",
+            f"{prefix}_BLOCKCHAIN_ENODES",
+            f"{prefix}_DARK_CONTRACT_ADDRESS",
+            f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
+        ):
+            env.pop(key, None)
+        _apply_default_blockchain_repo_urls(prefix=prefix, env=env)
+        return env
+
+    missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
+    _abort_missing_fields(missing, context="a remote BLOCKCHAIN tier")
+    env[f"{prefix}_BLOCKCHAIN_HOST"] = _derive_host_from_url(env["RPC_URL"])
+    return env
+
+
+def _wizard_ipfs_tier(prefix: str, env: dict) -> dict:
+    """Collect IPFS tier topology — selection only, no free-text entry.
+
+    "This server" only needs the store-api URL that the apps tier will use
+    to reach it, which defaults to the Docker service name when unset.
+    "Remote" means dark-store-api runs here but talks to an external IPFS
+    daemon/cluster, so IPFS_API_URL/IPFS_CLUSTER_URL must already be set.
+    """
+    location = _ask_choice(
+        "Where will the IPFS tier be installed?",
+        [
+            "This server  — install locally (single node)",
+            "Remote server — already deployed or will be deployed separately",
+        ],
+    )
+    if location == 1:
+        for key in (
+            f"{prefix}_IPFS_HOST",
+            f"{prefix}_IPFS_EXTRA_NODES",
+            f"{prefix}_IPFS_API_URL",
+            f"{prefix}_IPFS_CLUSTER_URL",
+            f"{prefix}_IPFS_CLUSTER_PROXY_URL",
+        ):
+            env.pop(key, None)
+        env[f"{prefix}_STORE_API_URL"] = _default_store_api_url(env, prefix)
+        return env
+
+    missing = _missing_required_fields(prefix, env, _REMOTE_IPFS_REQUIRED_FIELDS)
+    _abort_missing_fields(missing, context="a remote IPFS tier")
+    env[f"{prefix}_IPFS_HOST"] = _derive_host_from_url(env[f"{prefix}_IPFS_API_URL"])
+    return env
+
+
+def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
+    """Print a summary of all wizard choices before proceeding."""
+    print("\n" + "─" * 60)
+    print("  Configuration Summary")
+    print("─" * 60)
+    print(f"  Profile         : {install_type.upper()}")
+    components = env.get(f"{prefix}_INSTALL_COMPONENTS", "all")
+    print(f"  Components      : {components}")
+    print(f"  RPC URL         : {env.get('RPC_URL', '(local default)')}")
+
+    blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "")
+    if blockchain_host:
+        print(f"  Blockchain      : remote — {blockchain_host}")
+        extra = env.get(f"{prefix}_BLOCKCHAIN_EXTRA_NODES", "")
+        if extra:
+            print(f"  Extra nodes     : {extra}")
+        enodes = env.get(f"{prefix}_BLOCKCHAIN_ENODES", "")
+        if enodes:
+            print(f"  Enodes          : {enodes}")
+        dark_addr = env.get(f"{prefix}_DARK_CONTRACT_ADDRESS", "(not provided)")
+        auth_addr = env.get(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", "(not provided)")
+        print(f"  dARK contract   : {dark_addr}")
+        print(f"  Auth contract   : {auth_addr}")
+        wallet = env.get("MASTER_WALLET_ADDRESS", "")
+        if wallet:
+            print(f"  Master wallet   : {wallet}")
+    else:
+        print("  Blockchain      : local")
+
+    ipfs_host = env.get(f"{prefix}_IPFS_HOST", "")
+    if ipfs_host:
+        print(f"  IPFS            : remote — {ipfs_host}")
+        print(f"  IPFS API        : {env.get(f'{prefix}_IPFS_API_URL', '')}")
+        print(f"  IPFS Cluster    : {env.get(f'{prefix}_IPFS_CLUSTER_URL', '')}")
+        proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", "")
+        if proxy:
+            print(f"  Cluster proxy   : {proxy}")
+        extra = env.get(f"{prefix}_IPFS_EXTRA_NODES", "")
+        if extra:
+            print(f"  Extra IPFS nodes: {extra}")
+    else:
+        print("  IPFS            : local")
+    print("─" * 60)
+
+
+def run_setup_wizard(env: dict) -> dict:
+    """Interactive setup wizard — collect profile and infrastructure topology.
+
+    Prompts the user for the installation profile (developer / sandbox /
+    production) and, for non-developer profiles, the location and connection
+    details for the blockchain and IPFS tiers.  Writes the chosen values back
+    to ``.env`` before returning the updated env dict.
+
+    :param env: Environment dictionary loaded from ``.env``.
+    :type env: dict
+    :returns: Updated environment dictionary.
+    :rtype: dict
+    """
+    print("\n" + "═" * 60)
+    print("  dARK Deployer — Setup Wizard")
+    print("═" * 60)
+
+    type_choice = _ask_choice(
+        "Which setup profile do you want to install?",
+        [
+            "Developer  — full stack on a single local server",
+            "Sandbox    — test environment with decoupled infrastructure",
+            "Production — production environment with decoupled infrastructure",
+        ],
+        default={"developer": 1, "sandbox": 2, "production": 3}.get(
+            env.get("TYPE", "developer").lower(), 1
+        ),
+    )
+
+    install_type = {1: "developer", 2: "sandbox", 3: "production"}[type_choice]
+    prefix = PROFILE_PREFIXES[install_type]
+    env["TYPE"] = install_type
+
+    if install_type in ("sandbox", "production"):
+        print(f"\n  Configuring infrastructure for {install_type.upper()} profile:")
+
+        # Always pull in the cross-tier handoff artifact (if present) before any
+        # validation below — the wizard never asks for information it can read here.
+        _merge_root_env_integration_into_env(env=env, prefix=prefix)
+
+        component_choice = _ask_choice(
+            "Which components will be installed on this server?",
+            [
+                "All               — blockchain + apps + storage",
+                "Apps only         — application services (blockchain and IPFS are elsewhere)",
+                "Blockchain only   — only the blockchain tier",
+                "Storage only      — only the IPFS storage tier",
+            ],
+            default={"all": 1, "apps": 2, "blockchain": 3, "storage": 4}.get(
+                env.get(f"{prefix}_INSTALL_COMPONENTS", "all").strip(), 1
+            ),
+        )
+        component_map = {1: "all", 2: "apps", 3: "blockchain", 4: "storage"}
+        selected = component_map[component_choice]
+        env[f"{prefix}_INSTALL_COMPONENTS"] = selected
+
+        if selected == "all":
+            env = _wizard_blockchain_tier(prefix=prefix, env=env)
+            env = _wizard_ipfs_tier(prefix=prefix, env=env)
+        elif selected == "apps":
+            # Pure apps mode: blockchain and storage connection info must already
+            # be present (root .env.integration copied here, or set in .env).
+            validate_root_env_integration()
+            missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
+            missing += _missing_required_fields(prefix, env, _APPS_STORAGE_REQUIRED_FIELDS)
+            _abort_missing_fields(missing, context='installing "apps"')
+        elif selected == "blockchain":
+            for key in (
+                f"{prefix}_BLOCKCHAIN_HOST",
+                f"{prefix}_BLOCKCHAIN_EXTRA_NODES",
+                f"{prefix}_BLOCKCHAIN_ENODES",
+                f"{prefix}_DARK_CONTRACT_ADDRESS",
+                f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
+            ):
+                env.pop(key, None)
+            _apply_default_blockchain_repo_urls(prefix=prefix, env=env)
+        elif selected == "storage":
+            for key in (
+                f"{prefix}_IPFS_HOST",
+                f"{prefix}_IPFS_EXTRA_NODES",
+                f"{prefix}_IPFS_API_URL",
+                f"{prefix}_IPFS_CLUSTER_URL",
+                f"{prefix}_IPFS_CLUSTER_PROXY_URL",
+            ):
+                env.pop(key, None)
+            _apply_default_storage_repo_urls(prefix=prefix, env=env)
+
+    _print_wizard_summary(install_type=install_type, prefix=prefix, env=env)
+
+    if not _ask_confirm("Save configuration to .env and start installation?", default=True):
+        print("\n[INFO] Installation cancelled by user.")
+        sys.exit(0)
+
+    update_env_file(".env", env)
+    print("[OK] Configuration saved to .env.\n")
+    return env
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
@@ -2178,11 +2879,17 @@ def main() -> None:
 
     :raises SystemExit: If ``TYPE`` is missing or not a recognised profile.
     """
+    _ensure_docker_group()
+
     print("=== dark-developer installer ===\n")
 
     ensure_supported_python()
     args = build_arg_parser().parse_args()
     env = load_env()
+
+    if args.command != "rebuild":
+        env = run_setup_wizard(env)
+
     install_type, prefix = resolve_profile_prefix(env)
 
     print(f"[INFO] Profile: {install_type.upper()}")
