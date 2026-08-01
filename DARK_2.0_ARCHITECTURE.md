@@ -196,6 +196,11 @@ Each service uses [`dark-core-lib`](components/libraries/dark-core-lib/) as the 
 - `MetadataService` — Level 1/2 storage orchestration (see §7.3)
 - `CoreConfig` — reads from env vars `DARK_RPC_URL`, `DARK_CONTRACT_ADDRESS`, `DARK_AUTHORITY_ADDRESS`, `DARK_ADMIN_PRIVATE_KEY`, `DARK_CHAIN_ID`
 
+At deployment time, `DARK_ADMIN_PRIVATE_KEY` is scoped per service: Admin API
+receives `ADMIN_PRIVATE_KEY`, while Minter receives `MINTER_PRIVATE_KEY` under
+the SDK-compatible environment name. Production validation requires these
+signers to be distinct; read-only services receive neither key.
+
 ### 4.1 SDK — Pipelined Transaction Publishing
 
 `ARKService.publish_operations(uuid, operations, pipeline_size=20)` is the SDK's bulk write engine, used by the minter's `ChainPublisherWorker` to submit batches to the blockchain with maximum throughput.

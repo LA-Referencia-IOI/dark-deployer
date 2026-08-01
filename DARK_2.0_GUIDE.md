@@ -257,6 +257,12 @@ The SDK is configured via environment variables or a `.env` file:
 
 In **read-only mode** (`DARK_READ_ONLY=true`), only `DARK_RPC_URL` and `DARK_CONTRACT_ADDRESS` are required. No admin key is loaded and write operations raise `ReadOnlyModeError`.
 
+`DARK_ADMIN_PRIVATE_KEY` is the SDK-facing variable name inside a service. The
+deployer supplies the administration signer to Admin API and the separate
+minter signer to Minter API under that service-local name. Resolver and Store
+API do not receive blockchain signing keys. See
+[Deployer Operations](docs/deployer-operations.md#3-signer-roles).
+
 ### 5.2 DARKCoreClient
 
 `DARKCoreClient` is the main entry point. It wires together the Authority and ARK services.

@@ -1,5 +1,11 @@
 # Plano de Implementação — Infraestrutura Desacoplada (Sandbox / Production)
 
+> **Status: histórico / implementado.** Este documento preserva o plano que
+> orientou a implementação original. Não deve ser usado como runbook atual.
+> Para operação vigente, consulte
+> [deployer-operations.md](deployer-operations.md) e
+> [decoupled-infrastructure.md](decoupled-infrastructure.md).
+
 Referência de arquitetura: [decoupled-infrastructure.md](decoupled-infrastructure.md)
 
 ---

@@ -20,6 +20,7 @@ This repository is the **dark-deployer**: an orchestrator that clones, configure
 - 🧠 **[IPFS Concepts and Store API](docs/ipfs-concepts-and-dark-store-api.md)**: Technical explanation of IPFS content addressing, CIDs, blocks, pinning, IPFS Cluster, failure modes, and how those concepts shape dARK Store API.
 - 🗄 **[IPFS, Cluster and Store API](docs/ipfs-cluster-store-api-real-environment.md)**: How the Store API, local IPFS node, IPFS Cluster peer, Cluster Proxy, Docker networks, health checks, and replication policy fit together in a real environment.
 - 🔐 **[Minter Signed Client Keys](docs/minter-signed-client-keys.md)**: Deployment-key style authentication for Minter clients using authority-bound public keys, signed headers, replay protection, and Admin API key registry.
+- 🛠 **[Deployer Operations](docs/deployer-operations.md)**: Configuration precedence, signer roles, secret handoffs, component locks, validation, rebuilds, lifecycle scripts, cleanup, and CI.
 
 ---
 
@@ -356,8 +357,11 @@ python3 install.py rebuild minter
 python3 install.py rebuild minter --skip-migrate
 python3 install.py rebuild core-lib --with-dependents
 
-# Full cleanup: stop + remove containers/volumes, delete components/ and venv/
+# Full cleanup (interactive confirmation)
 python3 clean.py
+
+# Non-interactive cleanup; sudo fallback must be explicitly authorized
+python3 clean.py --yes --sudo
 ```
 
 `install.py rebuild <component>` accepts `store-api`, `minter`, `resolver`, `admin`, and `core-lib`.
@@ -453,7 +457,7 @@ before making infrastructure changes when those roles are missing or identical.
 | --- | --- | --- |
 | Components = **apps** | RPC, contracts, signer and Store API URL | Copy `.env.integration` from storage and `.env.integration.secrets` directly from blockchain |
 | Blockchain tier = **remote** (within an "all" install) | RPC, contracts and signer | Handoff files or explicit `.env` values |
-| Blockchain tier = **local** | Nothing — repo URLs default to the public `LA-Referencia-IOI` repos if left blank in `.env` | — |
+| Blockchain tier = **local** | Developer/sandbox use local wallet fallback; production requires distinct admin/minter keys | Direct values or `*_PRIVATE_KEY_FILE` secret mounts |
 | IPFS tier = **remote** (dark-store-api here, IPFS elsewhere) | `{PREFIX}_IPFS_API_URL`, `{PREFIX}_IPFS_CLUSTER_URL` | `.env` |
 | IPFS tier = **local** | Nothing — `{PREFIX}_STORE_API_URL` defaults to the Docker service name `http://store-api:8003` (correct when apps run on the same server) | Only needed if apps run on a *different* server; set `{PREFIX}_STORE_API_URL` in `.env` to this server's external address |
 
