@@ -19,6 +19,7 @@ This repository is the **dark-deployer**: an orchestrator that clones, configure
 - ⚙️ **[API Reference](DARK_2.0_API_REFERENCE.md)**: All REST APIs (Admin :8000, Minter :8001, Resolver :8002, Store :8003), smart contract interfaces, events, and integration guidelines.
 - 🧠 **[IPFS Concepts and Store API](docs/ipfs-concepts-and-dark-store-api.md)**: Technical explanation of IPFS content addressing, CIDs, blocks, pinning, IPFS Cluster, failure modes, and how those concepts shape dARK Store API.
 - 🗄 **[IPFS, Cluster and Store API](docs/ipfs-cluster-store-api-real-environment.md)**: How the Store API, local IPFS node, IPFS Cluster peer, Cluster Proxy, Docker networks, health checks, and replication policy fit together in a real environment.
+- 🌐 **[Global Multi-Site IPFS Architecture](docs/ipfs-architecture.md)**: Approved target design for one CRDT cluster across one or more sites, including replication quorum, private networking, failure behavior, expansion, reconciliation, and implementation requirements.
 - 🔐 **[Minter Signed Client Keys](docs/minter-signed-client-keys.md)**: Deployment-key style authentication for Minter clients using authority-bound public keys, signed headers, replay protection, and Admin API key registry.
 - 🛠 **[Deployer Operations](docs/deployer-operations.md)**: Configuration precedence, signer roles, secret handoffs, component locks, validation, rebuilds, lifecycle scripts, cleanup, and CI.
 
