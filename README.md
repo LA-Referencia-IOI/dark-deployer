@@ -1,533 +1,221 @@
 # dARK Deployer
 
-![dARK Logo](docs/figures/dARK_logo.png)
+Installer and operational tooling for the dARK blockchain, application and
+global IPFS storage infrastructure.
 
-**dARK** (Decentralized Archival Resource Key) is a blockchain-based implementation of the [ARK](https://arks.org/) identifier scheme.
+## Architecture
 
-**dARK is public, federated digital infrastructure.** It ensures permanent, decentralized access to identifiers while preventing proprietary appropriation of the core protocol.
+The storage model has one supported shape:
 
-This repository is the **dark-deployer**: an orchestrator that clones, configures, and starts the full dARK 2.0 stack from a single `.env` file.
-
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7442743.svg)](https://doi.org/10.5281/zenodo.7442743)
-
----
-
-## Documentation
-
-- 📖 **[Developer Guide](DARK_2.0_GUIDE.md)**: ARK identifier format, on-chain data structures, ARK lifecycle states, Python SDK (`dark-core-lib`) usage, batch publishing pipeline, and error handling.
-- 🏗 **[Architecture](DARK_2.0_ARCHITECTURE.md)**: Full system architecture — two-contract design, service layer, minter worker lifecycle, resolver resolution modes, storage layer (IPFS + store-api), and SDK pipelining.
-- ⚙️ **[API Reference](DARK_2.0_API_REFERENCE.md)**: All REST APIs (Admin :8000, Minter :8001, Resolver :8002, Store :8003), smart contract interfaces, events, and integration guidelines.
-- 🧠 **[IPFS Concepts and Store API](docs/ipfs-concepts-and-dark-store-api.md)**: Technical explanation of IPFS content addressing, CIDs, blocks, pinning, IPFS Cluster, failure modes, and how those concepts shape dARK Store API.
-- 🗄 **[IPFS, Cluster and Store API](docs/ipfs-cluster-store-api-real-environment.md)**: How the Store API, local IPFS node, IPFS Cluster peer, Cluster Proxy, Docker networks, health checks, and replication policy fit together in a real environment.
-- 🌐 **[Global Multi-Site IPFS Architecture](docs/ipfs-architecture.md)**: Approved target design for one CRDT cluster across one or more sites, including replication quorum, private networking, failure behavior, expansion, reconciliation, and implementation requirements.
-- 🔐 **[Minter Signed Client Keys](docs/minter-signed-client-keys.md)**: Deployment-key style authentication for Minter clients using authority-bound public keys, signed headers, replay protection, and Admin API key registry.
-- 🛠 **[Deployer Operations](docs/deployer-operations.md)**: Configuration precedence, signer roles, secret handoffs, component locks, validation, rebuilds, lifecycle scripts, cleanup, and CI.
-
----
-
-## System Overview
-
-dARK 2.0 is composed of several independent services that this deployer clones and wires together:
-
-| Component | Description | Default port |
-| --------- | ----------- | ------------ |
-| `dark-env` | Hyperledger Besu blockchain node + genesis | — |
-| `dark-dapp` | Solidity smart contracts (`Authority.sol` + `dARK.sol`), compiled and deployed automatically | RPC via `.env` |
-| `dark-explorador` | Block explorer (Nginx-based) | `EXPLORER_PORT` |
-| `dark-ipfs` | IPFS + IPFS Cluster storage backend | 5001 / 9094 |
-| `dark-core-lib` | Python SDK — shared by all services | — |
-| `dark-core-admin-api` | REST API for authority and NAAN management | 8000 |
-| `dark-core-minter-api` | REST API for ARK minting (split metadata + chain workers) | 8001 |
-| `dark-core-resolver-api` | REST API for ARK resolution | 8002 |
-| `dark-store-api` | REST API wrapping IPFS storage | 8003 |
-| `dashboard-web` | Laravel/Vue web dashboard for managing authorities, NAANs, and ARK records | 8081 |
-
-The smart contracts follow a **two-contract modular architecture**:
-
-| Contract | Role |
-| -------- | ---- |
-| `Authority.sol` | Registers organizations, binds UUIDs to wallets, manages NAAN permissions |
-| `dARK.sol` | Pure ARK identifier storage — delegates all permission checks to `Authority.sol` |
-
-```
-Admin ──► register_authority ──► Authority.sol ◄── is_authorized? ◄── dARK.sol ◄── create_ark ◄── Authority Wallet
+```text
+one global CRDT IPFS Cluster
+└── N sites
+    ├── two storage servers: Kubo + Cluster peer
+    └── one application tier: Store API + Minter + Resolver
 ```
 
----
+Each site-local Store API uses its two local storage servers. Cross-site block
+and Cluster traffic travels over the VPN; Store APIs do not replicate to or
+control one another. See [IPFS architecture](docs/ipfs-architecture.md) for the
+failure model and design rationale.
 
-## Project Structure
+## Requirements
 
-```
-dark-deployer/
-├── install.py          # Main installer — interactive wizard + full orchestration
-├── dark_deployer/      # Reusable command, file, and process helpers
-├── stop.py             # Gracefully stops all Docker Compose stacks
-├── restart.py          # Restarts all Docker Compose stacks and probes endpoints
-├── clean.py            # Full cleanup: stops containers, deletes components/ and venv/
-├── requirements.txt    # Root-level Python dependencies (web3, py-solc-x, …)
-├── components.lock.json # Optional exact commit locks, generated by install.py lock
-├── .env                # Configuration (copy from .env.example)
-├── .env.integration    # Handoff artifact: generated by blockchain/storage installs,
-│                       # consumed by apps install on a different server (see below)
-├── .env.integration.secrets # Signer handoff; copy only to apps servers that need it
-└── components/         # Created by install.py — one sub-directory per component
-    ├── blockchain/
-    │   ├── dark-env/           # Besu node
-    │   ├── dark-dapp/          # Smart contracts
-    │   │   └── dARK_dapp/
-    │   │       ├── contracts/  # Authority.sol, dARK.sol, IAuthority.sol
-    │   │       ├── compiled/   # ABI + bytecode (generated)
-    │   │       └── deployed_contracts.ini  # Deployed addresses + ABI (generated)
-    │   └── dark-explorador/    # Block explorer
-    ├── storage/
-    │   └── dark-ipfs/          # IPFS + Cluster
-    ├── frontend/
-    │   └── dashboard-web/      # Web dashboard (Laravel + Vue)
-    ├── libraries/
-    │   └── dark-core-lib/      # Shared Python SDK
-    └── services/
-        ├── dark-core-admin-api/
-        ├── dark-core-minter-api/
-        ├── dark-core-resolver-api/
-        └── dark-store-api/
-```
+- Python 3.10 or newer
+- Docker Engine and Docker Compose v2
+- VPN reachability between storage servers
+- one Kubo private-swarm key shared by all storage nodes
+- one separate 32-byte hexadecimal Cluster secret shared by all storage nodes
 
----
+Administrative APIs (`5001`, `9094`, `9095`) must remain private. Kubo swarm
+`4001/tcp+udp` and Cluster swarm `9096/tcp+udp` must be reachable between peers.
 
-## Prerequisites
-
-- Python 3.10+
-- Docker (daemon must be running)
-- Git
-
----
-
-## Quick Start
-
-### 1. Configure
-
-Copy the example env file and fill in the required values:
+## Configure
 
 ```bash
 cp .env.example .env
+cp storage-topology.example.json storage-topology.json
 ```
 
-Key variables in `.env`:
+Edit `storage-topology.json` once for the whole infrastructure. Every site must
+contain exactly two peers:
+
+```json
+{
+  "version": 1,
+  "cluster_name": "dark-global",
+  "strict_single_site": false,
+  "sites": [
+    {
+      "id": "site-a",
+      "peers": [
+        {"id": "site-a-storage-1", "vpn_address": "10.200.1.11"},
+        {"id": "site-a-storage-2", "vpn_address": "10.200.1.12"}
+      ]
+    }
+  ]
+}
+```
+
+The live file is excluded from Git. Copy the same topology to storage and apps
+hosts. In `.env`, select the active profile and configure its site/role fields:
+
+Generate two different secrets outside the repository:
+
+```bash
+umask 077
+{
+  echo /key/swarm/psk/1.0.0/
+  echo /base16/
+  openssl rand -hex 32
+} > /run/dark-secrets/ipfs-swarm.key
+openssl rand -hex 32 > /run/dark-secrets/ipfs-cluster-secret
+chmod 600 /run/dark-secrets/ipfs-swarm.key /run/dark-secrets/ipfs-cluster-secret
+```
+
+Then select the active profile and configure its site/role fields:
 
 ```ini
-# Installation profile: developer | sandbox | production
-TYPE=developer
-
-# Git repository URLs for each component (set only the ones you need)
-DEVELOPER_BLOCKCHAIN_DARK_ENV_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-env
-DEVELOPER_BLOCKCHAIN_DARK_DAPP_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-dapp
-# ... (see .env.example for the full list)
-
-# Blockchain connection — populated automatically from dark-env after first run
-RPC_URL=http://localhost:8545
-CHAIN_ID=1337
-MASTER_WALLET_ADDRESS=
-MASTER_PRIVATE_KEY=
-MASTER_PUBLIC_KEY=
-DEPLOYER_PRIVATE_KEY_FILE=/run/secrets/dark_deployer_key
-ADMIN_PRIVATE_KEY_FILE=/run/secrets/dark_admin_key
-MINTER_PRIVATE_KEY_FILE=/run/secrets/dark_minter_key
+TYPE=production
+PRODUCTION_INSTALL_COMPONENTS=storage-node
+PRODUCTION_STORAGE_TOPOLOGY_FILE=storage-topology.json
+PRODUCTION_STORAGE_SITE_ID=site-a
+PRODUCTION_STORAGE_NODE_ID=site-a-storage-1
+PRODUCTION_IPFS_SWARM_KEY_FILE=/run/dark-secrets/ipfs-swarm.key
+PRODUCTION_IPFS_CLUSTER_SECRET_FILE=/run/dark-secrets/ipfs-cluster-secret
 ```
 
-> **Note:** `MASTER_WALLET_ADDRESS`, `MASTER_PRIVATE_KEY`, and `MASTER_PUBLIC_KEY` are extracted automatically from `dark-env/master-wallet.txt` the first time `dark-env` is installed and written back to `.env`.
+For an apps host, use `PRODUCTION_INSTALL_COMPONENTS=apps` and omit the node and
+storage secret fields. It still needs `PRODUCTION_STORAGE_SITE_ID` so the
+installer can generate both local endpoint lists.
 
-### 2. Install
+## Roles
+
+| Value | Installed on this server |
+| --- | --- |
+| `storage-node` | one Kubo daemon and one Cluster peer |
+| `apps` | core library, Admin API, Store API, Minter, Resolver and dashboard |
+| `blockchain` | blockchain node, contracts and explorer |
+| `all` | all three roles; mainly useful for constrained non-production setups |
+
+There is no legacy `storage` role and no single-host three-peer IPFS mode.
+Store API always belongs to `apps`, never to a storage node.
+
+## Install
+
+Validate before changing the host:
 
 ```bash
-python3 install.py
-```
-
-`install.py` launches an **interactive setup wizard** that asks which profile and which components to install on this server, then orchestrates the installation automatically.
-
-After the wizard, the installer:
-
-1. Validates Python version and Docker availability.
-2. Clones (or pulls) every component repository whose URL is set in `.env`.
-3. For `dark-env`: runs `setup.sh` and `docker compose up -d`, then extracts the master wallet into `.env`.
-4. For `dark-dapp`: creates an isolated venv, generates `config.ini`, compiles Solidity contracts, waits for the RPC node, and deploys contracts.
-5. Generates a public `.env.integration` file and a separate, mode-`0600` `.env.integration.secrets` signer handoff.
-6. For each service: generates a per-service `.env.integration` from the root one, installs Python packages, and starts the Docker Compose stack.
-7. For `dashboard-web`: delegates setup to its own `install.py`.
-8. Prints a live service summary with health status for every endpoint.
-
----
-
-## Setup Wizard
-
-Every run of `python3 install.py` starts the interactive wizard before touching any files. It asks two questions for **sandbox** and **production** profiles:
-
-1. **Which profile?** — `Developer` / `Sandbox` / `Production`
-2. **Which components on this server?** — `All` / `Apps only` / `Blockchain only` / `Storage only`
-
-For **Developer**, all components are installed locally with no further questions.
-
-For **Sandbox** and **Production**, the wizard collects only the information relevant to the chosen component set, writes the answers to `.env`, and then starts the installation.
-
----
-
-## Sandbox / Production — Decoupled Deployment
-
-The sandbox and production profiles support splitting the stack across three dedicated servers:
-
-```
-┌────────────────────┐   .env.integration   ┌────────────────────┐   .env.integration   ┌────────────────────┐
-│  Blockchain server │ ───────────────────► │  Storage server    │ ───────────────────► │  Apps server       │
-│                    │                       │                    │                       │                    │
-│  dark-env          │                       │  dark-ipfs         │                       │  dark-core-lib     │
-│  dark-dapp         │                       │  dark-store-api    │                       │  dark-core-admin-api│
-│  dark-explorador   │                       │                    │                       │  dark-core-minter-api│
-│                    │                       │                    │                       │  dark-core-resolver│
-│                    │                       │                    │                       │  dashboard-web     │
-└────────────────────┘                       └────────────────────┘                       └────────────────────┘
-```
-
-The public `.env.integration` handoff carries RPC URL, chain ID, contract addresses, storage URL and the contract ABI. The signer is written separately to `.env.integration.secrets`; never copy that file to the storage server. Both files are excluded from Git and written with restrictive permissions.
-
----
-
-### Option A — All components on one server
-
-Install profile: **Sandbox → All**
-
-```bash
-# On the single server
-cp .env.example .env
-# Edit .env: set TYPE=sandbox and fill in repository URLs
-python3 install.py
-# Wizard: Sandbox → All
-```
-
-The wizard asks whether the blockchain and IPFS tiers will be local or remote. For a single-server setup, choose **This server** for both. The installer runs the full stack and generates `.env.integration` automatically.
-
----
-
-### Option B — Blockchain only
-
-Install profile: **Sandbox → Blockchain only**
-
-Run this on the **blockchain server**. It installs `dark-env`, `dark-dapp`, and `dark-explorador`.
-
-```bash
-cp .env.example .env
-# Edit .env: set TYPE=sandbox and fill in blockchain repository URLs
-python3 install.py
-# Wizard: Sandbox → Blockchain only
-```
-
-After installation, a `.env.integration` file is created at the project root. It contains:
-
-```ini
-DARK_RPC_URL=http://<this-server-ip>:8545
-DARK_CHAIN_ID=2025
-DARK_CONTRACT_ADDRESS=0x...
-DARK_AUTHORITY_ADDRESS=0x...
-DARK_ABI_JSON=[{"inputs":[],...}]          # ABI extracted from deployed_contracts.ini
-AUTHORITY_ABI_JSON=[{"inputs":[],...}]     # ABI extracted from deployed_contracts.ini
-```
-
-The signer is created separately in `.env.integration.secrets`.
-
-**Copy this file to the storage server and to the apps server before running their installs.**
-
----
-
-### Option C — Storage only
-
-Install profile: **Sandbox → Storage only**
-
-Run this on the **storage server**. It installs `dark-ipfs` and `dark-store-api`.
-
-**Before running**, copy `.env.integration` from the blockchain server to the project root on this server.
-
-```bash
-cp .env.example .env
-# Edit .env: set TYPE=sandbox and fill in storage repository URLs
-# Copy .env.integration from the blockchain server here
-python3 install.py
-# Wizard: Sandbox → Storage only
-```
-
-The wizard asks for the **external URL** that the apps server will use to reach `store-api` (e.g. `http://192.168.1.20:8003`). After installation, `.env.integration` is updated with:
-
-```ini
-METADATA_STORAGE_TYPE=store_api
-METADATA_STORE_API_URL=http://192.168.1.20:8003
-```
-
-**Copy the updated `.env.integration` to the apps server.**
-
----
-
-### Option D — Apps only
-
-Install profile: **Sandbox → Apps only**
-
-Run this on the **apps server**. It installs `dark-core-lib`, `dark-core-admin-api`, `dark-core-minter-api`, `dark-core-resolver-api`, and `dashboard-web`.
-
-**Before running**, ensure the final public `.env.integration` and the blockchain server's `.env.integration.secrets` are present at the project root.
-
-```bash
-cp .env.example .env
-# Edit .env: set TYPE=sandbox and fill in service repository URLs
-# Copy the final .env.integration (from storage server) here
-# Copy .env.integration.secrets directly from the blockchain server here
-python3 install.py
-# Wizard: Sandbox → Apps only
-```
-
-If `.env.integration` is missing, the wizard will print a clear error with the exact steps needed and exit. Once it is present, all connection details (RPC URL, contract addresses, contract ABI, store-api URL) are loaded from it automatically — no manual entry required.
-
-> **ABI note:** The contract ABI stored in `.env.integration` is read by `dark-core-lib` at startup (`DARK_ABI_JSON` / `AUTHORITY_ABI_JSON` environment variables). If the Solidity contracts are redeployed with a changed ABI, re-running the installer on the blockchain server regenerates `.env.integration` with the new ABI. Copying it and re-running the apps install propagates the change to all services.
-
----
-
-### Decoupled install — step-by-step checklist
-
-```
-[ ] 1. Blockchain server
-        cp .env.example .env  (fill in TYPE=sandbox + blockchain repo URLs)
-        python3 install.py    (wizard: Sandbox → Blockchain only)
-        → .env.integration and .env.integration.secrets created at project root
-
-[ ] 2. Copy .env.integration to the storage server
-        scp .env.integration user@storage-server:/path/to/dark-deployer/
-
-[ ] 3. Storage server
-        cp .env.example .env  (fill in TYPE=sandbox + storage repo URLs)
-        python3 install.py    (wizard: Sandbox → Storage only)
-        → .env.integration updated with METADATA_STORE_API_URL
-
-[ ] 4. Copy updated .env.integration to the apps server
-        scp .env.integration user@apps-server:/path/to/dark-deployer/
-        Copy .env.integration.secrets directly from blockchain to apps using
-        a secrets manager or another protected channel.
-
-[ ] 5. Apps server
-        cp .env.example .env  (fill in TYPE=sandbox + service repo URLs)
-        python3 install.py    (wizard: Sandbox → Apps only)
-        → All services started and connected to blockchain + storage
-```
-
----
-
-## Service Endpoints (default)
-
-| Service | URL | Docs |
-| ------- | --- | ---- |
-| Blockchain RPC | `RPC_URL` from `.env` | — |
-| Block Explorer | `http://localhost:<EXPLORER_PORT>` | — |
-| Core Admin API | `http://localhost:8000` | `/docs` |
-| Core Minter API | `http://localhost:8001` | `/docs` |
-| Core Resolver API | `http://localhost:8002` | `/docs` |
-| Store API | `http://localhost:8003` | `/docs` |
-| IPFS API | `http://localhost:5001` | — |
-| IPFS Cluster | `http://localhost:9094` | — |
-| Dashboard | `http://localhost:8081` | — |
-
----
-
-## Operational Scripts
-
-```bash
-# Validate the saved configuration without changing the system
 python3 install.py validate
-
-# Print a redacted, non-mutating installation plan
 python3 install.py plan
+python3 install.py
+```
 
-# Record exact commits for every installed component
-python3 install.py lock
+The interactive wizard selects only the profile and role. It does not collect
+secrets or topology addresses. Missing fields are reported before repositories,
+containers or networks are changed.
 
-# Verify installed commits still match the lock
-python3 install.py lock --check
+### Recommended site sequence
 
-# Stop all stacks gracefully (containers preserved)
-python3 stop.py
+1. Deploy the first peer listed in `storage-topology.json`; it seeds the Cluster.
+2. Deploy its partner in the same site.
+3. Verify both peers with `python3 install.py storage audit`.
+4. Deploy the site's apps role; its Store API uses both local peers.
+5. Add later sites two storage peers at a time.
+6. Run `python3 install.py storage reconcile` after every topology expansion.
 
-# Restart all stacks and probe health endpoints
+Kubo and Cluster identities are generated once and retained in named Docker
+volumes. Do not copy one node's identity volume to another node.
+
+## Blockchain handoff
+
+A blockchain-only installation generates:
+
+- `.env.integration`: RPC URL, chain ID, contract addresses and ABIs;
+- `.env.integration.secrets`: Admin and Minter signer material, mode `0600`.
+
+Copy both directly to each apps server through protected channels. Storage
+nodes do not need blockchain handoff files or signer keys. Production requires
+distinct Admin and Minter signers.
+
+## Store API durability
+
+The deployer calculates policy from topology size:
+
+| Topology | Cluster min/max | Successful Store API write |
+| --- | --- | --- |
+| one site | `1/2` | at least 1 pinned peer in 1 site |
+| one strict site | `2/2` | 2 pinned peers in 1 site |
+| two or more sites | `3/(2 × sites)` | at least 3 pinned peers in 2 sites |
+
+Store API returns `503` when it creates a CID but cannot observe this quorum
+before timeout. Minter must not publish that CID on-chain until a retry succeeds.
+
+Health endpoints:
+
+| Endpoint | Consumer |
+| --- | --- |
+| `/health/live` | container runtime |
+| `/health/read` | Resolver/load balancer |
+| `/health/write` | Minter/load balancer |
+| `/health` | write-readiness compatibility alias |
+
+## Operations
+
+```bash
+# Read-only global status
+python3 install.py storage audit
+
+# Reapply topology replication factors to every existing pin; never unpins
+python3 install.py storage reconcile
+
+# Restart installed stacks and check topology-aware endpoints
 python3 restart.py
 
-# Rebuild only one installed component
+# Stop stacks while preserving storage volumes
+python3 stop.py
+
+# Rebuild one application component
 python3 install.py rebuild store-api
-python3 install.py rebuild minter
-python3 install.py rebuild minter --skip-migrate
-python3 install.py rebuild core-lib --with-dependents
 
-# Full cleanup (interactive confirmation)
-python3 clean.py
-
-# Non-interactive cleanup; sudo fallback must be explicitly authorized
-python3 clean.py --yes --sudo
+# Record or verify exact component commits
+python3 install.py lock
+python3 install.py lock --check
 ```
 
-`install.py rebuild <component>` accepts `store-api`, `minter`, `resolver`, `admin`, and `core-lib`.
-Use `--no-cache` for a clean Docker rebuild, `--no-start` to build without restarting containers,
-and `--pull` to update the configured repository before rebuilding. Minter rebuilds run database
-migrations by default; use `--skip-migrate` only when you explicitly need to skip them.
+`clean.py` preserves the named Kubo and Cluster volumes even when cleaning the
+rest of the development stack. Storage deletion is intentionally not automated.
+Storage operations return exit code `2` when any CID is below the configured
+minimum or reports a pin error, making the audit suitable for monitoring jobs.
 
-Custom setup commands should use JSON arrays so shell pipes remain part of a
-single command:
+## Repository layout
 
-```ini
-DEVELOPER_IPFS_COMMANDS_JSON=["make prepare | tee prepare.log","make up"]
+```text
+dark-deployer/
+├── install.py
+├── restart.py / stop.py / clean.py
+├── storage-topology.example.json
+├── dark_deployer/
+│   ├── commands.py
+│   ├── files.py
+│   ├── process.py
+│   └── storage.py
+├── docs/
+└── components/                 # cloned component repositories; Git-ignored
 ```
 
-Legacy pipe-separated `*_COMMANDS` fields remain supported for compatibility,
-but cannot represent a shell pipeline unambiguously.
-
-### Reproducible component versions
-
-When `components.lock.json` exists, installs and `--pull` rebuilds check out the
-exact commit recorded for each component instead of advancing to the tip of its
-configured branch. Regenerate the lock intentionally after testing upgrades:
+## Tests
 
 ```bash
-python3 install.py lock
-git add components.lock.json
+python3 -m unittest discover -s tests -v
+
+cd components/services/dark-store-api
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest -q
 ```
-
----
-
-## Installation Profiles
-
-The `TYPE` variable in `.env` selects the active profile:
-
-| Profile | Env prefix | Typical use |
-| ------- | ---------- | ----------- |
-| `developer` | `DEVELOPER_` | Local development — full stack on one machine |
-| `sandbox` | `SANDBOX_` | Test environment — single server or decoupled |
-| `production` | `PRODUCTION_` | Production — typically decoupled across servers |
-
-Each profile reads component URLs and settings from its own set of prefixed variables (e.g., `SANDBOX_BLOCKCHAIN_DARK_ENV_REPOSITORY_URL`). Only components with a URL set are installed; the rest are silently skipped.
-
-The wizard sets `{PREFIX}_INSTALL_COMPONENTS` to control which tier is installed on each server:
-
-| Value | Components installed |
-| ----- | -------------------- |
-| `all` | blockchain + storage + apps (default) |
-| `blockchain` | `dark-env`, `dark-dapp`, `dark-explorador` only |
-| `storage` | `dark-ipfs`, `dark-store-api` only |
-| `apps` | `dark-core-lib`, admin API, minter, resolver, dashboard only |
-
----
-
-## Decoupled Setup (Sandbox / Production)
-
-`sandbox` and `production` profiles support installing the **blockchain**, **storage**, and **apps** tiers on separate servers. The setup wizard (`python3 install.py`) only ever asks you to **pick from a menu** — profile, which components go on this server, whether a tier is local or remote. It never asks you to type a URL, address, or key.
-
-**All connection information must already be in place before you run the wizard.** If a required field is missing for the selection you make, the installer prints exactly which fields are empty and where to put them, then exits — it does not fall back to asking interactively.
-
-### Public and secret handoff files
-
-This is how information moves between servers without anyone typing it twice:
-
-1. On the **blockchain** server, `install.py` writes public deployment state to `.env.integration` and the signer to `.env.integration.secrets`.
-2. On the **storage** server, running the installer with that same file present appends the storage vars to it.
-3. Copy the resulting public file from storage to the **apps** server. Copy the secret file directly from blockchain to apps; storage never needs it.
-
-| Key in `.env.integration` | Written by | Read by |
-| --- | --- | --- |
-| `DARK_RPC_URL` | blockchain tier | apps tier (`RPC_URL`), remote-blockchain selection |
-| `DARK_CHAIN_ID` | blockchain tier | apps tier (`CHAIN_ID`) |
-| `DARK_CONTRACT_ADDRESS` | blockchain tier | apps tier (`{PREFIX}_DARK_CONTRACT_ADDRESS`) |
-| `DARK_AUTHORITY_ADDRESS` | blockchain tier | apps tier (`{PREFIX}_AUTHORITY_CONTRACT_ADDRESS`) |
-| `METADATA_STORAGE_TYPE` | storage tier | apps tier |
-| `METADATA_STORE_API_URL` | storage tier | apps tier (`{PREFIX}_STORE_API_URL`) |
-
-`.env.integration.secrets` contains separate `DARK_ADMIN_PRIVATE_KEY` and
-`DARK_MINTER_PRIVATE_KEY` values. Transfer it through a secrets manager or
-another protected channel, never through Git. Apps-only treats the handoff
-files as authoritative and does not persist imported values back into the
-general `.env`. Production validation requires distinct admin and minter keys.
-The installer also accepts `DEPLOYER_PRIVATE_KEY_FILE`, `ADMIN_PRIVATE_KEY_FILE`
-and `MINTER_PRIVATE_KEY_FILE` paths for secrets mounted by an external manager.
-`MASTER_PRIVATE_KEY` remains only as a compatibility fallback.
-
-For production, configure and authorize distinct admin and minter signer keys
-before running either the blockchain or apps installation. The installer fails
-before making infrastructure changes when those roles are missing or identical.
-
-### What each selection requires
-
-| Selection | Required beforehand | Where to fill it |
-| --- | --- | --- |
-| Components = **apps** | RPC, contracts, signer and Store API URL | Copy `.env.integration` from storage and `.env.integration.secrets` directly from blockchain |
-| Blockchain tier = **remote** (within an "all" install) | RPC, contracts and signer | Handoff files or explicit `.env` values |
-| Blockchain tier = **local** | Developer/sandbox use local wallet fallback; production requires distinct admin/minter keys | Direct values or `*_PRIVATE_KEY_FILE` secret mounts |
-| IPFS tier = **remote** (dark-store-api here, IPFS elsewhere) | `{PREFIX}_IPFS_API_URL`, `{PREFIX}_IPFS_CLUSTER_URL` | `.env` |
-| IPFS tier = **local** | Nothing — `{PREFIX}_STORE_API_URL` defaults to the Docker service name `http://store-api:8003` (correct when apps run on the same server) | Only needed if apps run on a *different* server; set `{PREFIX}_STORE_API_URL` in `.env` to this server's external address |
-
-If you run the wizard and a required field is missing, you'll see something like:
-
-```
-[ERROR] Missing required configuration for installing "apps".
-
-  The following fields are not set. Fill them in the handoff files
-  or directly in '.env', then re-run:
-
-    - RPC_URL                                Blockchain RPC URL
-      handoff key: DARK_RPC_URL
-    - SANDBOX_STORE_API_URL                   Store API URL (used by minter/resolver to reach storage)
-      handoff key: METADATA_STORE_API_URL
-```
-
----
-
-## ARK Lifecycle (Summary)
-
-**Via smart contracts directly (SDK / `dark-core-lib`):**
-```
-1. Admin calls:      Authority.register_authority(uuid, wallet, enc_key)
-2. Authority calls:  Authority.authorize_naan(naan)
-3. Authority calls:  dARK.create_ark(naan, name, url, cid)
-4. Anyone calls:     dARK.resolve(naan, name)  →  returns url
-```
-
-**Via the Minter API (`dark-core-minter-api`):**
-```
-1. POST /arks              → state: reserved (R)  — NOID identifier allocated
-2. PUT  /arks/{ark}        → state: draft    (D)  — metadata accepted, on-chain creation queued
-   [metadata worker]       → IPFS persistence (level-1 + level-2 CIDs stored)
-   [chain worker]          → dARK.create_ark() submitted and confirmed
-                           → state: published (P)
-3. PUT  /arks/{ark}        → state: update   (U)  — updated metadata queued
-   [chain worker]          → dARK.update_ark() confirmed
-                           → state: published (P)
-4. DELETE /arks/{ark}      → state: tombstone (T)  — irreversible
-5. GET /arks/{ark:path}    → resolver redirects to URL
-   GET /arks/{ark}?info    → full ARK record (JSON)
-```
-
----
 
 ## License
 
-### Software License
-
-The dARK source code is licensed under the **GNU Affero General Public License v3.0 (AGPLv3)**.
-
-- You are free to use, modify, and distribute the software without cost, provided that network services built on dARK also make their source code available (closing the "ASP loophole").
-- See the [LICENSE](LICENSE) file for the full text.
-
-### Documentation License
-
-Documentation and non-code assets are licensed under **Creative Commons Attribution 4.0 International (CC BY 4.0)**.
-
----
-
-## Contributing
-
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for details on how to propose changes.
-
----
-
-## Links
-
-- [ARK Alliance](https://arks.org/)
-- [Hyperledger Besu](https://besu.hyperledger.org/)
-- [DOI: 10.5281/zenodo.7442743](https://doi.org/10.5281/zenodo.7442743)
+Software is licensed under AGPL-3.0-or-later. Documentation is licensed under
+CC BY 4.0 unless noted otherwise.

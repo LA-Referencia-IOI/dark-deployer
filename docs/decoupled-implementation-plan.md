@@ -2,6 +2,8 @@
 
 > **Status: histórico / implementado.** Este documento preserva o plano que
 > orientou a implementação original. Não deve ser usado como runbook atual.
+> As instruções de storage também foram substituídas pelo cluster global em
+> [IPFS Architecture](ipfs-architecture.md).
 > Para operação vigente, consulte
 > [deployer-operations.md](deployer-operations.md) e
 > [decoupled-infrastructure.md](decoupled-infrastructure.md).

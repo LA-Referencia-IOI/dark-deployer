@@ -1,5 +1,9 @@
 # IPFS, IPFS Cluster and Store API in a real environment
 
+> Superseded by [IPFS Architecture](ipfs-architecture.md). The current Store API
+> uses two site-local endpoint lists and verifies global peer/site quorum; the
+> single-endpoint examples below are retained only as historical context.
+
 This document explains how `dark-store-api`, IPFS and IPFS Cluster fit together when the system is deployed as real infrastructure rather than as one local Docker stack.
 
 ## Roles

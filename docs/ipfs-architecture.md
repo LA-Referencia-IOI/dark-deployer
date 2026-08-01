@@ -7,15 +7,15 @@
 | Decision | One global IPFS Cluster distributed across all sites |
 | Consensus | CRDT |
 | Storage nodes per site | Two |
-| Status | Approved design; implementation pending |
+| Status | Implemented; infrastructure failure drills pending |
 | Scope | Production storage, Store API integration, deployment and operations |
 
 This document defines the target IPFS architecture for dARK. It supersedes the
 idea of independent clusters per site and the alternative in which Store API
 instances implement their own cross-site replication protocol.
 
-The current `dark-ipfs` Compose stack remains a local simulation. Production
-will run one Kubo daemon and one IPFS Cluster peer on each storage server.
+`dark-ipfs` now has one Compose layout only: one Kubo daemon and one IPFS
+Cluster peer per storage server.
 
 ## 1. Decision summary
 
@@ -44,7 +44,7 @@ All Cluster peers share:
 - one Cluster network secret;
 - one CRDT pinset;
 - one replication policy;
-- an explicit set of trusted peer IDs.
+- one private Cluster membership boundary protected by its shared secret and VPN.
 
 Every Cluster and Kubo peer keeps a unique persistent identity.
 
@@ -165,6 +165,13 @@ These files are common to every site, distributed outside Git, mounted
 read-only and stored with restrictive permissions. Kubo supports private swarm
 keys through `IPFS_SWARM_KEY_FILE` in its Docker image.
 
+To avoid pre-generating and distributing peer identity files, CRDT uses
+`trusted_peers="*"` inside this secret-protected network. Possession of the
+Cluster secret therefore grants cluster membership and pinset mutation rights.
+The secret must be treated as a high-value credential and rotated if any node
+is decommissioned or compromised. The VPN is an additional network boundary,
+not a replacement for secret protection.
+
 References:
 
 - [Kubo in Docker and private swarms](https://docs.ipfs.tech/install/run-ipfs-inside-docker/)
@@ -194,14 +201,17 @@ The following paths are persistent and unique per server:
 Operators must never copy Kubo or Cluster identity data from one active peer to
 another.
 
-CRDT has no leader. Bootstrap peers are discovery entrypoints only. Every peer
-is configured with at least:
+CRDT has no leader. Bootstrap peers are discovery entrypoints only. Kubo and
+Cluster generate persistent identities on first start. The topology stores VPN
+addresses rather than private identity material; joining nodes query a running
+peer's private API to resolve its peer ID and construct the bootstrap
+multiaddress. Every non-seed peer is configured with:
 
 - its local site partner;
 - one bootstrap address in another site;
 - preferably a second remote bootstrap address in a different failure domain.
 
-Example Cluster peer addresses:
+Resolved Cluster peer addresses have this form:
 
 ```text
 /ip4/10.200.1.11/tcp/9096/p2p/<cluster-peer-a1>
@@ -226,8 +236,8 @@ expected peer count = 2 * N
 CLUSTER_REPLICATION_MIN=3
 CLUSTER_REPLICATION_MAX=<2 * N>
 CLUSTER_DISABLE_REPINNING=false
-STORE_WRITE_MIN_PEERS=3
-STORE_WRITE_MIN_SITES=2
+IPFS_CLUSTER_WRITE_MIN_PEERS=3
+IPFS_CLUSTER_WRITE_MIN_SITES=2
 ```
 
 Because no site has more than two peers, three pinned peers necessarily span at
@@ -256,8 +266,8 @@ The same global cluster can begin with one site and two peers:
 ```ini
 CLUSTER_REPLICATION_MIN=1
 CLUSTER_REPLICATION_MAX=2
-STORE_WRITE_MIN_PEERS=1
-STORE_WRITE_MIN_SITES=1
+IPFS_CLUSTER_WRITE_MIN_PEERS=1
+IPFS_CLUSTER_WRITE_MIN_SITES=1
 ```
 
 With both peers healthy, every CID targets two copies. If one server fails,
@@ -272,8 +282,8 @@ An optional strict single-site profile can require two peers:
 ```ini
 CLUSTER_REPLICATION_MIN=2
 CLUSTER_REPLICATION_MAX=2
-STORE_WRITE_MIN_PEERS=2
-STORE_WRITE_MIN_SITES=1
+IPFS_CLUSTER_WRITE_MIN_PEERS=2
+IPFS_CLUSTER_WRITE_MIN_SITES=1
 ```
 
 That profile pauses minting when either server fails.
@@ -334,8 +344,8 @@ Store API must not treat CID creation alone as durable success. It returns a
 successful storage response only after:
 
 ```text
-pinned peers >= STORE_WRITE_MIN_PEERS
-pinned sites >= STORE_WRITE_MIN_SITES
+pinned peers >= IPFS_CLUSTER_WRITE_MIN_PEERS
+pinned sites >= IPFS_CLUSTER_WRITE_MIN_SITES
 ```
 
 Example durable response:
@@ -377,7 +387,7 @@ IPFS_CLUSTER_API_URLS_JSON=[
   "http://10.200.1.12:9094"
 ]
 
-IPFS_CLUSTER_PROXY_URLS_JSON=[
+IPFS_CLUSTER_PROXY_API_URLS_JSON=[
   "http://10.200.1.11:9095",
   "http://10.200.1.12:9095"
 ]
@@ -421,8 +431,8 @@ Write readiness requires:
 ```text
 at least one local Kubo
 at least one local Cluster Proxy
-healthy peers >= STORE_WRITE_MIN_PEERS
-healthy sites >= STORE_WRITE_MIN_SITES
+healthy peers >= IPFS_CLUSTER_WRITE_MIN_PEERS
+healthy sites >= IPFS_CLUSTER_WRITE_MIN_SITES
 ```
 
 Read readiness does not require the global write quorum.
@@ -545,19 +555,18 @@ policy therefore requires:
 The official Cluster recovery guide explains how peers restore their CRDT state
 from a healthy cluster: [Data, backups and recovery](https://ipfscluster.io/documentation/guides/backups/).
 
-## 20. Required implementation changes
+## 20. Implemented components
 
-### `dark-ipfs`
+### `dark-ipfs` — implemented
 
-- replace the multi-peer single-host production layout with one Kubo/Cluster
-  pair per server;
-- support persistent unique identities;
-- support private swarm and Cluster secret files;
-- configure VPN-only addresses and bootstrap peers;
-- publish site tags;
-- expose configurable replication factors.
+- one Kubo/Cluster pair per server;
+- persistent named volumes and unique identities;
+- private swarm and Cluster secret files;
+- VPN-only published ports and dynamic bootstrap discovery;
+- site tags and site-balanced allocation;
+- topology-derived replication factors.
 
-### `dark-store-api`
+### `dark-store-api` — implemented
 
 - accept ordered lists of local Kubo, Cluster REST and Proxy endpoints;
 - fail over between local endpoints;
@@ -565,15 +574,15 @@ from a healthy cluster: [Data, backups and recovery](https://ipfscluster.io/docu
 - expose separate read and write health;
 - return replication state with the stored CID.
 
-### `dark-deployer`
+### `dark-deployer` — implemented
 
 - add a `storage-node` installation role;
-- accept `SITE_ID`, `NODE_ID` and a topology registry;
+- accept `STORAGE_SITE_ID`, `STORAGE_NODE_ID` and a topology registry;
 - install one storage pair per server;
 - validate exactly two expected peers per site;
-- calculate or validate `replication_max = 2 * N`;
+- calculate `replication_max = 2 * N`;
 - generate Store API endpoint lists;
-- add `storage reconcile` and storage audit commands;
+- provide `storage reconcile` and `storage audit` commands;
 - make restart/status checks topology-aware;
 - document single-site and multi-site profiles.
 

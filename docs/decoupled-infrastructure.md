@@ -1,5 +1,10 @@
 # Decoupled Infrastructure Architecture — Sandbox & Production
 
+> Historical document. Its storage-tier instructions are superseded by the
+> single global-cluster design in [IPFS Architecture](ipfs-architecture.md).
+> Store API now belongs to each apps site and `storage-node` runs only Kubo and
+> one Cluster peer.
+
 ## Overview
 
 In the **developer** profile, the entire dARK stack runs on a single machine.  
