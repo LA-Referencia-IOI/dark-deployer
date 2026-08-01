@@ -78,8 +78,9 @@ def main() -> int:
         if not has_compose_file(target):
             print(f"[SKIP] {relative_path} has no Compose file.")
             continue
-        print(f"[RUN] docker compose up -d in {target}")
-        result = subprocess.run(["docker", "compose", "up", "-d"], cwd=str(target))
+        command = ["make", "up"] if relative_path == "components/storage/dark-ipfs" else ["docker", "compose", "up", "-d"]
+        print(f"[RUN] {' '.join(command)} in {target}")
+        result = subprocess.run(command, cwd=str(target))
         if result.returncode != 0:
             failures.append(relative_path)
             continue
@@ -93,18 +94,17 @@ def main() -> int:
             )
             health_checks.append((relative_path, url, "GET"))
         if relative_path == "components/storage/dark-ipfs":
+            node_env = load_env(target / ".env.node")
+            vpn_address = node_env.get("VPN_ADDRESS", "127.0.0.1")
             health_checks.extend([
                 (
                     relative_path,
-                    env.get("IPFS_API_BASE_URL", DEFAULT_ENDPOINTS["IPFS_API_BASE_URL"]),
+                    f"http://{vpn_address}:5001/api/v0/version",
                     "POST",
                 ),
                 (
                     relative_path,
-                    env.get(
-                        "IPFS_CLUSTER_API_URL",
-                        DEFAULT_ENDPOINTS["IPFS_CLUSTER_API_URL"],
-                    ),
+                    f"http://{vpn_address}:9094/id",
                     "GET",
                 ),
             ])

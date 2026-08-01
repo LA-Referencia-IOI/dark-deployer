@@ -105,6 +105,7 @@ celerybeat.pid
 
 # Environments
 .env
+storage-topology.json
 .env.integration
 .env.integration.secrets
 .venv

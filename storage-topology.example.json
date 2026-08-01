@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "cluster_name": "dark-global",
+  "strict_single_site": false,
+  "sites": [
+    {
+      "id": "site-a",
+      "peers": [
+        {
+          "id": "site-a-storage-1",
+          "vpn_address": "10.200.1.11"
+        },
+        {
+          "id": "site-a-storage-2",
+          "vpn_address": "10.200.1.12"
+        }
+      ]
+    },
+    {
+      "id": "site-b",
+      "peers": [
+        {
+          "id": "site-b-storage-1",
+          "vpn_address": "10.200.2.11"
+        },
+        {
+          "id": "site-b-storage-2",
+          "vpn_address": "10.200.2.12"
+        }
+      ]
+    }
+  ]
+}

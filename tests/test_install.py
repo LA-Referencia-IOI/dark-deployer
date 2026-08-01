@@ -152,8 +152,97 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(target.read_text(), "NEW=value\n")
         self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
+    def test_store_api_env_is_derived_from_both_site_peers(self):
+        root = Path(self.temporary.name)
+        topology_path = root / "topology.json"
+        topology_path.write_text(json.dumps({
+            "version": 1,
+            "cluster_name": "dark-global",
+            "sites": [
+                {
+                    "id": "site-a",
+                    "peers": [
+                        {"id": "site-a-storage-1", "vpn_address": "10.20.1.11"},
+                        {"id": "site-a-storage-2", "vpn_address": "10.20.1.12"},
+                    ],
+                },
+                {
+                    "id": "site-b",
+                    "peers": [
+                        {"id": "site-b-storage-1", "vpn_address": "10.20.2.11"},
+                        {"id": "site-b-storage-2", "vpn_address": "10.20.2.12"},
+                    ],
+                },
+            ],
+        }))
+        store_path = root / "store-api"
+        store_path.mkdir()
+        (store_path / ".env.example").write_text("STORAGE_BACKEND=ipfs_cluster\n")
+        env = {
+            "TYPE": "sandbox",
+            "SANDBOX_STORAGE_TOPOLOGY_FILE": str(topology_path),
+            "SANDBOX_STORAGE_SITE_ID": "site-a",
+        }
+
+        installer.generate_store_api_env_integration(store_path, env)
+
+        generated = installer.load_optional_env(store_path / ".env.integration")
+        self.assertEqual(len(json.loads(generated["IPFS_API_URLS_JSON"])), 2)
+        self.assertEqual(generated["IPFS_CLUSTER_EXPECTED_PEERS"], "4")
+        self.assertEqual(generated["IPFS_CLUSTER_WRITE_MIN_PEERS"], "3")
+        self.assertEqual(generated["IPFS_CLUSTER_WRITE_MIN_SITES"], "2")
+
 
 class ValidationTests(unittest.TestCase):
+    def test_legacy_storage_role_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            installer._selected_tiers("SANDBOX", {"SANDBOX_INSTALL_COMPONENTS": "storage"})
+
+    def test_storage_secrets_have_distinct_valid_formats(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            swarm = root / "swarm.key"
+            cluster = root / "cluster.secret"
+            swarm.write_text(
+                "/key/swarm/psk/1.0.0/\n/base16/\n" + "a" * 64 + "\n"
+            )
+            cluster.write_text("b" * 64 + "\n")
+            swarm.chmod(0o600)
+            cluster.chmod(0o600)
+
+            self.assertEqual(
+                installer._validate_storage_secret_file("SWARM", str(swarm), "swarm"),
+                swarm,
+            )
+            self.assertEqual(
+                installer._validate_storage_secret_file("CLUSTER", str(cluster), "cluster"),
+                cluster,
+            )
+
+            cluster.write_text("not-a-secret\n")
+            with self.assertRaises(SystemExit):
+                installer._validate_storage_secret_file("CLUSTER", str(cluster), "cluster")
+
+    def test_reconcile_only_reapplies_pins(self):
+        topology = installer.load_storage_topology(PROJECT_ROOT / "storage-topology.example.json")
+        calls = []
+
+        def request(urls, method, path, **kwargs):
+            calls.append((tuple(urls), method, path, kwargs))
+            if path == "/allocations":
+                return '{"cid":"bafy-one"}\n{"cid":"bafy-two"}\n'
+            if path == "/pins":
+                return ""
+            return "{}"
+
+        with mock.patch.object(installer, "cluster_request", side_effect=request):
+            installer.reconcile_storage(topology, "site-a")
+
+        mutation_calls = [call for call in calls if call[1] == "POST"]
+        self.assertEqual(len(mutation_calls), 2)
+        self.assertTrue(all(call[2].startswith("/pins/") for call in mutation_calls))
+        self.assertFalse(any(call[1] == "DELETE" for call in calls))
+
     def test_published_key_guard_is_disabled_only_for_developer(self):
         private_key = "11" * 32
         digest = hashlib.sha256(bytes.fromhex(private_key)).hexdigest()
@@ -183,10 +272,15 @@ class ValidationTests(unittest.TestCase):
             "PRODUCTION_DARK_CONTRACT_ADDRESS": "0x" + "1" * 40,
             "PRODUCTION_AUTHORITY_CONTRACT_ADDRESS": "0x" + "2" * 40,
             "PRODUCTION_STORE_API_URL": "https://store.example",
+            "PRODUCTION_STORAGE_SITE_ID": "site-a",
             "ADMIN_PRIVATE_KEY": shared_key,
             "MINTER_PRIVATE_KEY": shared_key,
         }
-        with self.assertRaises(SystemExit):
+        topology = installer.load_storage_topology(PROJECT_ROOT / "storage-topology.example.json")
+        with (
+            mock.patch.object(installer, "configured_storage_topology", return_value=topology),
+            self.assertRaises(SystemExit),
+        ):
             installer.validate_install_configuration("PRODUCTION", env)
 
 

@@ -43,7 +43,12 @@ def clean_docker_stacks() -> list[str]:
         if not target.exists() or not has_compose_file(target):
             print(f"[SKIP] {relative_path} is not an installed Compose stack.")
             continue
-        if not run_command(["docker", "compose", "down", "--volumes"], target):
+        if relative_path == "components/storage/dark-ipfs":
+            print("[INFO] Preserving persistent Kubo and Cluster volumes.")
+            command = ["make", "down"]
+        else:
+            command = ["docker", "compose", "down", "--volumes"]
+        if not run_command(command, target):
             failures.append(relative_path)
     return failures
 

@@ -44,7 +44,8 @@ def main() -> int:
         if not has_compose_file(target):
             print(f"[SKIP] {relative_path} has no Compose file.")
             continue
-        if not run_command(["docker", "compose", "stop"], target):
+        command = ["make", "down"] if relative_path == "components/storage/dark-ipfs" else ["docker", "compose", "stop"]
+        if not run_command(command, target):
             failures.append(relative_path)
 
     if failures:

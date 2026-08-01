@@ -10,6 +10,8 @@ Usage::
 
     python install.py
     python install.py rebuild store-api
+    python install.py storage audit
+    python install.py storage reconcile
 
 Supported profiles:
     - ``developer``  — installs the full developer infrastructure.
@@ -69,6 +71,17 @@ from dark_deployer.process import (
     run_command,
     run_shell,
     strip_url_credentials,
+)
+from dark_deployer.storage import (
+    StorageTopology,
+    StorageTopologyError,
+    cluster_request,
+    entry_cid,
+    load_storage_topology,
+    node_environment,
+    pin_entries,
+    pinned_peer_ids,
+    store_api_environment,
 )
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -476,24 +489,24 @@ def compose_up_stack(
 def print_install_summary(prefix: str, env: dict) -> None:
     """Print a concise summary of the installed local service endpoints."""
     print("\n=== Service Summary ===")
+    install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
 
     rpc_url = env.get("RPC_URL", "http://localhost:8545").strip() or "http://localhost:8545"
     explorer_port = env.get("EXPLORER_PORT", "25000").strip() or "25000"
     explorer_url = f"http://localhost:{explorer_port}"
-    ipfs_api_url    = env.get(f"{prefix}_IPFS_API_URL",     "http://localhost:5001").strip() or "http://localhost:5001"
-    cluster_api_url = env.get(f"{prefix}_IPFS_CLUSTER_URL", "http://localhost:9094").strip() or "http://localhost:9094"
     admin_url = "http://localhost:8000"
     resolver_url = "http://localhost:8002"
     store_api_url = "http://localhost:8003"
     minter_url = "http://localhost:8001"
 
-    print(f"- Blockchain RPC: {rpc_url} [{probe_rpc_block(rpc_url)}]")
+    if install_bc or install_apps:
+        print(f"- Blockchain RPC: {rpc_url} [{probe_rpc_block(rpc_url)}]")
 
-    explorer_selected = bool(get_url(env, f"{prefix}_BLOCKCHAIN_DARK_EXPLORADOR_REPOSITORY_URL"))
+    explorer_selected = install_bc and bool(get_url(env, f"{prefix}_BLOCKCHAIN_DARK_EXPLORADOR_REPOSITORY_URL"))
     if explorer_selected:
         print(f"- Block Explorer: {explorer_url} [{probe_http_status(explorer_url)}]")
 
-    admin_selected = bool(get_url(env, f"{prefix}_CORE_ADMIN_API_REPOSITORY_URL"))
+    admin_selected = install_apps and bool(get_url(env, f"{prefix}_CORE_ADMIN_API_REPOSITORY_URL"))
     if admin_selected:
         print(
             f"- Core Admin API: {admin_url} "
@@ -501,16 +514,16 @@ def print_install_summary(prefix: str, env: dict) -> None:
             f"[docs: {admin_url}/docs]"
         )
 
-    ipfs_selected = (
-        bool(get_url(env, f"{prefix}_IPFS_REPOSITORY_URL"))
-        or bool(env.get(f"{prefix}_IPFS_HOST", "").strip())
-        or bool(env.get(f"{prefix}_IPFS_API_URL", "").strip())
-    )
-    if ipfs_selected:
-        print(f"- IPFS API: {ipfs_api_url} [{probe_ipfs_api_status(ipfs_api_url)}]")
-        print(f"- IPFS Cluster: {cluster_api_url} [{probe_http_status(f'{cluster_api_url}/id')}]")
+    if install_storage or install_apps:
+        topology = configured_storage_topology(prefix, env)
+        site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
+        endpoints = topology.local_endpoints(site_id)
+        for index, ipfs_api_url in enumerate(endpoints["ipfs"], 1):
+            print(f"- Site IPFS {index}: {ipfs_api_url} [{probe_ipfs_api_status(ipfs_api_url)}]")
+        for index, cluster_api_url in enumerate(endpoints["cluster"], 1):
+            print(f"- Site Cluster {index}: {cluster_api_url} [{probe_http_status(f'{cluster_api_url}/id')}]")
 
-    store_api_selected = bool(get_url(env, f"{prefix}_STORE_API_REPOSITORY_URL"))
+    store_api_selected = install_apps and bool(get_url(env, f"{prefix}_STORE_API_REPOSITORY_URL"))
     if store_api_selected:
         print(
             f"- Store API: {store_api_url} "
@@ -518,7 +531,7 @@ def print_install_summary(prefix: str, env: dict) -> None:
             f"[docs: {store_api_url}/docs]"
         )
 
-    resolver_selected = bool(get_url(env, f"{prefix}_RESOLVER_REPOSITORY_URL"))
+    resolver_selected = install_apps and bool(get_url(env, f"{prefix}_RESOLVER_REPOSITORY_URL"))
     if resolver_selected:
         print(
             f"- Core Resolver API: {resolver_url} "
@@ -526,7 +539,7 @@ def print_install_summary(prefix: str, env: dict) -> None:
             f"[docs: {resolver_url}/docs]"
         )
 
-    minter_selected = bool(get_url(env, f"{prefix}_MINTER_REPOSITORY_URL"))
+    minter_selected = install_apps and bool(get_url(env, f"{prefix}_MINTER_REPOSITORY_URL"))
     if minter_selected:
         print(
             f"- Core Minter API: {minter_url} "
@@ -535,7 +548,7 @@ def print_install_summary(prefix: str, env: dict) -> None:
             f"[docs: {minter_url}/docs]"
         )
 
-    core_lib_selected = bool(
+    core_lib_selected = install_apps and bool(
         get_url(env, f"{prefix}_CORE_LIB_REPOSITORY_URL")
         or get_url(env, f"{prefix}_ORCHESTRATOR_REPOSITORY_URL")
     )
@@ -1324,7 +1337,7 @@ def _generate_root_env_integration_blockchain(env: dict) -> None:
     abi_note = " (+ ABI)" if dark_abi_json else ""
     print(
         f"[OK] Generated root '.env.integration' with blockchain connection vars{abi_note}.\n"
-        "     Copy this public file to the storage and/or apps server.\n"
+        "     Copy this public file to each apps server.\n"
         "     Copy '.env.integration.secrets' only to an apps server that must sign transactions."
     )
 
@@ -1332,22 +1345,12 @@ def _generate_root_env_integration_blockchain(env: dict) -> None:
 def _update_root_env_integration_storage(env: dict, prefix: str) -> None:
     store_api_url = env.get(f"{prefix}_STORE_API_URL", "").strip()
     if not store_api_url:
-        # Fallback: Docker service name — only correct when apps and storage share
-        # the same server (install_all). The wizard should have set STORE_API_URL
-        # to the external address for dedicated storage servers.
         store_api_url = "http://store-api:8003"
-        print(
-            "[WARNING] STORE_API_URL not set — using Docker service name 'http://store-api:8003'.\n"
-            f"          Set {prefix}_STORE_API_URL in .env if apps run on a separate server."
-        )
     _write_root_env_integration({
         "METADATA_STORAGE_TYPE":  "store_api",
         "METADATA_STORE_API_URL": store_api_url,
     })
-    print(
-        "[OK] Updated root '.env.integration' with storage connection vars.\n"
-        "     Copy this file to the apps server before running the services install."
-    )
+    print("[OK] Updated root '.env.integration' with the site-local Store API URL.")
 
 
 def validate_root_env_integration() -> None:
@@ -1355,16 +1358,13 @@ def validate_root_env_integration() -> None:
         return
     print(
         "\n[ERROR] Root '.env.integration' not found.\n"
-        "\n  This file is generated by the blockchain and storage server installs."
+        "\n  This file is generated by the blockchain installation."
         " Copy it to this server before running the services install.\n"
         "\n  Steps:\n"
         "    1. On the blockchain server: run the installer — it generates .env.integration\n"
         "       and .env.integration.secrets\n"
-        "    2. On the storage server: copy .env.integration there and run the installer"
-        " — it adds storage vars\n"
-        "    3. Copy the final public file from storage and the secret file directly"
-        " from blockchain to this directory\n"
-        "    4. Re-run the installer\n"
+        "    2. Copy the public file and signer secret directly to this apps server\n"
+        "    3. Re-run the installer\n"
         f"\n  Expected path: {_ROOT_ENV_INTEGRATION.resolve()}"
     )
     sys.exit(1)
@@ -1441,16 +1441,6 @@ _BLOCKCHAIN_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
     ),
 ]
 
-_APPS_STORAGE_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
-    ("{prefix}_STORE_API_URL", "Store API URL (used by minter/resolver to reach storage)", "METADATA_STORE_API_URL"),
-]
-
-_REMOTE_IPFS_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
-    ("{prefix}_IPFS_API_URL",     "IPFS HTTP API URL",   None),
-    ("{prefix}_IPFS_CLUSTER_URL", "IPFS Cluster API URL", None),
-]
-
-
 def _missing_required_fields(
     prefix: str, env: dict, fields: list[tuple[str, str, Optional[str]]]
 ) -> list[tuple[str, str, Optional[str]]]:
@@ -1514,15 +1504,6 @@ def _apply_default_storage_repo_urls(prefix: str, env: dict) -> None:
         print("\n  [INFO] Using default storage repository URLs (not set in .env):")
         for key, url in applied:
             print(f"    - {key} = {url}")
-
-
-def _default_store_api_url(env: dict, prefix: str) -> str:
-    """Return the configured store-api URL, or the same-host Docker service name default."""
-    current = env.get(f"{prefix}_STORE_API_URL", "").strip()
-    if current:
-        return current
-    print("  [INFO] STORE_API_URL not set — using Docker service name 'http://store-api:8003'.")
-    return "http://store-api:8003"
 
 
 def _derive_host_from_url(url: str) -> str:
@@ -1783,49 +1764,35 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
 
 
 def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
-    """Generate .env.integration for dark-store-api from installed IPFS settings."""
+    """Generate Store API failover and quorum settings from the global topology."""
     template_env = load_optional_env(store_api_path / ".env.example")
 
     _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
     prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
-
-    ipfs_host    = env.get(f"{prefix}_IPFS_HOST", "").strip()
-    ipfs_api_env = env.get(f"{prefix}_IPFS_API_URL", "").strip()
-
-    if ipfs_host:
-        ipfs_api_url       = ipfs_api_env or f"http://{ipfs_host}:5001"
-        ipfs_cluster_url   = env.get(f"{prefix}_IPFS_CLUSTER_URL", f"http://{ipfs_host}:9094").strip()
-        ipfs_cluster_proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", ipfs_cluster_url.replace(":9094", ":9095")).strip()
-    elif ipfs_api_env:
-        ipfs_api_url       = ipfs_api_env
-        ipfs_cluster_url   = env.get(f"{prefix}_IPFS_CLUSTER_URL", "http://localhost:9094").strip()
-        ipfs_cluster_proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", "http://localhost:9095").strip()
-    else:
-        ipfs_api_url       = "http://ipfs0:5001"
-        ipfs_cluster_url   = "http://cluster0:9094"
-        ipfs_cluster_proxy = "http://cluster0:9095"
 
     integration_env = {
         **template_env,
         "STORE_API_HOST": template_env.get("STORE_API_HOST", "0.0.0.0").strip(),
         "STORE_API_PORT": "8003",
         "STORAGE_BACKEND": template_env.get("STORAGE_BACKEND", "ipfs_cluster").strip(),
-        "IPFS_API_URL":               ipfs_api_url,
-        "IPFS_CLUSTER_API_URL":       ipfs_cluster_url,
-        "IPFS_CLUSTER_PROXY_API_URL": ipfs_cluster_proxy,
-        "IPFS_ADD_MODE": env.get(
-            "IPFS_ADD_MODE",
-            template_env.get("IPFS_ADD_MODE", "cluster_proxy"),
-        ).strip(),
+        "IPFS_ADD_MODE": "cluster_proxy",
         "IPFS_HEALTH_CACHE_TTL_SECONDS": env.get(
             "IPFS_HEALTH_CACHE_TTL_SECONDS",
             template_env.get("IPFS_HEALTH_CACHE_TTL_SECONDS", "10"),
         ).strip(),
-        "IPFS_CLUSTER_MIN_PEERS": env.get(
-            "IPFS_CLUSTER_MIN_PEERS",
-            template_env.get("IPFS_CLUSTER_MIN_PEERS", "1"),
-        ).strip(),
     }
+
+    topology = configured_storage_topology(prefix, env)
+    site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
+    integration_env.update(store_api_environment(topology, site_id))
+    integration_env["IPFS_REPLICATION_CONFIRM_TIMEOUT_SECONDS"] = env.get(
+        "IPFS_REPLICATION_CONFIRM_TIMEOUT_SECONDS",
+        template_env.get("IPFS_REPLICATION_CONFIRM_TIMEOUT_SECONDS", "120"),
+    ).strip()
+    integration_env["IPFS_REPLICATION_CONFIRM_INTERVAL_SECONDS"] = env.get(
+        "IPFS_REPLICATION_CONFIRM_INTERVAL_SECONDS",
+        template_env.get("IPFS_REPLICATION_CONFIRM_INTERVAL_SECONDS", "2"),
+    ).strip()
 
     env_path = store_api_path / ".env.integration"
     write_env_secure(env_path, integration_env)
@@ -2575,8 +2542,19 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
         target_dir=target,
     )
 
+    topology = configured_storage_topology(prefix, env)
+    node_id = env.get(f"{prefix}_STORAGE_NODE_ID", "").strip()
+    generated = node_environment(
+        topology,
+        node_id,
+        env[f"{prefix}_IPFS_SWARM_KEY_FILE"].strip(),
+        env[f"{prefix}_IPFS_CLUSTER_SECRET_FILE"].strip(),
+    )
+    node_env_path = Path(target).resolve() / ".env.node"
+    write_env_secure(node_env_path, generated)
+    print(f"[OK] Generated '{node_env_path}' for {node_id}.")
+
     if do_setup:
-        ensure_dark_net()
         setup_repo(target_dir=target, commands_str=commands)
     else:
         print("[INFO] SETUP=False — 'dark-ipfs' cloned, setup skipped.\n")
@@ -2696,12 +2674,7 @@ def install_profile(prefix: str, env: dict) -> None:
     :param env: Dictionary of environment variables loaded from ``.env``.
     :type env: dict
     """
-    components_str = env.get(f"{prefix}_INSTALL_COMPONENTS", "all").strip()
-    components     = {c.strip().lower() for c in components_str.split(",")}
-    install_all    = "all" in components
-    install_bc     = install_all or "blockchain" in components
-    install_ipfs   = install_all or "storage"    in components
-    install_apps   = install_all or "apps"       in components
+    install_bc, install_ipfs, install_apps = _selected_tiers(prefix, env)
 
     if install_bc:
         blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
@@ -2717,8 +2690,7 @@ def install_profile(prefix: str, env: dict) -> None:
         print("[INFO] Blockchain not selected — skipping.")
         env["_BLOCKCHAIN_CO_LOCATED"] = "false"
 
-    # Pure apps mode: root .env.integration must be provided by the operator
-    # (generated on blockchain + storage servers and copied here).
+    # Pure apps mode imports blockchain contract and signer handoff data.
     if install_apps and not install_bc and not install_ipfs:
         validate_root_env_integration()
         _merge_root_env_integration_into_env(
@@ -2736,22 +2708,16 @@ def install_profile(prefix: str, env: dict) -> None:
         install_core_admin_api(prefix=prefix, env=env)
 
     if install_ipfs:
-        ipfs_host = env.get(f"{prefix}_IPFS_HOST", "").strip()
-        if ipfs_host:
-            print(f"[INFO] IPFS tier is remote ({ipfs_host}) — skipping local install.")
-        else:
-            install_dark_ipfs(prefix=prefix, env=env)
-        # dark-store-api belongs exclusively to the storage tier: it runs on the
-        # same server as dark-ipfs regardless of whether apps are also being installed.
-        install_dark_store_api(prefix=prefix, env=env)
-        _update_root_env_integration_storage(env=env, prefix=prefix)
-        # Merge storage URL (and ABI if not yet present) so resolver and minter see them.
-        _merge_root_env_integration_into_env(env=env, prefix=prefix)
+        install_dark_ipfs(prefix=prefix, env=env)
     else:
-        print("[INFO] Storage not selected — skipping.")
+        print("[INFO] Storage node not selected — skipping.")
 
     if install_apps:
-        # store-api is not installed here: it lives on the storage server.
+        # Every application site owns a local Store API backed by both local peers.
+        env[f"{prefix}_STORE_API_URL"] = "http://store-api:8003"
+        install_dark_store_api(prefix=prefix, env=env)
+        _update_root_env_integration_storage(env=env, prefix=prefix)
+        _merge_root_env_integration_into_env(env=env, prefix=prefix)
         install_core_resolver_api(prefix=prefix, env=env)
         install_single_component(name="MINTER", prefix=prefix, env=env)
         install_dashboard(prefix=prefix, env=env)
@@ -2763,16 +2729,29 @@ def _selected_tiers(prefix: str, env: dict) -> tuple[bool, bool, bool]:
         for item in env.get(f"{prefix}_INSTALL_COMPONENTS", "all").split(",")
         if item.strip()
     }
-    unknown = components - {"all", "apps", "blockchain", "storage"}
+    unknown = components - {"all", "apps", "blockchain", "storage-node"}
     if unknown:
         print(f"[ERROR] Unknown install components: {', '.join(sorted(unknown))}")
         sys.exit(1)
     install_all = "all" in components
     return (
         install_all or "blockchain" in components,
-        install_all or "storage" in components,
+        install_all or "storage-node" in components,
         install_all or "apps" in components,
     )
+
+
+def configured_storage_topology(prefix: str, env: dict) -> StorageTopology:
+    """Load the profile's configured topology, resolving paths from the repo root."""
+    raw_path = env.get(f"{prefix}_STORAGE_TOPOLOGY_FILE", "storage-topology.json").strip()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    try:
+        return load_storage_topology(path)
+    except StorageTopologyError as exc:
+        print(f"[ERROR] Invalid global storage topology: {exc}")
+        sys.exit(1)
 
 
 def _validate_http_url(name: str, value: str) -> None:
@@ -2782,6 +2761,39 @@ def _validate_http_url(name: str, value: str) -> None:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         print(f"[ERROR] {name} must be an absolute HTTP(S) URL: {value!r}")
         sys.exit(1)
+
+
+def _validate_storage_secret_file(name: str, path_value: str, kind: str) -> Path:
+    """Validate an external storage secret without printing its contents."""
+    path = Path(path_value)
+    if not path.is_absolute():
+        print(f"[ERROR] {name} must be an absolute secret file path.")
+        sys.exit(1)
+    try:
+        raw = path.read_text().strip()
+        mode = path.stat().st_mode & 0o777
+    except OSError as exc:
+        print(f"[ERROR] {name} is not a readable secret file: {exc}")
+        sys.exit(1)
+    if mode & 0o077:
+        print(f"[ERROR] {name} permissions must not grant group/world access (mode {mode:04o}).")
+        sys.exit(1)
+    if kind == "cluster":
+        valid = bool(re.fullmatch(r"[0-9a-fA-F]{64}", raw))
+        description = "exactly 64 hexadecimal characters"
+    else:
+        lines = raw.splitlines()
+        valid = (
+            len(lines) == 3
+            and lines[0] == "/key/swarm/psk/1.0.0/"
+            and lines[1] == "/base16/"
+            and bool(re.fullmatch(r"[0-9a-fA-F]{64}", lines[2]))
+        )
+        description = "a Kubo /key/swarm/psk/1.0.0/ base16 key"
+    if not valid:
+        print(f"[ERROR] {name} must contain {description}.")
+        sys.exit(1)
+    return path
 
 
 def validate_install_configuration(prefix: str, env: dict) -> None:
@@ -2799,12 +2811,6 @@ def validate_install_configuration(prefix: str, env: dict) -> None:
         f"{prefix}_STORE_API_URL",
         env.get(f"{prefix}_STORE_API_URL", "").strip(),
     )
-    for suffix in ("IPFS_API_URL", "IPFS_CLUSTER_URL", "IPFS_CLUSTER_PROXY_URL"):
-        _validate_http_url(
-            f"{prefix}_{suffix}",
-            env.get(f"{prefix}_{suffix}", "").strip(),
-        )
-
     for key in (
         f"{prefix}_DARK_CONTRACT_ADDRESS",
         f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
@@ -2818,9 +2824,41 @@ def validate_install_configuration(prefix: str, env: dict) -> None:
         missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
         _abort_missing_fields(missing, context="using a remote blockchain tier")
 
-    if install_apps and not install_storage:
-        missing = _missing_required_fields(prefix, env, _APPS_STORAGE_REQUIRED_FIELDS)
-        _abort_missing_fields(missing, context="using a remote storage tier")
+    if install_storage or install_apps:
+        topology = configured_storage_topology(prefix, env)
+        site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
+        if not site_id:
+            print(f"[ERROR] {prefix}_STORAGE_SITE_ID is required in global-cluster mode.")
+            sys.exit(1)
+        try:
+            topology.site_peers(site_id)
+        except StorageTopologyError as exc:
+            print(f"[ERROR] {exc}")
+            sys.exit(1)
+        if install_storage:
+            node_id = env.get(f"{prefix}_STORAGE_NODE_ID", "").strip()
+            try:
+                node = topology.peer(node_id)
+            except StorageTopologyError as exc:
+                print(f"[ERROR] {exc}")
+                sys.exit(1)
+            if node.site != site_id:
+                print(
+                    f"[ERROR] Storage node {node_id!r} belongs to {node.site!r}, "
+                    f"not configured site {site_id!r}."
+                )
+                sys.exit(1)
+            swarm_key = f"{prefix}_IPFS_SWARM_KEY_FILE"
+            cluster_key = f"{prefix}_IPFS_CLUSTER_SECRET_FILE"
+            swarm_path = _validate_storage_secret_file(
+                swarm_key, env.get(swarm_key, "").strip(), "swarm"
+            )
+            cluster_path = _validate_storage_secret_file(
+                cluster_key, env.get(cluster_key, "").strip(), "cluster"
+            )
+            if swarm_path == cluster_path:
+                print("[ERROR] Kubo and Cluster must use separate secret files.")
+                sys.exit(1)
 
     profile = env.get("TYPE", "developer").lower()
     role_keys = {
@@ -2851,14 +2889,148 @@ def print_install_plan(prefix: str, env: dict) -> None:
     print("\n=== Installation plan ===")
     print(f"Profile     : {env.get('TYPE', '').upper()}")
     print(f"Blockchain  : {'remote' if env.get(f'{prefix}_BLOCKCHAIN_HOST', '').strip() else ('local' if install_bc else 'skip')}")
-    print(f"Storage     : {'remote IPFS' if env.get(f'{prefix}_IPFS_HOST', '').strip() else ('local' if install_storage else 'skip')}")
+    print(f"Storage node: {'install' if install_storage else 'skip'}")
     print(f"Apps        : {'install' if install_apps else 'skip'}")
+    if install_storage or install_apps:
+        topology = configured_storage_topology(prefix, env)
+        policy = topology.policy
+        print(f"IPFS cluster: {topology.cluster_name} (global CRDT)")
+        print(f"Site / node : {env.get(f'{prefix}_STORAGE_SITE_ID', '-')} / {env.get(f'{prefix}_STORAGE_NODE_ID', '-')}")
+        print(f"Topology    : {len(topology.sites)} site(s), {len(topology.peers)} peer(s)")
+        print(
+            "Replication : "
+            f"min={policy.replication_min}, max={policy.replication_max}, "
+            f"write={policy.write_min_peers} peer(s)/{policy.write_min_sites} site(s)"
+        )
     configured_roles = [
         role for role in ("deployer", "admin", "minter")
         if get_role_private_key(env, role)
     ]
     print(f"Signers     : {', '.join(configured_roles) if configured_roles else 'not yet generated'}")
     print("No files, repositories, containers, or networks were changed.")
+
+
+def _entry_pinned_sites(topology: StorageTopology, entry: dict) -> set[str]:
+    """Resolve pinned status peer names/IDs to topology site IDs."""
+    peer_sites = topology.peer_sites()
+    sites: set[str] = set()
+    peer_map = entry.get("peer_map", {})
+    if not isinstance(peer_map, dict):
+        return sites
+    for peer_id, value in peer_map.items():
+        if not isinstance(value, dict) or str(value.get("status", "")).lower() != "pinned":
+            continue
+        site = peer_sites.get(str(value.get("peername", ""))) or peer_sites.get(str(peer_id))
+        if site:
+            sites.add(site)
+    return sites
+
+
+def audit_storage(topology: StorageTopology, site_id: str) -> dict[str, int]:
+    """Inspect global pin status without changing allocations."""
+    endpoints = topology.local_endpoints(site_id)["cluster"]
+    entries = pin_entries(cluster_request(endpoints, "GET", "/pins", timeout=60.0))
+    policy = topology.policy
+    summary = {
+        "pins": 0,
+        "below_minimum": 0,
+        "below_full_replication": 0,
+        "pinning": 0,
+        "errors": 0,
+    }
+    for entry in entries:
+        cid = entry_cid(entry)
+        if not cid:
+            continue
+        summary["pins"] += 1
+        pinned_count = len(pinned_peer_ids(entry))
+        pinned_sites = len(_entry_pinned_sites(topology, entry))
+        statuses = [
+            str(value.get("status", "")).lower()
+            for value in entry.get("peer_map", {}).values()
+            if isinstance(value, dict)
+        ]
+        if pinned_count < policy.replication_min:
+            summary["below_minimum"] += 1
+            print(
+                f"[UNDER-REPLICATED] {cid}: {pinned_count} peer(s), "
+                f"{pinned_sites} site(s)"
+            )
+        if pinned_count < policy.replication_max:
+            summary["below_full_replication"] += 1
+        if any("pinning" in status or "queued" in status for status in statuses):
+            summary["pinning"] += 1
+        if any("error" in status for status in statuses):
+            summary["errors"] += 1
+
+    print("\n=== Global storage audit ===")
+    print(f"Cluster             : {topology.cluster_name}")
+    print(f"Expected topology   : {len(topology.sites)} site(s), {len(topology.peers)} peer(s)")
+    print(f"Pins inspected      : {summary['pins']}")
+    print(f"Below minimum       : {summary['below_minimum']}")
+    print(f"Below full target   : {summary['below_full_replication']}")
+    print(f"Pinning/queued      : {summary['pinning']}")
+    print(f"Pin errors          : {summary['errors']}")
+    return summary
+
+
+def reconcile_storage(topology: StorageTopology, site_id: str) -> dict[str, int]:
+    """Reapply the topology replication policy to every pin; never unpin."""
+    endpoints = topology.local_endpoints(site_id)["cluster"]
+    allocations = pin_entries(
+        cluster_request(endpoints, "GET", "/allocations", timeout=60.0)
+    )
+    policy = topology.policy
+    cids = [cid for entry in allocations if (cid := entry_cid(entry))]
+    print(
+        f"[INFO] Reapplying min={policy.replication_min}, "
+        f"max={policy.replication_max} to {len(cids)} pin(s)."
+    )
+    failures = 0
+    for index, cid in enumerate(cids, 1):
+        try:
+            cluster_request(
+                endpoints,
+                "POST",
+                f"/pins/{urllib.parse.quote(cid, safe='')}",
+                query={
+                    "replication-min": str(policy.replication_min),
+                    "replication-max": str(policy.replication_max),
+                },
+                timeout=60.0,
+            )
+        except RuntimeError as exc:
+            failures += 1
+            print(f"[ERROR] Could not reconcile {cid}: {exc}")
+        if index % 100 == 0:
+            print(f"[INFO] Reconciled {index}/{len(cids)} pins.")
+    if failures:
+        print(f"[WARNING] Reconciliation completed with {failures} failed pin(s).")
+    else:
+        print(f"[OK] Reconciliation requested for all {len(cids)} pin(s); no pins were removed.")
+    return audit_storage(topology, site_id)
+
+
+def run_storage_operation(action: str, prefix: str, env: dict) -> None:
+    """Dispatch global storage audit/reconciliation commands."""
+    topology = configured_storage_topology(prefix, env)
+    site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
+    if not site_id:
+        print(f"[ERROR] {prefix}_STORAGE_SITE_ID is required.")
+        sys.exit(1)
+    try:
+        topology.site_peers(site_id)
+    except StorageTopologyError as exc:
+        print(f"[ERROR] {exc}")
+        sys.exit(1)
+    summary = (
+        audit_storage(topology, site_id)
+        if action == "audit"
+        else reconcile_storage(topology, site_id)
+    )
+    if summary["below_minimum"] or summary["errors"]:
+        print("[ERROR] Global storage is below its required durability policy.")
+        sys.exit(2)
 
 
 # ─── Setup wizard ────────────────────────────────────────────────────────────
@@ -2948,39 +3120,6 @@ def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
     return env
 
 
-def _wizard_ipfs_tier(prefix: str, env: dict) -> dict:
-    """Collect IPFS tier topology — selection only, no free-text entry.
-
-    "This server" only needs the store-api URL that the apps tier will use
-    to reach it, which defaults to the Docker service name when unset.
-    "Remote" means dark-store-api runs here but talks to an external IPFS
-    daemon/cluster, so IPFS_API_URL/IPFS_CLUSTER_URL must already be set.
-    """
-    location = _ask_choice(
-        "Where will the IPFS tier be installed?",
-        [
-            "This server  — install locally (single node)",
-            "Remote server — already deployed or will be deployed separately",
-        ],
-    )
-    if location == 1:
-        for key in (
-            f"{prefix}_IPFS_HOST",
-            f"{prefix}_IPFS_EXTRA_NODES",
-            f"{prefix}_IPFS_API_URL",
-            f"{prefix}_IPFS_CLUSTER_URL",
-            f"{prefix}_IPFS_CLUSTER_PROXY_URL",
-        ):
-            env.pop(key, None)
-        env[f"{prefix}_STORE_API_URL"] = _default_store_api_url(env, prefix)
-        return env
-
-    missing = _missing_required_fields(prefix, env, _REMOTE_IPFS_REQUIRED_FIELDS)
-    _abort_missing_fields(missing, context="a remote IPFS tier")
-    env[f"{prefix}_IPFS_HOST"] = _derive_host_from_url(env[f"{prefix}_IPFS_API_URL"])
-    return env
-
-
 def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
     """Print a summary of all wizard choices before proceeding."""
     print("\n" + "─" * 60)
@@ -3010,19 +3149,12 @@ def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
     else:
         print("  Blockchain      : local")
 
-    ipfs_host = env.get(f"{prefix}_IPFS_HOST", "")
-    if ipfs_host:
-        print(f"  IPFS            : remote — {ipfs_host}")
-        print(f"  IPFS API        : {env.get(f'{prefix}_IPFS_API_URL', '')}")
-        print(f"  IPFS Cluster    : {env.get(f'{prefix}_IPFS_CLUSTER_URL', '')}")
-        proxy = env.get(f"{prefix}_IPFS_CLUSTER_PROXY_URL", "")
-        if proxy:
-            print(f"  Cluster proxy   : {proxy}")
-        extra = env.get(f"{prefix}_IPFS_EXTRA_NODES", "")
-        if extra:
-            print(f"  Extra IPFS nodes: {extra}")
-    else:
-        print("  IPFS            : local")
+    if {"all", "apps", "storage-node"} & {
+        value.strip() for value in components.split(",")
+    }:
+        print(f"  Storage site    : {env.get(f'{prefix}_STORAGE_SITE_ID', '(not configured)')}")
+        print(f"  Storage node    : {env.get(f'{prefix}_STORAGE_NODE_ID', '(apps only)')}")
+        print(f"  Topology file   : {env.get(f'{prefix}_STORAGE_TOPOLOGY_FILE', 'storage-topology.json')}")
     print("─" * 60)
 
 
@@ -3068,29 +3200,27 @@ def run_setup_wizard(env: dict) -> dict:
         component_choice = _ask_choice(
             "Which components will be installed on this server?",
             [
-                "All               — blockchain + apps + storage",
-                "Apps only         — application services (blockchain and IPFS are elsewhere)",
+                "All               — blockchain + apps + one storage node",
+                "Apps only         — application services + site-local Store API",
                 "Blockchain only   — only the blockchain tier",
-                "Storage only      — only the IPFS storage tier",
+                "Storage node only — one Kubo + Cluster peer",
             ],
-            default={"all": 1, "apps": 2, "blockchain": 3, "storage": 4}.get(
+            default={"all": 1, "apps": 2, "blockchain": 3, "storage-node": 4}.get(
                 env.get(f"{prefix}_INSTALL_COMPONENTS", "all").strip(), 1
             ),
         )
-        component_map = {1: "all", 2: "apps", 3: "blockchain", 4: "storage"}
+        component_map = {1: "all", 2: "apps", 3: "blockchain", 4: "storage-node"}
         selected = component_map[component_choice]
         env[f"{prefix}_INSTALL_COMPONENTS"] = selected
 
         if selected == "all":
             env = _wizard_blockchain_tier(prefix=prefix, env=env)
-            env = _wizard_ipfs_tier(prefix=prefix, env=env)
             handoff_authoritative = bool(
                 env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
                 and _ROOT_ENV_INTEGRATION.exists()
             )
         elif selected == "apps":
-            # Pure apps mode: blockchain and storage connection info must already
-            # be present (root .env.integration copied here, or set in .env).
+            # Pure apps mode only imports blockchain handoff data. Store API is local.
             validate_root_env_integration()
             _merge_root_env_integration_into_env(
                 env=env,
@@ -3099,7 +3229,6 @@ def run_setup_wizard(env: dict) -> dict:
             )
             handoff_authoritative = True
             missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
-            missing += _missing_required_fields(prefix, env, _APPS_STORAGE_REQUIRED_FIELDS)
             _abort_missing_fields(missing, context='installing "apps"')
         elif selected == "blockchain":
             _apply_local_blockchain_defaults(env)
@@ -3112,15 +3241,7 @@ def run_setup_wizard(env: dict) -> dict:
             ):
                 env.pop(key, None)
             _apply_default_blockchain_repo_urls(prefix=prefix, env=env)
-        elif selected == "storage":
-            for key in (
-                f"{prefix}_IPFS_HOST",
-                f"{prefix}_IPFS_EXTRA_NODES",
-                f"{prefix}_IPFS_API_URL",
-                f"{prefix}_IPFS_CLUSTER_URL",
-                f"{prefix}_IPFS_CLUSTER_PROXY_URL",
-            ):
-                env.pop(key, None)
+        elif selected == "storage-node":
             _apply_default_storage_repo_urls(prefix=prefix, env=env)
 
     _print_wizard_summary(install_type=install_type, prefix=prefix, env=env)
@@ -3184,6 +3305,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="Verify that components.lock.json matches installed repositories.",
+    )
+    storage_parser = subparsers.add_parser(
+        "storage",
+        help="Audit or reconcile the global IPFS Cluster.",
+    )
+    storage_parser.add_argument(
+        "action",
+        choices=("audit", "reconcile"),
+        help="Audit is read-only; reconcile reapplies replication policy without unpinning.",
     )
 
     rebuild_parser = subparsers.add_parser(
@@ -3265,15 +3395,19 @@ def main() -> None:
         generate_component_lock(check=args.check)
         return
 
-    if args.command not in {"validate", "plan"}:
+    if args.command not in {"validate", "plan", "storage"}:
         _ensure_docker_group()
 
     env = load_env()
 
-    if args.command not in {"rebuild", "validate", "plan"}:
+    if args.command not in {"rebuild", "validate", "plan", "storage"}:
         env = run_setup_wizard(env)
 
     install_type, prefix = resolve_profile_prefix(env)
+
+    if args.command == "storage":
+        run_storage_operation(args.action, prefix, env)
+        return
 
     if args.command in {"validate", "plan"}:
         install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
