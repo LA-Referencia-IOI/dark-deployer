@@ -26,12 +26,13 @@ Components installed (per profile):
     - **minter**
     - **dashboard**
 
-Command format in ``.env``::
+Preferred command format in ``.env``::
 
-    {PREFIX}_{COMPONENT}_COMMANDS=cmd1|cmd2|cmd3
+    {PREFIX}_{COMPONENT}_COMMANDS_JSON=["cmd1","cmd2","producer | consumer"]
 
-Commands are separated by ``|`` and executed sequentially inside the
-cloned repository directory. Shell syntax (globs, redirects) is supported.
+Legacy ``COMMANDS=cmd1|cmd2`` values remain supported. JSON commands are
+executed sequentially inside the cloned repository directory and preserve
+shell syntax such as pipes, globs, and redirects within each command.
 
 Selective rebuilds::
 
@@ -42,22 +43,33 @@ Selective rebuilds::
 """
 
 import argparse
+import configparser
 import grp
+import hashlib
+import http.client
+import json
 import os
 import platform
+import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
-from pathlib import Path
-import configparser
-import re
-from typing import Optional
-import json
-import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+from typing import Optional
+
+from dark_deployer.commands import get_commands, parse_commands
+from dark_deployer.files import parse_env_file, write_env_secure, write_text_secure
+from dark_deployer.process import (
+    redact_url_credentials,
+    run_command,
+    run_shell,
+    strip_url_credentials,
+)
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -85,6 +97,22 @@ def _ensure_docker_group() -> None:
 PROJECT_ROOT = Path(__file__).resolve().parent
 SHARED_VENV_DIR = PROJECT_ROOT / "venv"
 MIN_PYTHON_VERSION = (3, 10)
+COMPONENT_LOCK_PATH = PROJECT_ROOT / "components.lock.json"
+COMPONENT_INSTALL_PATHS = {
+    "dark-env": "components/blockchain/dark-env",
+    "dark-dapp": "components/blockchain/dark-dapp",
+    "dark-explorador": "components/blockchain/dark-explorador",
+    "dark-ipfs": "components/storage/dark-ipfs",
+    "dark-core-lib": "components/libraries/dark-core-lib",
+    "dark-core-admin-api": "components/services/dark-core-admin-api",
+    "dark-core-resolver-api": "components/services/dark-core-resolver-api",
+    "dark-store-api": "components/services/dark-store-api",
+    "dark-core-minter-api": "components/services/dark-core-minter-api",
+    "dashboard-web": "components/frontend/dashboard-web",
+}
+_LEGACY_EXAMPLE_PRIVATE_KEY_SHA256 = (
+    "c54ae1c9bcee975e5b1409b3b4129b5fadcb0d61ff945a52e0a6d192c2d37ea7"
+)
 
 
 def ensure_supported_python() -> None:
@@ -101,47 +129,12 @@ def ensure_supported_python() -> None:
     sys.exit(1)
 
 
-def parse_env_file(filepath: Path, required: bool = True) -> dict:
-    """Parse an env-style file and return its contents as a dictionary.
-
-    Lines starting with ``#`` and empty lines are ignored.
-    Only lines containing ``=`` are parsed.
-
-    :param filepath: Path to the env-style file.
-    :type filepath: Path
-    :param required: Whether missing files should raise a fatal error.
-    :type required: bool
-    :returns: Dictionary mapping variable names to their values.
-    :rtype: dict
-    :raises SystemExit: If the file is required but does not exist.
-    """
-    env: dict = {}
-
-    if not filepath.exists():
-        if required:
-            print(
-                f"[ERROR] '{filepath}' not found. "
-                "Copy .env.example to .env and fill in the values."
-            )
-            sys.exit(1)
-        return env
-
-    with open(filepath) as f:
-        for line in f:
-            line = line.strip()
-            # Skip empty lines and comments
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                key, _, value = line.partition("=")
-                env[key.strip()] = value.strip()
-
-    return env
-
-
 def load_env(filepath: str = ".env") -> dict:
     """Parse a required ``.env`` file and return its contents."""
-    return parse_env_file(Path(filepath), required=True)
+    path = Path(filepath)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return parse_env_file(path, required=True)
 
 
 def load_optional_env(filepath: Path) -> dict:
@@ -149,49 +142,86 @@ def load_optional_env(filepath: Path) -> dict:
     return parse_env_file(filepath, required=False)
 
 
-def run_shell(
-    cmd: str,
-    cwd: str = None,
-    timeout_seconds: int | None = None,
-    compose_plain: bool = False,
-) -> None:
-    """Execute a single shell command string and exit the process on failure.
-
-    The command is executed through the shell, so globs, pipes, and other
-    shell syntax are supported within each individual command string.
-
-    :param cmd: Shell command to execute.
-    :type cmd: str
-    :param cwd: Working directory for the command. Defaults to ``None``.
-    :type cwd: str, optional
-    :param timeout_seconds: Optional timeout for commands that should not run forever.
-    :type timeout_seconds: int, optional
-    :param compose_plain: Force non-interactive Docker Compose progress output.
-    :type compose_plain: bool
-    :raises SystemExit: If the command returns a non-zero exit code.
-    """
-    print(f"[RUN] {cmd}")
-    run_env = None
-    if compose_plain:
-        run_env = os.environ.copy()
-        run_env.setdefault("COMPOSE_PROGRESS", "plain")
-        run_env.setdefault("BUILDKIT_PROGRESS", "plain")
-
+def load_component_locks() -> dict:
+    """Load and validate immutable component commit locks."""
+    if not COMPONENT_LOCK_PATH.exists():
+        return {}
     try:
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            cwd=cwd,
-            env=run_env,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"[ERROR] Command timed out after {timeout_seconds}s: {cmd}")
-        sys.exit(124)
+        document = json.loads(COMPONENT_LOCK_PATH.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"[ERROR] Invalid '{COMPONENT_LOCK_PATH.name}': {exc}")
+        sys.exit(1)
 
-    if result.returncode != 0:
-        print(f"[ERROR] Command failed: {cmd}")
-        sys.exit(result.returncode)
+    if document.get("version") != 1 or not isinstance(document.get("components"), dict):
+        print(f"[ERROR] '{COMPONENT_LOCK_PATH.name}' must use schema version 1.")
+        sys.exit(1)
+
+    for name, entry in document["components"].items():
+        commit = entry.get("commit", "") if isinstance(entry, dict) else ""
+        if not re.fullmatch(r"[0-9a-f]{40}", commit):
+            print(f"[ERROR] Invalid locked commit for component '{name}'.")
+            sys.exit(1)
+    return document["components"]
+
+
+def generate_component_lock(check: bool = False) -> None:
+    """Generate or verify commit locks for all installed component repositories."""
+    components = {}
+    for name, relative_path in COMPONENT_INSTALL_PATHS.items():
+        path = PROJECT_ROOT / relative_path
+        if not (path / ".git").exists():
+            continue
+        origin = run_command(
+            ["git", "remote", "get-url", "origin"],
+            cwd=str(path),
+            capture_output=True,
+        ).stdout.strip()
+        commit = run_command(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(path),
+            capture_output=True,
+        ).stdout.strip()
+        branch_result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+        )
+        components[name] = {
+            "repository": strip_url_credentials(origin),
+            "commit": commit,
+            "branch": branch_result.stdout.strip(),
+        }
+
+    document = {"version": 1, "components": components}
+    content = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    if check:
+        if not COMPONENT_LOCK_PATH.exists():
+            print(f"[ERROR] '{COMPONENT_LOCK_PATH}' does not exist.")
+            sys.exit(1)
+        locked = load_component_locks()
+        mismatches = []
+        for name, entry in locked.items():
+            installed = components.get(name)
+            if not installed:
+                mismatches.append(f"{name}: not installed")
+                continue
+            if installed["commit"] != entry["commit"]:
+                mismatches.append(
+                    f"{name}: {installed['commit']} != {entry['commit']}"
+                )
+        unlocked = sorted(set(components) - set(locked))
+        mismatches.extend(f"{name}: installed but not locked" for name in unlocked)
+        if mismatches:
+            print("[ERROR] Component lock verification failed:")
+            for mismatch in mismatches:
+                print(f"  - {mismatch}")
+            sys.exit(1)
+        print("[OK] components.lock.json matches all installed component commits.")
+        return
+
+    write_text_secure(COMPONENT_LOCK_PATH, content, mode=0o644)
+    print(f"[OK] Locked {len(components)} installed components in '{COMPONENT_LOCK_PATH}'.")
 
 
 def run_compose_up_detached(cmd: str, cwd: str, timeout_seconds: int = 180) -> None:
@@ -514,21 +544,15 @@ def print_install_summary(prefix: str, env: dict) -> None:
         print(f"- Core Lib env: {core_env_path}")
 
 
-def run_commands(commands_str: str, cwd: str) -> None:
-    """Parse and execute a ``|``-separated list of shell commands.
+def run_commands(commands: str | list[str], cwd: str) -> None:
+    """Execute a normalized sequence of shell commands.
 
-    Each segment is stripped of leading/trailing whitespace before
-    being passed to the shell.
-
-    :param commands_str: Commands separated by ``|``.
-    :type commands_str: str
+    :param commands: JSON/list commands or a legacy ``|``-separated string.
     :param cwd: Working directory in which every command is executed.
     :type cwd: str
     """
-    for cmd in commands_str.split("|"):
-        cmd = cmd.strip()
-        if cmd:
-            run_shell(cmd, cwd=cwd)
+    for command in parse_commands(commands):
+        run_shell(command, cwd=cwd)
 
 
 def ensure_shared_venv() -> Path:
@@ -624,6 +648,44 @@ def get_url(env: dict, key: str) -> str:
     return env.get(key, "").strip()
 
 
+def get_role_private_key(env: dict, role: str) -> str:
+    """Resolve a role key from a direct value, mounted file, or legacy master key."""
+    role_key = f"{role.upper()}_PRIVATE_KEY"
+    direct = env.get(role_key, "").strip()
+    if direct:
+        return direct
+
+    file_value = env.get(f"{role_key}_FILE", "").strip()
+    if file_value:
+        secret_path = Path(file_value)
+        if not secret_path.is_absolute():
+            secret_path = PROJECT_ROOT / secret_path
+        try:
+            return secret_path.read_text().strip()
+        except OSError as exc:
+            print(f"[ERROR] Cannot read secret file for {role_key}: {exc}")
+            sys.exit(1)
+
+    # MASTER_PRIVATE_KEY remains a compatibility fallback for existing installs.
+    return env.get("MASTER_PRIVATE_KEY", "").strip()
+
+
+def validate_private_key(private_key: str, profile: str) -> None:
+    """Reject malformed keys and the private key published by older examples."""
+    normalized = private_key.strip().removeprefix("0x")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", normalized):
+        print("[ERROR] MASTER_PRIVATE_KEY must contain exactly 32 bytes of hexadecimal data.")
+        sys.exit(1)
+
+    digest = hashlib.sha256(bytes.fromhex(normalized)).hexdigest()
+    if profile != "developer" and digest == _LEGACY_EXAMPLE_PRIVATE_KEY_SHA256:
+        print(
+            "[ERROR] Refusing the private key published by an older .env.example "
+            f"for the {profile.upper()} profile. Generate and authorize a new signer key."
+        )
+        sys.exit(1)
+
+
 def extract_wallet_info(wallet_path: str) -> dict:
     """Extract wallet address, public key, and private key from master-wallet.txt.
 
@@ -662,8 +724,12 @@ def update_env_file(env_path: str, updates: dict) -> None:
     :param updates: Dictionary mapping keys to their new values.
     :type updates: dict
     """
+    path = Path(env_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+
     try:
-        with open(env_path, "r") as f:
+        with open(path, "r") as f:
             lines = f.readlines()
     except FileNotFoundError:
         lines = []
@@ -686,23 +752,25 @@ def update_env_file(env_path: str, updates: dict) -> None:
         if key not in updated_keys:
             new_lines.append(f"{key}={val}\n")
 
-    with open(env_path, "w") as f:
-        f.writelines(new_lines)
+    write_text_secure(path, "".join(new_lines))
 
 
 # ─── Repository installer ─────────────────────────────────────────────────────
 
 #: Default commands used when a repo does not define its own COMMANDS variable.
-DEFAULT_COMMANDS: str = (
-    "chmod +x setup.sh|chmod +x scripts/*.sh|./setup.sh|docker compose up -d"
-)
+DEFAULT_COMMANDS: list[str] = [
+    "chmod +x setup.sh",
+    "chmod +x scripts/*.sh",
+    "./setup.sh",
+    "docker compose up -d",
+]
 
 
 def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None:
     """Clone a repository or pull the latest changes if it already exists.
 
-    If ``target_dir`` already exists, a ``git pull`` is performed on the
-    specified branch. Otherwise, the repository is cloned from ``repo_url``.
+    Existing repositories are switched to the configured branch and advanced
+    only by fast-forward. Otherwise, the repository is cloned from ``repo_url``.
 
     :param name: Human-readable name of the component (used for logging).
     :type name: str
@@ -731,6 +799,7 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
 
     def github_repo_slug(url: str) -> Optional[str]:
         """Return GitHub owner/repo slug for HTTPS or SSH URLs."""
+        url = strip_url_credentials(url)
         https_match = re.match(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
         if https_match:
             return f"{https_match.group(1)}/{https_match.group(2)}"
@@ -742,19 +811,15 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
         return None
 
     def build_repo_url_candidates(url: str) -> list[str]:
-        """Build preferred URL candidates, prioritizing SSH for GitHub repos."""
-        candidates = []
+        """Build URL candidates, preserving the configured transport first."""
+        candidates = [url]
         ssh_url = github_https_to_ssh(url)
         https_url = github_ssh_to_https(url)
 
         if ssh_url:
-            # Input was HTTPS GitHub URL: prefer SSH first to avoid auth errors.
-            candidates.extend([ssh_url, url])
+            candidates.append(ssh_url)
         elif https_url:
-            # Input was SSH GitHub URL: keep SSH first, then HTTPS fallback.
-            candidates.extend([url, https_url])
-        else:
-            candidates.append(url)
+            candidates.append(https_url)
 
         # Deduplicate while preserving order.
         seen = set()
@@ -767,76 +832,148 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
 
     target = Path(target_dir)
     repo_candidates = build_repo_url_candidates(repo_url)
+    lock_entry = load_component_locks().get(name, {})
+    locked_commit = lock_entry.get("commit", "")
+    locked_repository = lock_entry.get("repository", "")
+    if locked_repository:
+        locked_slug = github_repo_slug(locked_repository)
+        configured_slug = github_repo_slug(repo_url)
+        same_locked_repo = (
+            locked_slug == configured_slug
+            if locked_slug and configured_slug
+            else locked_repository.rstrip("/").removesuffix(".git")
+            == repo_url.rstrip("/").removesuffix(".git")
+        )
+        if not same_locked_repo:
+            print(f"[ERROR] Lock entry for '{name}' belongs to a different repository.")
+            sys.exit(1)
 
     if target.exists():
-        print(f"[INFO] '{target_dir}' already exists — pulling latest changes...")
-        # Keep origin aligned with configured URL before pulling.
-        current_origin = subprocess.run(
-            "git remote get-url origin",
-            shell=True,
+        if not target.is_dir() or not (target / ".git").exists():
+            print(f"[ERROR] Existing target '{target}' is not a Git repository.")
+            sys.exit(1)
+
+        print(f"[INFO] '{target_dir}' already exists — updating deterministically...")
+        current_origin = run_command(
+            ["git", "remote", "get-url", "origin"],
             cwd=str(target),
             capture_output=True,
-            text=True,
         )
-        current_origin_url = current_origin.stdout.strip() if current_origin.returncode == 0 else ""
+        current_origin_url = current_origin.stdout.strip()
+        current_slug = github_repo_slug(current_origin_url)
+        configured_slug = github_repo_slug(repo_url)
         same_repo = (
-            current_origin_url
-            and github_repo_slug(current_origin_url)
-            and github_repo_slug(current_origin_url) == github_repo_slug(repo_url)
+            current_slug == configured_slug
+            if current_slug and configured_slug
+            else current_origin_url.rstrip("/").removesuffix(".git")
+            == repo_url.rstrip("/").removesuffix(".git")
         )
-        if same_repo and current_origin_url:
-            # Prefer the URL already known to work for this local clone.
-            if current_origin_url in repo_candidates:
-                repo_candidates = [current_origin_url] + [
-                    c for c in repo_candidates if c != current_origin_url
-                ]
-            else:
-                repo_candidates = [current_origin_url] + repo_candidates
+        if not same_repo:
+            print(
+                f"[ERROR] '{target}' points to a different origin.\n"
+                f"        Current:    {redact_url_credentials(current_origin_url)}\n"
+                f"        Configured: {redact_url_credentials(repo_url)}"
+            )
+            sys.exit(1)
 
-        pull_success = False
+        repo_candidates = [current_origin_url] + [
+            candidate for candidate in repo_candidates if candidate != current_origin_url
+        ]
+
+        fetch_success = False
         last_exc: Optional[SystemExit] = None
         for candidate_url in repo_candidates:
             if not current_origin_url or current_origin_url != candidate_url:
-                print(f"[INFO] Updating origin URL to '{candidate_url}'...")
-                run_shell(f"git remote set-url origin {candidate_url}", cwd=str(target))
+                print(
+                    "[INFO] Updating origin URL to "
+                    f"'{redact_url_credentials(candidate_url)}'..."
+                )
+                run_command(
+                    ["git", "remote", "set-url", "origin", candidate_url],
+                    cwd=str(target),
+                )
                 current_origin_url = candidate_url
 
             try:
-                run_shell(f"git pull origin {branch}", cwd=str(target))
-                pull_success = True
+                run_command(["git", "fetch", "origin", branch], cwd=str(target))
+                fetch_success = True
                 break
             except SystemExit as exc:
                 last_exc = exc
                 print(
-                    "[WARNING] Pull failed for remote "
-                    f"'{candidate_url}'. Trying next candidate..."
+                    "[WARNING] Fetch failed for remote "
+                    f"'{redact_url_credentials(candidate_url)}'. Trying next candidate..."
                 )
 
-        if not pull_success and last_exc is not None:
+        if not fetch_success and last_exc is not None:
             raise last_exc
+
+        if locked_commit:
+            commit_exists = subprocess.run(
+                ["git", "cat-file", "-e", f"{locked_commit}^{{commit}}"],
+                cwd=str(target),
+            )
+            if commit_exists.returncode != 0:
+                run_command(["git", "fetch", "origin", locked_commit], cwd=str(target))
+            run_command(["git", "checkout", "--detach", locked_commit], cwd=str(target))
+            print(f"[INFO] '{name}' pinned to commit {locked_commit}.")
+        else:
+            local_branch = subprocess.run(
+                ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+                cwd=str(target),
+            )
+            if local_branch.returncode == 0:
+                run_command(["git", "switch", branch], cwd=str(target))
+            else:
+                run_command(
+                    ["git", "switch", "--create", branch, "--track", f"origin/{branch}"],
+                    cwd=str(target),
+                )
+            run_command(
+                ["git", "merge", "--ff-only", f"origin/{branch}"],
+                cwd=str(target),
+            )
     else:
-        print(f"[INFO] Cloning '{name}' from {repo_url} (branch: {branch})...")
+        print(
+            f"[INFO] Cloning '{name}' from {redact_url_credentials(repo_url)} "
+            f"(branch: {branch})..."
+        )
         clone_success = False
         last_exc: Optional[SystemExit] = None
         for candidate_url in repo_candidates:
             try:
-                run_shell(f"git clone --branch {branch} {candidate_url} {str(target)}")
+                run_command(
+                    [
+                        "git", "clone", "--branch", branch, "--single-branch",
+                        "--", candidate_url, str(target),
+                    ]
+                )
                 clone_success = True
                 break
             except SystemExit as exc:
                 last_exc = exc
                 print(
                     "[WARNING] Clone failed for URL "
-                    f"'{candidate_url}'. Trying next candidate..."
+                    f"'{redact_url_credentials(candidate_url)}'. Trying next candidate..."
                 )
 
         if not clone_success and last_exc is not None:
             raise last_exc
 
+        if locked_commit:
+            commit_exists = subprocess.run(
+                ["git", "cat-file", "-e", f"{locked_commit}^{{commit}}"],
+                cwd=str(target),
+            )
+            if commit_exists.returncode != 0:
+                run_command(["git", "fetch", "origin", locked_commit], cwd=str(target))
+            run_command(["git", "checkout", "--detach", locked_commit], cwd=str(target))
+            print(f"[INFO] '{name}' pinned to commit {locked_commit}.")
+
     print(f"[OK] '{name}' ready at '{target_dir}'.\n")
 
 
-def setup_repo(target_dir: str, commands_str: str) -> None:
+def setup_repo(target_dir: str, commands_str: str | list[str]) -> None:
     """Run the post-clone setup for a repository.
 
     If a ``requirements.txt`` is present in ``target_dir``, dependencies are
@@ -848,8 +985,7 @@ def setup_repo(target_dir: str, commands_str: str) -> None:
 
     :param target_dir: Path to the cloned repository directory.
     :type target_dir: str
-    :param commands_str: ``|``-separated commands to run inside ``target_dir``.
-    :type commands_str: str
+    :param commands_str: Commands to run inside ``target_dir``.
     :raises SystemExit: If any step fails.
     """
     print(f"[INFO] Setting up '{target_dir}'...")
@@ -928,7 +1064,7 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     # ── Step 2: generate config.ini ───────────────────────────────────────────
     rpc_url     = env.get("RPC_URL", "").strip()
     chain_id    = env.get("CHAIN_ID", "").strip()
-    private_key = env.get("MASTER_PRIVATE_KEY", "").strip()
+    private_key = get_role_private_key(env, "deployer")
     public_key  = env.get("MASTER_PUBLIC_KEY", "").strip()
     address     = env.get("MASTER_WALLET_ADDRESS", "").strip()
 
@@ -939,8 +1075,9 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
         print("[ERROR] 'CHAIN_ID' is not set in .env")
         sys.exit(1)
     if not private_key or private_key == "0x":
-        print("[ERROR] 'MASTER_PRIVATE_KEY' is not set in .env")
+        print("[ERROR] DEPLOYER_PRIVATE_KEY (or legacy MASTER_PRIVATE_KEY) is not set")
         sys.exit(1)
+    validate_private_key(private_key, env.get("TYPE", "developer").lower())
 
     config = configparser.ConfigParser()
     config["base"]       = {"blockchain_net": "dark-local"}
@@ -954,8 +1091,10 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     }
 
     config_path = abs_target / "config.ini"
-    with open(config_path, "w") as f:
-        config.write(f)
+    with tempfile.TemporaryFile(mode="w+") as temporary_config:
+        config.write(temporary_config)
+        temporary_config.seek(0)
+        write_text_secure(config_path, temporary_config.read())
     print(f"[OK] config.ini generated at '{config_path}'.\n")
 
     # ── Step 3: compile contracts ─────────────────────────────────────────────
@@ -1027,7 +1166,7 @@ def install_blockchain(prefix: str, env: dict) -> None:
 
         branch   = env.get(branch_key, "master").strip()
         do_setup = env.get(setup_key, "True").strip().lower() != "false"
-        commands = env.get(commands_key, DEFAULT_COMMANDS).strip()
+        commands = get_commands(env, commands_key, DEFAULT_COMMANDS)
         target   = f"components/blockchain/{folder}"
 
         install_repo(name=folder, repo_url=repo_url, branch=branch, target_dir=target)
@@ -1086,11 +1225,12 @@ def read_deployed_contract_addresses(ini_path: Path) -> tuple[str, str]:
     return dark_address, authority_address
 
 
-_DEPLOYED_CONTRACTS_INI_PATH = Path(
+_DEPLOYED_CONTRACTS_INI_PATH = PROJECT_ROOT / (
     "components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini"
 )
 
-_ROOT_ENV_INTEGRATION = Path(".env.integration")
+_ROOT_ENV_INTEGRATION = PROJECT_ROOT / ".env.integration"
+_ROOT_ENV_INTEGRATION_SECRETS = PROJECT_ROOT / ".env.integration.secrets"
 
 
 def find_deployed_contracts_ini() -> tuple[str, str]:
@@ -1141,9 +1281,18 @@ def _write_root_env_integration(new_vars: dict) -> None:
     if _ROOT_ENV_INTEGRATION.exists():
         existing = load_optional_env(_ROOT_ENV_INTEGRATION)
     existing.update(new_vars)
-    lines = [f"{k}={v}\n" for k, v in existing.items()]
-    with open(_ROOT_ENV_INTEGRATION, "w") as f:
-        f.writelines(lines)
+    # Private keys belong exclusively in .env.integration.secrets.
+    existing.pop("DARK_ADMIN_PRIVATE_KEY", None)
+    existing.pop("DARK_MINTER_PRIVATE_KEY", None)
+    write_env_secure(_ROOT_ENV_INTEGRATION, existing)
+
+
+def _write_root_env_integration_secrets(new_vars: dict) -> None:
+    existing: dict = {}
+    if _ROOT_ENV_INTEGRATION_SECRETS.exists():
+        existing = load_optional_env(_ROOT_ENV_INTEGRATION_SECRETS)
+    existing.update(new_vars)
+    write_env_secure(_ROOT_ENV_INTEGRATION_SECRETS, existing)
 
 
 def _generate_root_env_integration_blockchain(env: dict) -> None:
@@ -1155,7 +1304,6 @@ def _generate_root_env_integration_blockchain(env: dict) -> None:
         "DARK_CHAIN_ID":          env.get("CHAIN_ID", "2025").strip(),
         "DARK_CONTRACT_ADDRESS":  dark_contract,
         "DARK_AUTHORITY_ADDRESS": authority_contract,
-        "DARK_ADMIN_PRIVATE_KEY": env.get("MASTER_PRIVATE_KEY", "").strip(),
     }
     if dark_abi_json:
         vars["DARK_ABI_JSON"] = dark_abi_json
@@ -1163,11 +1311,21 @@ def _generate_root_env_integration_blockchain(env: dict) -> None:
         vars["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     _write_root_env_integration(vars)
+    admin_key = get_role_private_key(env, "admin")
+    minter_key = get_role_private_key(env, "minter")
+    secret_values = {}
+    if admin_key:
+        secret_values["DARK_ADMIN_PRIVATE_KEY"] = admin_key
+    if minter_key:
+        secret_values["DARK_MINTER_PRIVATE_KEY"] = minter_key
+    if secret_values:
+        _write_root_env_integration_secrets(secret_values)
 
     abi_note = " (+ ABI)" if dark_abi_json else ""
     print(
         f"[OK] Generated root '.env.integration' with blockchain connection vars{abi_note}.\n"
-        "     Copy this file to the storage and/or apps server before running their installs."
+        "     Copy this public file to the storage and/or apps server.\n"
+        "     Copy '.env.integration.secrets' only to an apps server that must sign transactions."
     )
 
 
@@ -1201,36 +1359,69 @@ def validate_root_env_integration() -> None:
         " Copy it to this server before running the services install.\n"
         "\n  Steps:\n"
         "    1. On the blockchain server: run the installer — it generates .env.integration\n"
+        "       and .env.integration.secrets\n"
         "    2. On the storage server: copy .env.integration there and run the installer"
         " — it adds storage vars\n"
-        "    3. Copy the final .env.integration to this directory\n"
+        "    3. Copy the final public file from storage and the secret file directly"
+        " from blockchain to this directory\n"
         "    4. Re-run the installer\n"
         f"\n  Expected path: {_ROOT_ENV_INTEGRATION.resolve()}"
     )
     sys.exit(1)
 
 
-def _merge_root_env_integration_into_env(env: dict, prefix: str) -> None:
+def _merge_root_env_integration_into_env(
+    env: dict,
+    prefix: str,
+    authoritative: bool = False,
+) -> None:
     """Load root .env.integration and back-map Docker-facing var names into the env dict.
 
-    Uses setdefault so existing .env values always win.  Called after every
-    tier install (blockchain, storage) and in apps-only mode after validation.
+    Blank values are always filled. In apps-only deployments the handoff is
+    authoritative, preventing stale values copied from .env.example from
+    shadowing the deployed infrastructure state.
     """
     if not _ROOT_ENV_INTEGRATION.exists():
         return
     root = load_optional_env(_ROOT_ENV_INTEGRATION)
-    env.setdefault("RPC_URL",            root.get("DARK_RPC_URL", ""))
-    env.setdefault("CHAIN_ID",           root.get("DARK_CHAIN_ID", ""))
-    env.setdefault("MASTER_PRIVATE_KEY", root.get("DARK_ADMIN_PRIVATE_KEY", ""))
-    env.setdefault(f"{prefix}_DARK_CONTRACT_ADDRESS",      root.get("DARK_CONTRACT_ADDRESS", ""))
-    env.setdefault(f"{prefix}_AUTHORITY_CONTRACT_ADDRESS", root.get("DARK_AUTHORITY_ADDRESS", ""))
-    env.setdefault(f"{prefix}_STORE_API_URL",              root.get("METADATA_STORE_API_URL", ""))
-    # ABI: propagated from deployed_contracts.ini via the blockchain install step.
-    # setdefault ensures a .env override always wins over .env.integration.
-    if root.get("DARK_ABI_JSON"):
-        env.setdefault("DARK_ABI_JSON", root["DARK_ABI_JSON"])
-    if root.get("AUTHORITY_ABI_JSON"):
-        env.setdefault("AUTHORITY_ABI_JSON", root["AUTHORITY_ABI_JSON"])
+    secrets = load_optional_env(_ROOT_ENV_INTEGRATION_SECRETS)
+
+    # Backward compatibility for handoff files generated by older releases.
+    if not secrets.get("DARK_ADMIN_PRIVATE_KEY") and root.get("DARK_ADMIN_PRIVATE_KEY"):
+        secrets["DARK_ADMIN_PRIVATE_KEY"] = root["DARK_ADMIN_PRIVATE_KEY"]
+        print(
+            "[WARNING] Legacy '.env.integration' contains a private key. "
+            "Regenerate it to split public configuration from secrets."
+        )
+
+    # Older secret handoffs carried one signer. Preserve compatibility by
+    # assigning it to both roles until the operator rotates separate keys.
+    if secrets.get("DARK_ADMIN_PRIVATE_KEY") and not secrets.get("DARK_MINTER_PRIVATE_KEY"):
+        secrets["DARK_MINTER_PRIVATE_KEY"] = secrets["DARK_ADMIN_PRIVATE_KEY"]
+
+    mappings = {
+        "RPC_URL": root.get("DARK_RPC_URL", ""),
+        "CHAIN_ID": root.get("DARK_CHAIN_ID", ""),
+        "ADMIN_PRIVATE_KEY": secrets.get("DARK_ADMIN_PRIVATE_KEY", ""),
+        "MINTER_PRIVATE_KEY": secrets.get("DARK_MINTER_PRIVATE_KEY", ""),
+        f"{prefix}_DARK_CONTRACT_ADDRESS": root.get("DARK_CONTRACT_ADDRESS", ""),
+        f"{prefix}_AUTHORITY_CONTRACT_ADDRESS": root.get("DARK_AUTHORITY_ADDRESS", ""),
+        f"{prefix}_STORE_API_URL": root.get("METADATA_STORE_API_URL", ""),
+        "DARK_ABI_JSON": root.get("DARK_ABI_JSON", ""),
+        "AUTHORITY_ABI_JSON": root.get("AUTHORITY_ABI_JSON", ""),
+    }
+
+    for key, incoming_value in mappings.items():
+        incoming = incoming_value.strip()
+        if not incoming:
+            continue
+
+        current = env.get(key, "").strip()
+        if current and current != incoming and authoritative:
+            print(f"[WARNING] '{key}' differs from the handoff; using handoff value.")
+
+        if authoritative or not current:
+            env[key] = incoming
 
 
 #: (env_key_template, human description, corresponding key in root .env.integration or None)
@@ -1238,7 +1429,16 @@ _BLOCKCHAIN_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
     ("RPC_URL",                          "Blockchain RPC URL",           "DARK_RPC_URL"),
     ("{prefix}_DARK_CONTRACT_ADDRESS",      "dARK contract address",        "DARK_CONTRACT_ADDRESS"),
     ("{prefix}_AUTHORITY_CONTRACT_ADDRESS", "Authority contract address",   "DARK_AUTHORITY_ADDRESS"),
-    ("MASTER_PRIVATE_KEY",                "Admin/deployer private key",    "DARK_ADMIN_PRIVATE_KEY"),
+    (
+        "ADMIN_PRIVATE_KEY",
+        "Admin signer private key",
+        ".env.integration.secrets → DARK_ADMIN_PRIVATE_KEY",
+    ),
+    (
+        "MINTER_PRIVATE_KEY",
+        "Minter signer private key",
+        ".env.integration.secrets → DARK_MINTER_PRIVATE_KEY",
+    ),
 ]
 
 _APPS_STORAGE_REQUIRED_FIELDS: list[tuple[str, str, Optional[str]]] = [
@@ -1261,7 +1461,12 @@ def _missing_required_fields(
     missing = []
     for key_template, description, integration_key in fields:
         key = key_template.format(prefix=prefix)
-        if not env.get(key, "").strip():
+        value = env.get(key, "").strip()
+        if not value and key == "ADMIN_PRIVATE_KEY":
+            value = get_role_private_key(env, "admin")
+        elif not value and key == "MINTER_PRIVATE_KEY":
+            value = get_role_private_key(env, "minter")
+        if not value:
             missing.append((key, description, integration_key))
     return missing
 
@@ -1272,13 +1477,13 @@ def _abort_missing_fields(missing: list[tuple[str, str, Optional[str]]], context
         return
     print(f"\n[ERROR] Missing required configuration for {context}.")
     print(
-        "\n  The following fields are not set. Fill them in the root '.env.integration'"
-        "\n  (copied from the blockchain/storage servers) or directly in '.env', then re-run:\n"
+        "\n  The following fields are not set. Fill them in the handoff files"
+        "\n  or directly in '.env', then re-run:\n"
     )
     for key, description, integration_key in missing:
         print(f"    - {key:<40} {description}")
         if integration_key:
-            print(f"      .env.integration key: {integration_key}")
+            print(f"      handoff key: {integration_key}")
     print("\n  See README.md → \"Decoupled Setup\" for the full field reference.")
     sys.exit(1)
 
@@ -1384,7 +1589,6 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
         "DARK_CHAIN_ID": env.get("CHAIN_ID", "1337").strip(),
         "DARK_CONTRACT_ADDRESS": dark_contract,
         "DARK_AUTHORITY_ADDRESS": authority_contract,
-        "DARK_ADMIN_PRIVATE_KEY": env.get("MASTER_PRIVATE_KEY", "").strip(),
         "DARK_READ_ONLY": "False",
         "DARK_VALIDATE_CHAIN_ID": "True",
         "DARK_GAS_LIMIT": "550000",
@@ -1399,9 +1603,7 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
         integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     env_path = core_path / ".env.integration"
-    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
-    with open(env_path, "w") as f:
-        f.writelines(lines)
+    write_env_secure(env_path, integration_env)
 
     print(f"[OK] Generated '{env_path}'.")
 
@@ -1556,9 +1758,9 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         ).strip(),
         "DARK_CONTRACT_ADDRESS": dark_contract or template_env.get("DARK_CONTRACT_ADDRESS", "").strip(),
         "DARK_AUTHORITY_ADDRESS": authority_contract or template_env.get("DARK_AUTHORITY_ADDRESS", "").strip(),
-        "DARK_ADMIN_PRIVATE_KEY": env.get(
-            "MASTER_PRIVATE_KEY",
-            template_env.get("DARK_ADMIN_PRIVATE_KEY", ""),
+        "DARK_ADMIN_PRIVATE_KEY": (
+            get_role_private_key(env, "minter")
+            or template_env.get("DARK_ADMIN_PRIVATE_KEY", "")
         ).strip(),
         "METADATA_STORAGE_TYPE": metadata_storage_type,
         "METADATA_STORAGE_PATH": metadata_storage_path,
@@ -1575,9 +1777,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     env_path = minter_path / ".env.integration"
-    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
-    with open(env_path, "w") as f:
-        f.writelines(lines)
+    write_env_secure(env_path, integration_env)
 
     print(f"[OK] Generated '{env_path}'.")
 
@@ -1628,9 +1828,7 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
     }
 
     env_path = store_api_path / ".env.integration"
-    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
-    with open(env_path, "w") as f:
-        f.writelines(lines)
+    write_env_secure(env_path, integration_env)
 
     print(f"[OK] Generated '{env_path}'.")
 
@@ -1663,9 +1861,9 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
         ).strip(),
         "DARK_CONTRACT_ADDRESS": dark_contract or template_env.get("DARK_CONTRACT_ADDRESS", "").strip(),
         "DARK_AUTHORITY_ADDRESS": authority_contract or template_env.get("DARK_AUTHORITY_ADDRESS", "").strip(),
-        "DARK_ADMIN_PRIVATE_KEY": env.get(
-            "MASTER_PRIVATE_KEY",
-            template_env.get("DARK_ADMIN_PRIVATE_KEY", ""),
+        "DARK_ADMIN_PRIVATE_KEY": (
+            get_role_private_key(env, "admin")
+            or template_env.get("DARK_ADMIN_PRIVATE_KEY", "")
         ).strip(),
     }
 
@@ -1677,9 +1875,7 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
         integration_env["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     env_path = admin_api_path / ".env.integration"
-    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
-    with open(env_path, "w") as f:
-        f.writelines(lines)
+    write_env_secure(env_path, integration_env)
 
     print(f"[OK] Generated '{env_path}'.")
 
@@ -1743,18 +1939,16 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
         integration_env["DARK_ABI_JSON"] = dark_abi_json
 
     env_path = resolver_api_path / ".env.integration"
-    lines = [f"{key}={value}\n" for key, value in integration_env.items()]
-    with open(env_path, "w") as f:
-        f.writelines(lines)
+    write_env_secure(env_path, integration_env)
 
     print(f"[OK] Generated '{env_path}'.")
 
 
-def commands_include_docker_compose_up(commands_str: str) -> bool:
+def commands_include_docker_compose_up(commands_str: str | list[str]) -> bool:
     """Return True when the command string already handles compose startup."""
     return any(
         "docker compose up" in cmd or "docker-compose up" in cmd
-        for cmd in (part.strip() for part in commands_str.split("|"))
+        for cmd in parse_commands(commands_str)
     )
 
 
@@ -2137,7 +2331,9 @@ def install_core_lib(prefix: str, env: dict) -> None:
         setup_raw = env.get(legacy_setup_key, "True").strip()
     do_setup = setup_raw.lower() != "false"
 
-    extra_commands = env.get(core_commands_key, "").strip() or env.get(legacy_commands_key, "").strip()
+    extra_commands = get_commands(env, core_commands_key)
+    if not extra_commands:
+        extra_commands = get_commands(env, legacy_commands_key)
 
     core_path = Path("components/libraries/dark-core-lib")
 
@@ -2171,7 +2367,10 @@ def install_core_lib(prefix: str, env: dict) -> None:
 
     if extra_commands:
         # Ensure any "pip ..." command uses the shared root venv pip.
-        extra_commands = extra_commands.replace("pip ", f"{venv_pip} ")
+        extra_commands = [
+            command.replace("pip ", f"{venv_pip} ")
+            for command in extra_commands
+        ]
         run_commands(extra_commands, cwd=str(core_abs))
 
 
@@ -2191,7 +2390,7 @@ def install_core_admin_api(prefix: str, env: dict) -> None:
 
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = env.get(commands_key, "").strip()
+    commands = get_commands(env, commands_key)
     target = "components/services/dark-core-admin-api"
     target_path = Path(target).resolve()
 
@@ -2232,7 +2431,7 @@ def install_core_resolver_api(prefix: str, env: dict) -> None:
 
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = env.get(commands_key, "").strip()
+    commands = get_commands(env, commands_key)
     target = "components/services/dark-core-resolver-api"
     target_path = Path(target).resolve()
 
@@ -2264,7 +2463,10 @@ def install_core_resolver_api(prefix: str, env: dict) -> None:
         run_shell(f"{venv_pip} install .", cwd=str(target_path))
 
     if commands:
-        commands = commands.replace("pip ", f"{venv_pip} ")
+        commands = [
+            command.replace("pip ", f"{venv_pip} ")
+            for command in commands
+        ]
         run_commands(commands, cwd=str(target_path))
 
         if commands_include_docker_compose_up(commands):
@@ -2292,7 +2494,7 @@ def install_dark_store_api(prefix: str, env: dict) -> None:
 
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = env.get(commands_key, "").strip()
+    commands = get_commands(env, commands_key)
     target = "components/services/dark-store-api"
     target_path = Path(target).resolve()
 
@@ -2324,7 +2526,10 @@ def install_dark_store_api(prefix: str, env: dict) -> None:
         run_shell(f"{venv_pip} install .", cwd=str(target_path))
 
     if commands:
-        commands = commands.replace("pip ", f"{venv_pip} ")
+        commands = [
+            command.replace("pip ", f"{venv_pip} ")
+            for command in commands
+        ]
         run_commands(commands, cwd=str(target_path))
 
         if commands_include_docker_compose_up(commands):
@@ -2352,7 +2557,7 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
 
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = env.get(commands_key, "make up").strip() or "make up"
+    commands = get_commands(env, commands_key, ["make up"])
     target = "components/storage/dark-ipfs"
 
     if platform.machine() != "x86_64":
@@ -2404,9 +2609,9 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
 
     branch   = env.get(branch_key, "master").strip()
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = env.get(commands_key, "").strip()
+    commands = get_commands(env, commands_key)
     if not commands and name.upper() != "MINTER":
-        commands = DEFAULT_COMMANDS
+        commands = list(DEFAULT_COMMANDS)
     target   = f"components/{name.lower()}"
     repo_name = name.lower()
     if name.upper() == "MINTER":
@@ -2456,7 +2661,7 @@ def install_dashboard(prefix: str, env: dict) -> None:
 
     branch   = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = env.get(commands_key, "").strip() or "python3 install.py"
+    commands = get_commands(env, commands_key, ["python3 install.py"])
     target   = "components/frontend/dashboard-web"
 
     install_repo(name="dashboard-web", repo_url=repo_url, branch=branch, target_dir=target)
@@ -2516,7 +2721,15 @@ def install_profile(prefix: str, env: dict) -> None:
     # (generated on blockchain + storage servers and copied here).
     if install_apps and not install_bc and not install_ipfs:
         validate_root_env_integration()
-        _merge_root_env_integration_into_env(env=env, prefix=prefix)
+        _merge_root_env_integration_into_env(
+            env=env,
+            prefix=prefix,
+            authoritative=True,
+        )
+
+    # Revalidate after a local blockchain install, because wallet extraction
+    # may have populated signer material used by the application tier.
+    validate_install_configuration(prefix, env)
 
     if install_apps:
         install_core_lib(prefix=prefix, env=env)
@@ -2542,6 +2755,110 @@ def install_profile(prefix: str, env: dict) -> None:
         install_core_resolver_api(prefix=prefix, env=env)
         install_single_component(name="MINTER", prefix=prefix, env=env)
         install_dashboard(prefix=prefix, env=env)
+
+
+def _selected_tiers(prefix: str, env: dict) -> tuple[bool, bool, bool]:
+    components = {
+        item.strip().lower()
+        for item in env.get(f"{prefix}_INSTALL_COMPONENTS", "all").split(",")
+        if item.strip()
+    }
+    unknown = components - {"all", "apps", "blockchain", "storage"}
+    if unknown:
+        print(f"[ERROR] Unknown install components: {', '.join(sorted(unknown))}")
+        sys.exit(1)
+    install_all = "all" in components
+    return (
+        install_all or "blockchain" in components,
+        install_all or "storage" in components,
+        install_all or "apps" in components,
+    )
+
+
+def _validate_http_url(name: str, value: str) -> None:
+    if not value:
+        return
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        print(f"[ERROR] {name} must be an absolute HTTP(S) URL: {value!r}")
+        sys.exit(1)
+
+
+def validate_install_configuration(prefix: str, env: dict) -> None:
+    """Validate topology-sensitive settings before mutating the installation."""
+    install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
+    blockchain_remote = bool(env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip())
+
+    chain_id = env.get("CHAIN_ID", "").strip()
+    if chain_id and (not chain_id.isdigit() or int(chain_id) <= 0):
+        print("[ERROR] CHAIN_ID must be a positive integer.")
+        sys.exit(1)
+
+    _validate_http_url("RPC_URL", env.get("RPC_URL", "").strip())
+    _validate_http_url(
+        f"{prefix}_STORE_API_URL",
+        env.get(f"{prefix}_STORE_API_URL", "").strip(),
+    )
+    for suffix in ("IPFS_API_URL", "IPFS_CLUSTER_URL", "IPFS_CLUSTER_PROXY_URL"):
+        _validate_http_url(
+            f"{prefix}_{suffix}",
+            env.get(f"{prefix}_{suffix}", "").strip(),
+        )
+
+    for key in (
+        f"{prefix}_DARK_CONTRACT_ADDRESS",
+        f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
+    ):
+        address = env.get(key, "").strip()
+        if address and not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
+            print(f"[ERROR] {key} must be a 20-byte hexadecimal address.")
+            sys.exit(1)
+
+    if install_apps and (not install_bc or blockchain_remote):
+        missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
+        _abort_missing_fields(missing, context="using a remote blockchain tier")
+
+    if install_apps and not install_storage:
+        missing = _missing_required_fields(prefix, env, _APPS_STORAGE_REQUIRED_FIELDS)
+        _abort_missing_fields(missing, context="using a remote storage tier")
+
+    profile = env.get("TYPE", "developer").lower()
+    role_keys = {
+        role: get_role_private_key(env, role)
+        for role in ("deployer", "admin", "minter")
+    }
+    for private_key in set(role_keys.values()) - {""}:
+        validate_private_key(private_key, profile)
+
+    if profile == "production" and (install_apps or install_bc):
+        missing_roles = [
+            role for role in ("admin", "minter") if not role_keys[role]
+        ]
+        if missing_roles:
+            print(
+                "[ERROR] Production requires explicit private keys for roles: "
+                + ", ".join(missing_roles)
+            )
+            sys.exit(1)
+        if role_keys["admin"] == role_keys["minter"]:
+            print("[ERROR] Production requires distinct ADMIN_PRIVATE_KEY and MINTER_PRIVATE_KEY values.")
+            sys.exit(1)
+
+
+def print_install_plan(prefix: str, env: dict) -> None:
+    """Print a redacted, non-mutating overview of the configured installation."""
+    install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
+    print("\n=== Installation plan ===")
+    print(f"Profile     : {env.get('TYPE', '').upper()}")
+    print(f"Blockchain  : {'remote' if env.get(f'{prefix}_BLOCKCHAIN_HOST', '').strip() else ('local' if install_bc else 'skip')}")
+    print(f"Storage     : {'remote IPFS' if env.get(f'{prefix}_IPFS_HOST', '').strip() else ('local' if install_storage else 'skip')}")
+    print(f"Apps        : {'install' if install_apps else 'skip'}")
+    configured_roles = [
+        role for role in ("deployer", "admin", "minter")
+        if get_role_private_key(env, role)
+    ]
+    print(f"Signers     : {', '.join(configured_roles) if configured_roles else 'not yet generated'}")
+    print("No files, repositories, containers, or networks were changed.")
 
 
 # ─── Setup wizard ────────────────────────────────────────────────────────────
@@ -2584,6 +2901,14 @@ _STORAGE_REPO_DEFAULTS: dict = {
 }
 
 
+def _apply_local_blockchain_defaults(env: dict) -> None:
+    """Apply defaults only when this host will run the blockchain tier."""
+    if not env.get("RPC_URL", "").strip():
+        env["RPC_URL"] = "http://localhost:8545"
+    if not env.get("CHAIN_ID", "").strip():
+        env["CHAIN_ID"] = "2025"
+
+
 def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
     """Collect blockchain tier topology — selection only, no free-text entry.
 
@@ -2599,6 +2924,7 @@ def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
         ],
     )
     if location == 1:
+        _apply_local_blockchain_defaults(env)
         for key in (
             f"{prefix}_BLOCKCHAIN_HOST",
             f"{prefix}_BLOCKCHAIN_EXTRA_NODES",
@@ -2610,6 +2936,12 @@ def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
         _apply_default_blockchain_repo_urls(prefix=prefix, env=env)
         return env
 
+    if _ROOT_ENV_INTEGRATION.exists():
+        _merge_root_env_integration_into_env(
+            env=env,
+            prefix=prefix,
+            authoritative=True,
+        )
     missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
     _abort_missing_fields(missing, context="a remote BLOCKCHAIN tier")
     env[f"{prefix}_BLOCKCHAIN_HOST"] = _derive_host_from_url(env["RPC_URL"])
@@ -2726,13 +3058,12 @@ def run_setup_wizard(env: dict) -> dict:
     install_type = {1: "developer", 2: "sandbox", 3: "production"}[type_choice]
     prefix = PROFILE_PREFIXES[install_type]
     env["TYPE"] = install_type
+    handoff_authoritative = False
 
-    if install_type in ("sandbox", "production"):
+    if install_type == "developer":
+        _apply_local_blockchain_defaults(env)
+    else:
         print(f"\n  Configuring infrastructure for {install_type.upper()} profile:")
-
-        # Always pull in the cross-tier handoff artifact (if present) before any
-        # validation below — the wizard never asks for information it can read here.
-        _merge_root_env_integration_into_env(env=env, prefix=prefix)
 
         component_choice = _ask_choice(
             "Which components will be installed on this server?",
@@ -2753,14 +3084,25 @@ def run_setup_wizard(env: dict) -> dict:
         if selected == "all":
             env = _wizard_blockchain_tier(prefix=prefix, env=env)
             env = _wizard_ipfs_tier(prefix=prefix, env=env)
+            handoff_authoritative = bool(
+                env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
+                and _ROOT_ENV_INTEGRATION.exists()
+            )
         elif selected == "apps":
             # Pure apps mode: blockchain and storage connection info must already
             # be present (root .env.integration copied here, or set in .env).
             validate_root_env_integration()
+            _merge_root_env_integration_into_env(
+                env=env,
+                prefix=prefix,
+                authoritative=True,
+            )
+            handoff_authoritative = True
             missing = _missing_required_fields(prefix, env, _BLOCKCHAIN_REQUIRED_FIELDS)
             missing += _missing_required_fields(prefix, env, _APPS_STORAGE_REQUIRED_FIELDS)
             _abort_missing_fields(missing, context='installing "apps"')
         elif selected == "blockchain":
+            _apply_local_blockchain_defaults(env)
             for key in (
                 f"{prefix}_BLOCKCHAIN_HOST",
                 f"{prefix}_BLOCKCHAIN_EXTRA_NODES",
@@ -2787,7 +3129,24 @@ def run_setup_wizard(env: dict) -> dict:
         print("\n[INFO] Installation cancelled by user.")
         sys.exit(0)
 
-    update_env_file(".env", env)
+    persisted_env = dict(env)
+    if handoff_authoritative:
+        # Handoff values remain runtime-only. In particular, never copy the
+        # signer key from .env.integration.secrets into the general .env file.
+        for key in (
+            "RPC_URL",
+            "CHAIN_ID",
+            "MASTER_PRIVATE_KEY",
+            "ADMIN_PRIVATE_KEY",
+            "MINTER_PRIVATE_KEY",
+            f"{prefix}_DARK_CONTRACT_ADDRESS",
+            f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",
+            f"{prefix}_STORE_API_URL",
+            "DARK_ABI_JSON",
+            "AUTHORITY_ABI_JSON",
+        ):
+            persisted_env[key] = ""
+    update_env_file(".env", persisted_env)
     print("[OK] Configuration saved to .env.\n")
     return env
 
@@ -2808,6 +3167,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Install or selectively rebuild dARK deployer components.",
     )
     subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser(
+        "validate",
+        help="Validate the saved non-interactive configuration without making changes.",
+    )
+    subparsers.add_parser(
+        "plan",
+        help="Validate and print a redacted installation plan without making changes.",
+    )
+    lock_parser = subparsers.add_parser(
+        "lock",
+        help="Record exact commits for installed component repositories.",
+    )
+    lock_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Verify that components.lock.json matches installed repositories.",
+    )
 
     rebuild_parser = subparsers.add_parser(
         "rebuild",
@@ -2879,18 +3256,57 @@ def main() -> None:
 
     :raises SystemExit: If ``TYPE`` is missing or not a recognised profile.
     """
-    _ensure_docker_group()
-
     print("=== dark-developer installer ===\n")
 
     ensure_supported_python()
     args = build_arg_parser().parse_args()
+
+    if args.command == "lock":
+        generate_component_lock(check=args.check)
+        return
+
+    if args.command not in {"validate", "plan"}:
+        _ensure_docker_group()
+
     env = load_env()
 
-    if args.command != "rebuild":
+    if args.command not in {"rebuild", "validate", "plan"}:
         env = run_setup_wizard(env)
 
     install_type, prefix = resolve_profile_prefix(env)
+
+    if args.command in {"validate", "plan"}:
+        install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
+        if install_bc and not env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip():
+            _apply_local_blockchain_defaults(env)
+        if install_apps and not install_bc and not install_storage:
+            validate_root_env_integration()
+            _merge_root_env_integration_into_env(
+                env=env,
+                prefix=prefix,
+                authoritative=True,
+            )
+        elif (
+            install_apps
+            and env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
+            and _ROOT_ENV_INTEGRATION.exists()
+        ):
+            _merge_root_env_integration_into_env(
+                env=env,
+                prefix=prefix,
+                authoritative=True,
+            )
+        validate_install_configuration(prefix, env)
+        if args.command == "plan":
+            print_install_plan(prefix, env)
+        else:
+            print("[OK] Installation configuration is valid.")
+        return
+
+    for role in ("deployer", "admin", "minter"):
+        private_key = get_role_private_key(env, role)
+        if private_key:
+            validate_private_key(private_key, install_type)
 
     print(f"[INFO] Profile: {install_type.upper()}")
 
@@ -2899,6 +3315,7 @@ def main() -> None:
         print("=== Rebuild complete ===")
         return
 
+    validate_install_configuration(prefix, env)
     ensure_docker_running()
     install_profile(prefix=prefix, env=env)
     print_install_summary(prefix=prefix, env=env)

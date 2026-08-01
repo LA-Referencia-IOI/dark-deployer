@@ -177,7 +177,8 @@ python3 install.py
 After completion, collect from this machine:
 - `RPC_URL` (written into `.env` by dark-env setup)
 - Contract addresses from `components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini`
-- `MASTER_WALLET_ADDRESS`, `MASTER_PRIVATE_KEY`, `MASTER_PUBLIC_KEY` from `.env`
+- signer material from `.env.integration.secrets` on apps hosts only; the storage
+  tier receives no blockchain private key
 
 ### Phase 2 — Blockchain Tier (Nodes 2…N)
 
@@ -221,7 +222,7 @@ cp .env.example .env
 
 # Contract addresses from Phase 1:
 # MASTER_WALLET_ADDRESS=...
-# MASTER_PRIVATE_KEY=...
+# MASTER_PRIVATE_KEY=  # keep blank when using .env.integration.secrets
 # MASTER_PUBLIC_KEY=...
 
 python3 install.py

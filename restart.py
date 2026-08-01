@@ -1,67 +1,124 @@
 #!/usr/bin/env python3
+"""Start installed dARK stacks and verify their configured health endpoints."""
+
 import subprocess
 import sys
-import urllib.request
+import time
 import urllib.error
+import urllib.request
 from pathlib import Path
 
-def run_shell(cmd: str, cwd: str = None) -> None:
-    print(f"[RUN] {cmd} in {cwd if cwd else 'current dir'}")
-    result = subprocess.run(cmd, shell=True, cwd=cwd)
-    if result.returncode != 0:
-        print(f"[ERROR] Command failed: {cmd}")
 
-def test_endpoints():
-    import time
-    print("\n[INFO] Waiting 20 seconds for services to boot up...")
-    time.sleep(20)
-    
-    endpoints = {
-        "ADMIN_API_BASE_URL": ("http://localhost:8000/health", "GET"),
-        "MINTER_BASE_URL": ("http://localhost:8001/health", "GET"),
-        "RESOLVER_BASE_URL": ("http://localhost:8002/health", "GET"),
-        "STORE_API_BASE_URL": ("http://localhost:8003/health", "GET"),
-        "IPFS_API_BASE_URL": ("http://localhost:5001/api/v0/version", "POST"),
-        "IPFS_CLUSTER_API_URL": ("http://localhost:9094/id", "GET")
-    }
-    
-    print("\n=== Testing Endpoints ===")
-    for name, (url, method) in endpoints.items():
+PROJECT_ROOT = Path(__file__).resolve().parent
+STACKS = [
+    ("components/blockchain/dark-env", None),
+    ("components/blockchain/dark-explorador", None),
+    ("components/storage/dark-ipfs", None),
+    ("components/services/dark-core-admin-api", "ADMIN_API_BASE_URL"),
+    ("components/services/dark-core-resolver-api", "RESOLVER_BASE_URL"),
+    ("components/services/dark-store-api", "STORE_API_BASE_URL"),
+    ("components/services/dark-core-minter-api", "MINTER_BASE_URL"),
+    ("components/frontend/dashboard-web", None),
+]
+DEFAULT_ENDPOINTS = {
+    "ADMIN_API_BASE_URL": "http://localhost:8000/health",
+    "MINTER_BASE_URL": "http://localhost:8001/health",
+    "RESOLVER_BASE_URL": "http://localhost:8002/health",
+    "STORE_API_BASE_URL": "http://localhost:8003/health",
+    "IPFS_API_BASE_URL": "http://localhost:5001/api/v0/version",
+    "IPFS_CLUSTER_API_URL": "http://localhost:9094/id",
+}
+
+
+def load_env(path: Path) -> dict[str, str]:
+    values = {}
+    if not path.exists():
+        return values
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, value = stripped.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+def has_compose_file(path: Path) -> bool:
+    return any((path / name).exists() for name in ("compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"))
+
+
+def wait_for_health(url: str, method: str = "GET", timeout: int = 60) -> bool:
+    deadline = time.monotonic() + timeout
+    last_error = "not ready"
+    while time.monotonic() < deadline:
         try:
-            req = urllib.request.Request(url, method=method)
-            with urllib.request.urlopen(req, timeout=3) as response:
-                print(f"[{name}] {url} - Status: {response.status}")
-        except urllib.error.HTTPError as e:
-            print(f"[{name}] {url} - Status: {e.code} (Service is UP)")
-        except urllib.error.URLError as e:
-            print(f"[{name}] {url} - Failed to connect")
-        except Exception as e:
-            print(f"[{name}] {url} - Error: {e}")
+            request = urllib.request.Request(url, method=method)
+            with urllib.request.urlopen(request, timeout=3) as response:
+                if 200 <= response.status < 400:
+                    print(f"[OK] {url} returned HTTP {response.status}")
+                    return True
+                last_error = f"HTTP {response.status}"
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+            last_error = str(exc)
+        time.sleep(2)
+    print(f"[ERROR] {url} did not become healthy: {last_error}")
+    return False
 
-def main():
-    print("=== Restarting Blockchain Infrastructure ===\n")
-    
-    components_to_restart = [
-        "components/blockchain/dark-env",
-        "components/blockchain/dark-explorador",
-        "components/storage/dark-ipfs",
-        "components/services/dark-core-admin-api",
-        "components/services/dark-core-resolver-api",
-        "components/services/dark-store-api",
-        "components/services/dark-core-minter-api"
-    ]
 
-    for rel_path in components_to_restart:
-        target = Path(rel_path).resolve()
-        if target.exists():
-            # We use 'restart' to keep containers alive but refresh processes
-            # or 'down && up -d' if you want a total reset.
-            run_shell("docker compose up -d", cwd=str(target))
-        else:
-            print(f"[SKIP] {rel_path} not found. skipping...")
+def main() -> int:
+    print("=== Restarting dARK infrastructure ===\n")
+    env = load_env(PROJECT_ROOT / ".env")
+    failures = []
+    health_checks = []
 
-    print("\n=== Restart complete ===")
-    test_endpoints()
+    for relative_path, endpoint_key in STACKS:
+        target = PROJECT_ROOT / relative_path
+        if not target.exists():
+            print(f"[SKIP] {relative_path} is not installed.")
+            continue
+        if not has_compose_file(target):
+            print(f"[SKIP] {relative_path} has no Compose file.")
+            continue
+        print(f"[RUN] docker compose up -d in {target}")
+        result = subprocess.run(["docker", "compose", "up", "-d"], cwd=str(target))
+        if result.returncode != 0:
+            failures.append(relative_path)
+            continue
+        if endpoint_key:
+            configured = env.get(endpoint_key, "").rstrip("/")
+            default = DEFAULT_ENDPOINTS[endpoint_key]
+            url = (
+                configured + "/health"
+                if configured and not configured.endswith("/health")
+                else configured or default
+            )
+            health_checks.append((relative_path, url, "GET"))
+        if relative_path == "components/storage/dark-ipfs":
+            health_checks.extend([
+                (
+                    relative_path,
+                    env.get("IPFS_API_BASE_URL", DEFAULT_ENDPOINTS["IPFS_API_BASE_URL"]),
+                    "POST",
+                ),
+                (
+                    relative_path,
+                    env.get(
+                        "IPFS_CLUSTER_API_URL",
+                        DEFAULT_ENDPOINTS["IPFS_CLUSTER_API_URL"],
+                    ),
+                    "GET",
+                ),
+            ])
+
+    for relative_path, url, method in health_checks:
+        if not wait_for_health(url, method=method):
+            failures.append(relative_path)
+
+    if failures:
+        print(f"\n[ERROR] Restart/health failures: {', '.join(sorted(set(failures)))}")
+        return 1
+    print("\n=== Restart complete and healthy ===")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
