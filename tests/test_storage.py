@@ -54,6 +54,34 @@ class StorageTopologyTests(unittest.TestCase):
         document["strict_single_site"] = True
         self.assertEqual(self.load(document).policy.replication_min, 2)
 
+    def test_explicit_developer_topology_allows_exactly_one_peer(self):
+        document = topology_document(1)
+        document["development_single_node"] = True
+        document["sites"][0]["peers"] = document["sites"][0]["peers"][:1]
+
+        topology = self.load(document)
+
+        self.assertTrue(topology.development_single_node)
+        self.assertEqual(len(topology.peers), 1)
+        self.assertEqual(topology.policy.replication_min, 1)
+        self.assertEqual(topology.policy.replication_max, 1)
+
+    def test_developer_topology_rejects_production_shapes(self):
+        document = topology_document(2)
+        document["development_single_node"] = True
+        with self.assertRaisesRegex(StorageTopologyError, "exactly one site"):
+            self.load(document)
+
+        document = topology_document(1)
+        document["development_single_node"] = True
+        with self.assertRaisesRegex(StorageTopologyError, "exactly one peer"):
+            self.load(document)
+
+        document["sites"][0]["peers"] = document["sites"][0]["peers"][:1]
+        document["strict_single_site"] = True
+        with self.assertRaisesRegex(StorageTopologyError, "cannot require"):
+            self.load(document)
+
     def test_node_environment_uses_all_other_peers_as_bootstraps(self):
         topology = self.load(topology_document(2))
         generated = node_environment(topology, "site-1-storage-2", "/swarm", "/cluster")

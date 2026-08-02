@@ -19,6 +19,10 @@ and Cluster traffic travels over the VPN; Store APIs do not replicate to or
 control one another. See [IPFS architecture](docs/ipfs-architecture.md) for the
 failure model and design rationale.
 
+The `developer` profile has one explicit local-only exception: the wizard runs
+one Kubo + Cluster peer on the same machine as Store API. It is not accepted by
+the `sandbox` or `production` profiles.
+
 ## Requirements
 
 - Python 3.10 or newer
@@ -31,6 +35,22 @@ Administrative APIs (`5001`, `9094`, `9095`) must remain private. Kubo swarm
 `4001/tcp+udp` and Cluster swarm `9096/tcp+udp` must be reachable between peers.
 
 ## Configure
+
+For a single-machine developer installation, copy only the environment example
+and run the wizard:
+
+```bash
+cp .env.example .env
+python3 install.py
+```
+
+The wizard creates `storage-topology.json` and two developer-only IPFS secrets
+under `.dark-secrets/developer/` if they do not exist. It never overwrites
+existing topology or secret files, and both generated paths are excluded from
+Git.
+
+For sandbox and production infrastructure, configure the topology and secrets
+explicitly:
 
 ```bash
 cp .env.example .env
@@ -114,6 +134,20 @@ python3 install.py
 The interactive wizard selects only the profile and role. It does not collect
 secrets or topology addresses. Missing fields are reported before repositories,
 containers or networks are changed.
+
+If an installation stops after completing earlier stages, resume from the
+first stage that did not finish instead of rerunning blockchain setup and
+contract deployment:
+
+```bash
+python3 install.py resume --from ipfs
+python3 install.py resume --from store-api
+```
+
+Valid stages, in order, are `blockchain`, `core-lib`, `admin`, `ipfs`,
+`store-api`, `resolver`, `minter` and `dashboard`. Resume uses the saved `.env`
+and blockchain handoff, does not open the wizard, and reports every preserved
+stage.
 
 ### Recommended site sequence
 

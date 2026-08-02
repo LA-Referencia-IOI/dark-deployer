@@ -44,6 +44,7 @@ class StorageTopology:
     cluster_name: str
     peers: tuple[StoragePeer, ...]
     strict_single_site: bool = False
+    development_single_node: bool = False
 
     @property
     def sites(self) -> tuple[str, ...]:
@@ -52,6 +53,8 @@ class StorageTopology:
     @property
     def policy(self) -> ReplicationPolicy:
         expected = len(self.peers)
+        if self.development_single_node:
+            return ReplicationPolicy(1, 1, 1, 1)
         if len(self.sites) == 1:
             minimum = 2 if self.strict_single_site else 1
             return ReplicationPolicy(minimum, expected, minimum, 1)
@@ -119,6 +122,13 @@ def load_storage_topology(path: Path) -> StorageTopology:
     sites = document.get("sites")
     if not isinstance(sites, list) or not sites:
         raise StorageTopologyError("sites must be a non-empty array")
+    development_single_node = document.get("development_single_node", False)
+    if not isinstance(development_single_node, bool):
+        raise StorageTopologyError("development_single_node must be a boolean")
+    if development_single_node and len(sites) != 1:
+        raise StorageTopologyError(
+            "development_single_node requires exactly one site"
+        )
 
     peers: list[StoragePeer] = []
     seen_sites: set[str] = set()
@@ -134,7 +144,12 @@ def load_storage_topology(path: Path) -> StorageTopology:
             raise StorageTopologyError(f"duplicate site id {site_id!r}")
         seen_sites.add(site_id)
         site_peers = site_value.get("peers")
-        if not isinstance(site_peers, list) or len(site_peers) != 2:
+        expected_peer_count = 1 if development_single_node else 2
+        if not isinstance(site_peers, list) or len(site_peers) != expected_peer_count:
+            if development_single_node:
+                raise StorageTopologyError(
+                    "development_single_node requires exactly one peer"
+                )
             raise StorageTopologyError(f"site {site_id!r} must define exactly two peers")
 
         for peer_index, peer_value in enumerate(site_peers):
@@ -183,7 +198,16 @@ def load_storage_topology(path: Path) -> StorageTopology:
     strict = document.get("strict_single_site", False)
     if not isinstance(strict, bool):
         raise StorageTopologyError("strict_single_site must be a boolean")
-    return StorageTopology(cluster_name, tuple(peers), strict)
+    if development_single_node and strict:
+        raise StorageTopologyError(
+            "development_single_node cannot require strict_single_site replication"
+        )
+    return StorageTopology(
+        cluster_name,
+        tuple(peers),
+        strict,
+        development_single_node,
+    )
 
 
 def node_environment(

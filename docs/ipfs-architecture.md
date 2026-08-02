@@ -165,6 +165,11 @@ These files are common to every site, distributed outside Git, mounted
 read-only and stored with restrictive permissions. Kubo supports private swarm
 keys through `IPFS_SWARM_KEY_FILE` in its Docker image.
 
+Every Kubo peer applies the official `autoconf-off` profile, uses the private
+DHT explicitly, disables AutoTLS, shared WebSocket listeners and anonymous
+telemetry, and removes all public bootstrap peers. Discovery, routing and block
+exchange therefore stay within the explicitly bootstrapped private swarm.
+
 To avoid pre-generating and distributing peer identity files, CRDT uses
 `trusted_peers="*"` inside this secret-protected network. Possession of the
 Cluster secret therefore grants cluster membership and pinset mutation rights.
@@ -288,7 +293,23 @@ IPFS_CLUSTER_WRITE_MIN_SITES=1
 
 That profile pauses minting when either server fails.
 
-### 8.3 Growing from one site to two
+### 8.3 Developer-only single-node exception
+
+The interactive `developer` profile runs the complete stack on one machine. It
+therefore generates a topology with one site and one peer, marked explicitly:
+
+```json
+{
+  "development_single_node": true
+}
+```
+
+Its replication minimum and maximum are both one. Store API reaches Kubo and
+Cluster through aliases on the shared `dark-net` Docker network while host
+ports bind only to loopback. This mode provides no storage redundancy and is
+rejected by the `sandbox` and `production` profiles.
+
+### 8.4 Growing from one site to two
 
 The cluster is not recreated. Two new peers join the existing CRDT cluster,
 then configuration changes from `min=1/max=2` to `min=3/max=4`. Historical

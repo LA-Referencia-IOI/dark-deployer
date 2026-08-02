@@ -17,6 +17,13 @@ SPEC.loader.exec_module(installer)
 
 
 class CommandParsingTests(unittest.TestCase):
+    def test_resume_requires_an_explicit_known_stage(self):
+        args = installer.build_arg_parser().parse_args(
+            ["resume", "--from", "store-api"]
+        )
+        self.assertEqual(args.command, "resume")
+        self.assertEqual(args.from_stage, "store-api")
+
     def test_json_commands_preserve_shell_pipes(self):
         commands = installer.parse_commands('["producer | consumer","docker compose up -d"]')
         self.assertEqual(commands, ["producer | consumer", "docker compose up -d"])
@@ -46,6 +53,58 @@ class CommandParsingTests(unittest.TestCase):
         for path in paths:
             with self.subTest(path=path.name):
                 self.assertIsNone(assignment.search(path.read_text()))
+
+    def test_minter_worker_probe_accepts_current_heartbeat_schema(self):
+        response = mock.MagicMock()
+        response.read.return_value = json.dumps({
+            "workers": {
+                "metadata": {"alive": True, "status": "running"},
+                "chain": {"alive": True, "status": "running"},
+            }
+        }).encode()
+        response.__enter__.return_value = response
+
+        with mock.patch.object(installer.urllib.request, "urlopen", return_value=response):
+            status = installer.probe_minter_worker_status("http://localhost:8001")
+
+        self.assertEqual(status, "metadata=up, chain=up")
+
+    def test_developer_storage_probe_uses_host_loopback(self):
+        topology = installer.StorageTopology(
+            "dark-developer",
+            (),
+            development_single_node=True,
+        )
+
+        self.assertEqual(
+            installer.storage_probe_url(
+                topology,
+                "http://dark-ipfs-local:5001",
+                "127.0.0.1",
+                5001,
+            ),
+            "http://127.0.0.1:5001",
+        )
+
+    def test_developer_storage_operations_use_published_cluster_port(self):
+        peer = installer.StoragePeer(
+            id="site-a-storage-1",
+            site="site-a",
+            vpn_address="127.0.0.1",
+            ipfs_api_url="http://dark-ipfs-local:5001",
+            cluster_api_url="http://dark-ipfs-cluster-local:9094",
+            cluster_proxy_url="http://dark-ipfs-cluster-local:9095",
+        )
+        topology = installer.StorageTopology(
+            "dark-developer",
+            (peer,),
+            development_single_node=True,
+        )
+
+        self.assertEqual(
+            installer.cluster_operation_endpoints(topology, "site-a"),
+            ["http://127.0.0.1:9094"],
+        )
 
 
 class IntegrationTests(unittest.TestCase):
@@ -194,9 +253,127 @@ class IntegrationTests(unittest.TestCase):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_developer_wizard_assets_are_generated_once_and_securely(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env = {
+                "TYPE": "developer",
+                "DEVELOPER_INSTALL_COMPONENTS": "all",
+                "DEVELOPER_STORAGE_TOPOLOGY_FILE": "storage-topology.json",
+                "DEVELOPER_STORAGE_SITE_ID": "site-a",
+                "DEVELOPER_STORAGE_NODE_ID": "site-a-storage-1",
+                "DEVELOPER_IPFS_SWARM_KEY_FILE": "/missing/swarm.key",
+                "DEVELOPER_IPFS_CLUSTER_SECRET_FILE": "/missing/cluster.secret",
+            }
+
+            with mock.patch.object(installer, "PROJECT_ROOT", root):
+                installer._prepare_developer_storage_assets(env)
+                first_swarm = Path(env["DEVELOPER_IPFS_SWARM_KEY_FILE"]).read_text()
+                first_cluster = Path(
+                    env["DEVELOPER_IPFS_CLUSTER_SECRET_FILE"]
+                ).read_text()
+                installer._prepare_developer_storage_assets(env)
+                installer.validate_install_configuration("DEVELOPER", env)
+
+            topology = installer.load_storage_topology(
+                root / "storage-topology.json"
+            )
+            self.assertTrue(topology.development_single_node)
+            self.assertEqual(len(topology.peers), 1)
+            self.assertEqual(
+                topology.peers[0].ipfs_api_url,
+                "http://dark-ipfs-local:5001",
+            )
+            self.assertEqual(
+                Path(env["DEVELOPER_IPFS_SWARM_KEY_FILE"]).read_text(),
+                first_swarm,
+            )
+            self.assertEqual(
+                Path(env["DEVELOPER_IPFS_CLUSTER_SECRET_FILE"]).read_text(),
+                first_cluster,
+            )
+            self.assertEqual(
+                Path(env["DEVELOPER_IPFS_SWARM_KEY_FILE"]).stat().st_mode & 0o777,
+                0o600,
+            )
+            self.assertEqual(
+                Path(env["DEVELOPER_IPFS_CLUSTER_SECRET_FILE"]).stat().st_mode
+                & 0o777,
+                0o600,
+            )
+
+    def test_resume_from_store_api_skips_completed_stages(self):
+        env = {
+            "TYPE": "developer",
+            "DEVELOPER_INSTALL_COMPONENTS": "all",
+        }
+        with (
+            mock.patch.object(installer, "validate_root_env_integration"),
+            mock.patch.object(installer, "_merge_root_env_integration_into_env"),
+            mock.patch.object(installer, "validate_install_configuration"),
+            mock.patch.object(installer, "install_blockchain") as blockchain,
+            mock.patch.object(installer, "install_core_lib") as core_lib,
+            mock.patch.object(installer, "install_core_admin_api") as admin,
+            mock.patch.object(installer, "install_dark_ipfs") as ipfs,
+            mock.patch.object(installer, "install_dark_store_api") as store_api,
+            mock.patch.object(installer, "_update_root_env_integration_storage"),
+            mock.patch.object(installer, "install_core_resolver_api") as resolver,
+            mock.patch.object(installer, "install_single_component") as minter,
+            mock.patch.object(installer, "install_dashboard") as dashboard,
+        ):
+            installer.install_profile(
+                "DEVELOPER",
+                env,
+                resume_from="store-api",
+            )
+
+        blockchain.assert_not_called()
+        core_lib.assert_not_called()
+        admin.assert_not_called()
+        ipfs.assert_not_called()
+        store_api.assert_called_once()
+        resolver.assert_called_once()
+        minter.assert_called_once()
+        dashboard.assert_called_once()
+
     def test_legacy_storage_role_is_rejected(self):
         with self.assertRaises(SystemExit):
             installer._selected_tiers("SANDBOX", {"SANDBOX_INSTALL_COMPONENTS": "storage"})
+
+    def test_single_node_developer_topology_is_rejected_by_production(self):
+        document = {
+            "version": 1,
+            "cluster_name": "dark-developer",
+            "development_single_node": True,
+            "sites": [
+                {
+                    "id": "site-a",
+                    "peers": [
+                        {
+                            "id": "site-a-storage-1",
+                            "vpn_address": "127.0.0.1",
+                        }
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "topology.json"
+            path.write_text(json.dumps(document))
+            topology = installer.load_storage_topology(path)
+            env = {
+                "TYPE": "production",
+                "PRODUCTION_INSTALL_COMPONENTS": "storage-node",
+            }
+            with (
+                mock.patch.object(
+                    installer,
+                    "configured_storage_topology",
+                    return_value=topology,
+                ),
+                self.assertRaises(SystemExit),
+            ):
+                installer.validate_install_configuration("PRODUCTION", env)
 
     def test_storage_secrets_have_distinct_valid_formats(self):
         with tempfile.TemporaryDirectory() as temporary:

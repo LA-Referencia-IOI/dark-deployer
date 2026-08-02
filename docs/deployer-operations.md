@@ -25,6 +25,20 @@ The interactive installation remains:
 python3 install.py
 ```
 
+### Resume an interrupted installation
+
+Do not rerun completed blockchain stages after a later component fails. Resume
+from the first unfinished stage using the saved configuration and handoff:
+
+```bash
+python3 install.py resume --from ipfs
+python3 install.py resume --from store-api
+```
+
+The ordered stages are `blockchain`, `core-lib`, `admin`, `ipfs`, `store-api`,
+`resolver`, `minter` and `dashboard`. Resume is explicit: it preserves every
+earlier stage, validates the saved handoff, and does not open the wizard.
+
 ## 2. Configuration precedence
 
 The installer keeps operator configuration separate from deployment state:

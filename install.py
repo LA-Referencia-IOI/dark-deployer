@@ -53,6 +53,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shlex
 import subprocess
 import sys
@@ -73,6 +74,7 @@ from dark_deployer.process import (
     strip_url_credentials,
 )
 from dark_deployer.storage import (
+    StoragePeer,
     StorageTopology,
     StorageTopologyError,
     cluster_request,
@@ -380,8 +382,17 @@ def probe_minter_worker_status(minter_url: str) -> str:
         return "down"
 
     workers = body.get("workers") or {}
-    metadata_running = bool((workers.get("metadata") or {}).get("running"))
-    chain_running = bool((workers.get("chain") or {}).get("running"))
+    def is_running(worker: dict) -> bool:
+        # Current minter versions expose ``alive`` and ``status``. Keep the
+        # legacy ``running`` flag compatible with older component releases.
+        return bool(
+            worker.get("running")
+            or worker.get("alive")
+            or worker.get("status") == "running"
+        )
+
+    metadata_running = is_running(workers.get("metadata") or {})
+    chain_running = is_running(workers.get("chain") or {})
     return (
         f"metadata={'up' if metadata_running else 'down'}, "
         f"chain={'up' if chain_running else 'down'}"
@@ -426,6 +437,24 @@ def probe_ipfs_api_status(ipfs_api_url: str) -> str:
         return f"up ({status_code})"
     except Exception:
         return "down"
+
+
+def storage_probe_url(
+    topology: StorageTopology,
+    configured_url: str,
+    vpn_address: str,
+    port: int,
+) -> str:
+    """Return a host-reachable health URL for a storage endpoint.
+
+    The generated single-node developer topology deliberately gives
+    application containers Docker DNS aliases. Those aliases are not
+    resolvable by the host running the installer, while the same services are
+    published on loopback for operations and health checks.
+    """
+    if topology.development_single_node:
+        return f"http://{vpn_address}:{port}"
+    return configured_url
 
 
 def docker_network_exists(network_name: str) -> bool:
@@ -517,11 +546,21 @@ def print_install_summary(prefix: str, env: dict) -> None:
     if install_storage or install_apps:
         topology = configured_storage_topology(prefix, env)
         site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
-        endpoints = topology.local_endpoints(site_id)
-        for index, ipfs_api_url in enumerate(endpoints["ipfs"], 1):
-            print(f"- Site IPFS {index}: {ipfs_api_url} [{probe_ipfs_api_status(ipfs_api_url)}]")
-        for index, cluster_api_url in enumerate(endpoints["cluster"], 1):
-            print(f"- Site Cluster {index}: {cluster_api_url} [{probe_http_status(f'{cluster_api_url}/id')}]")
+        for index, peer in enumerate(topology.site_peers(site_id), 1):
+            ipfs_probe_url = storage_probe_url(
+                topology, peer.ipfs_api_url, peer.vpn_address, 5001
+            )
+            cluster_probe_url = storage_probe_url(
+                topology, peer.cluster_api_url, peer.vpn_address, 9094
+            )
+            print(
+                f"- Site IPFS {index}: {peer.ipfs_api_url} "
+                f"[{probe_ipfs_api_status(ipfs_probe_url)}]"
+            )
+            print(
+                f"- Site Cluster {index}: {peer.cluster_api_url} "
+                f"[{probe_http_status(f'{cluster_probe_url}/id')}]"
+            )
 
     store_api_selected = install_apps and bool(get_url(env, f"{prefix}_STORE_API_REPOSITORY_URL"))
     if store_api_selected:
@@ -2555,6 +2594,7 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
     print(f"[OK] Generated '{node_env_path}' for {node_id}.")
 
     if do_setup:
+        ensure_dark_net()
         setup_repo(target_dir=target, commands_str=commands)
     else:
         print("[INFO] SETUP=False — 'dark-ipfs' cloned, setup skipped.\n")
@@ -2655,7 +2695,23 @@ def install_dashboard(prefix: str, env: dict) -> None:
 # ─── Profile installer ────────────────────────────────────────────────────────
 
 
-def install_profile(prefix: str, env: dict) -> None:
+INSTALL_STAGES = (
+    "blockchain",
+    "core-lib",
+    "admin",
+    "ipfs",
+    "store-api",
+    "resolver",
+    "minter",
+    "dashboard",
+)
+
+
+def install_profile(
+    prefix: str,
+    env: dict,
+    resume_from: Optional[str] = None,
+) -> None:
     """Install all components for a given profile prefix.
 
     Components installed in order:
@@ -2667,14 +2723,24 @@ def install_profile(prefix: str, env: dict) -> None:
     5. dark-store-api
     6. Core Resolver API
     7. Minter
+    8. Dashboard
 
     :param prefix: Environment variable prefix matching the active profile
                    (e.g. ``DEVELOPER``, ``SANDBOX``, ``PRODUCTION``).
     :type prefix: str
     :param env: Dictionary of environment variables loaded from ``.env``.
     :type env: dict
+    :param resume_from: First stage to execute when continuing a partial install.
+    :type resume_from: str, optional
     """
     install_bc, install_ipfs, install_apps = _selected_tiers(prefix, env)
+    start_index = INSTALL_STAGES.index(resume_from) if resume_from else 0
+
+    def should_run(stage: str) -> bool:
+        selected = INSTALL_STAGES.index(stage) >= start_index
+        if not selected:
+            print(f"[RESUME] Keeping completed stage '{stage}'.")
+        return selected
 
     if install_bc:
         blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
@@ -2682,9 +2748,17 @@ def install_profile(prefix: str, env: dict) -> None:
             print(f"[INFO] Blockchain tier is remote ({blockchain_host}) — skipping local install.")
             env["_BLOCKCHAIN_CO_LOCATED"] = "false"
         else:
-            install_blockchain(prefix=prefix, env=env)
-            _generate_root_env_integration_blockchain(env=env)
-            _merge_root_env_integration_into_env(env=env, prefix=prefix)
+            if should_run("blockchain"):
+                install_blockchain(prefix=prefix, env=env)
+                _generate_root_env_integration_blockchain(env=env)
+                _merge_root_env_integration_into_env(env=env, prefix=prefix)
+            else:
+                validate_root_env_integration()
+                _merge_root_env_integration_into_env(
+                    env=env,
+                    prefix=prefix,
+                    authoritative=True,
+                )
             env["_BLOCKCHAIN_CO_LOCATED"] = "true"
     else:
         print("[INFO] Blockchain not selected — skipping.")
@@ -2704,23 +2778,30 @@ def install_profile(prefix: str, env: dict) -> None:
     validate_install_configuration(prefix, env)
 
     if install_apps:
-        install_core_lib(prefix=prefix, env=env)
-        install_core_admin_api(prefix=prefix, env=env)
+        if should_run("core-lib"):
+            install_core_lib(prefix=prefix, env=env)
+        if should_run("admin"):
+            install_core_admin_api(prefix=prefix, env=env)
 
     if install_ipfs:
-        install_dark_ipfs(prefix=prefix, env=env)
+        if should_run("ipfs"):
+            install_dark_ipfs(prefix=prefix, env=env)
     else:
         print("[INFO] Storage node not selected — skipping.")
 
     if install_apps:
         # Every application site owns a local Store API backed by both local peers.
         env[f"{prefix}_STORE_API_URL"] = "http://store-api:8003"
-        install_dark_store_api(prefix=prefix, env=env)
-        _update_root_env_integration_storage(env=env, prefix=prefix)
-        _merge_root_env_integration_into_env(env=env, prefix=prefix)
-        install_core_resolver_api(prefix=prefix, env=env)
-        install_single_component(name="MINTER", prefix=prefix, env=env)
-        install_dashboard(prefix=prefix, env=env)
+        if should_run("store-api"):
+            install_dark_store_api(prefix=prefix, env=env)
+            _update_root_env_integration_storage(env=env, prefix=prefix)
+            _merge_root_env_integration_into_env(env=env, prefix=prefix)
+        if should_run("resolver"):
+            install_core_resolver_api(prefix=prefix, env=env)
+        if should_run("minter"):
+            install_single_component(name="MINTER", prefix=prefix, env=env)
+        if should_run("dashboard"):
+            install_dashboard(prefix=prefix, env=env)
 
 
 def _selected_tiers(prefix: str, env: dict) -> tuple[bool, bool, bool]:
@@ -2826,6 +2907,15 @@ def validate_install_configuration(prefix: str, env: dict) -> None:
 
     if install_storage or install_apps:
         topology = configured_storage_topology(prefix, env)
+        if (
+            topology.development_single_node
+            and env.get("TYPE", "developer").strip().lower() != "developer"
+        ):
+            print(
+                "[ERROR] development_single_node storage topology is allowed "
+                "only with the developer profile."
+            )
+            sys.exit(1)
         site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
         if not site_id:
             print(f"[ERROR] {prefix}_STORAGE_SITE_ID is required in global-cluster mode.")
@@ -2926,9 +3016,26 @@ def _entry_pinned_sites(topology: StorageTopology, entry: dict) -> set[str]:
     return sites
 
 
+def cluster_operation_endpoints(
+    topology: StorageTopology,
+    site_id: str,
+) -> list[str]:
+    """Return Cluster API URLs reachable by the machine running operations."""
+    peers = topology.site_peers(site_id)
+    return [
+        storage_probe_url(
+            topology,
+            peer.cluster_api_url,
+            peer.vpn_address,
+            9094,
+        )
+        for peer in peers
+    ]
+
+
 def audit_storage(topology: StorageTopology, site_id: str) -> dict[str, int]:
     """Inspect global pin status without changing allocations."""
-    endpoints = topology.local_endpoints(site_id)["cluster"]
+    endpoints = cluster_operation_endpoints(topology, site_id)
     entries = pin_entries(cluster_request(endpoints, "GET", "/pins", timeout=60.0))
     policy = topology.policy
     summary = {
@@ -2976,7 +3083,7 @@ def audit_storage(topology: StorageTopology, site_id: str) -> dict[str, int]:
 
 def reconcile_storage(topology: StorageTopology, site_id: str) -> dict[str, int]:
     """Reapply the topology replication policy to every pin; never unpin."""
-    endpoints = topology.local_endpoints(site_id)["cluster"]
+    endpoints = cluster_operation_endpoints(topology, site_id)
     allocations = pin_entries(
         cluster_request(endpoints, "GET", "/allocations", timeout=60.0)
     )
@@ -3071,6 +3178,97 @@ _STORAGE_REPO_DEFAULTS: dict = {
     "dark-ipfs":      ("_IPFS_REPOSITORY_URL",      "git@github.com:LA-Referencia-IOI/dark-ipfs.git"),
     "dark-store-api": ("_STORE_API_REPOSITORY_URL",  "git@github.com:LA-Referencia-IOI/dark-store-api.git"),
 }
+
+
+def _prepare_developer_storage_assets(env: dict) -> None:
+    """Create the local-only topology and IPFS secrets required by developer.
+
+    Production and sandbox topologies always keep the two-peers-per-site
+    invariant. The developer wizard instead promises a complete stack on one
+    machine, so it receives an explicit one-site/one-peer topology whose API
+    endpoints use the shared Docker network.
+    """
+    prefix = "DEVELOPER"
+    _, install_storage, install_apps = _selected_tiers(prefix, env)
+    if not (install_storage or install_apps):
+        return
+
+    site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip() or "site-a"
+    node_id = (
+        env.get(f"{prefix}_STORAGE_NODE_ID", "").strip()
+        or f"{site_id}-storage-1"
+    )
+    env[f"{prefix}_STORAGE_SITE_ID"] = site_id
+    env[f"{prefix}_STORAGE_NODE_ID"] = node_id
+
+    raw_topology_path = (
+        env.get(f"{prefix}_STORAGE_TOPOLOGY_FILE", "").strip()
+        or "storage-topology.json"
+    )
+    topology_path = Path(raw_topology_path)
+    if not topology_path.is_absolute():
+        topology_path = PROJECT_ROOT / topology_path
+    env[f"{prefix}_STORAGE_TOPOLOGY_FILE"] = raw_topology_path
+
+    if not topology_path.exists():
+        topology_document = {
+            "version": 1,
+            "cluster_name": "dark-developer",
+            "development_single_node": True,
+            "strict_single_site": False,
+            "sites": [
+                {
+                    "id": site_id,
+                    "peers": [
+                        {
+                            "id": node_id,
+                            "vpn_address": "127.0.0.1",
+                            "ipfs_api_url": "http://dark-ipfs-local:5001",
+                            "cluster_api_url": (
+                                "http://dark-ipfs-cluster-local:9094"
+                            ),
+                            "cluster_proxy_url": (
+                                "http://dark-ipfs-cluster-local:9095"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+        write_text_secure(
+            topology_path,
+            json.dumps(topology_document, indent=2) + "\n",
+            mode=0o644,
+        )
+        print(f"[OK] Generated single-node developer topology at '{topology_path}'.")
+
+    secret_dir = PROJECT_ROOT / ".dark-secrets" / "developer"
+    secret_specs = (
+        (
+            f"{prefix}_IPFS_SWARM_KEY_FILE",
+            secret_dir / "ipfs-swarm.key",
+            "/key/swarm/psk/1.0.0/\n/base16/\n"
+            f"{secrets.token_hex(32)}\n",
+        ),
+        (
+            f"{prefix}_IPFS_CLUSTER_SECRET_FILE",
+            secret_dir / "ipfs-cluster-secret",
+            f"{secrets.token_hex(32)}\n",
+        ),
+    )
+    for key, default_path, content in secret_specs:
+        configured = env.get(key, "").strip()
+        configured_path = Path(configured) if configured else None
+        if configured_path and not configured_path.is_absolute():
+            configured_path = PROJECT_ROOT / configured_path
+        if configured_path and configured_path.exists():
+            env[key] = str(configured_path.resolve())
+            continue
+
+        if not default_path.exists():
+            write_text_secure(default_path, content, mode=0o600)
+            print(f"[OK] Generated developer secret file '{default_path}'.")
+        env[key] = str(default_path.resolve())
 
 
 def _apply_local_blockchain_defaults(env: dict) -> None:
@@ -3250,6 +3448,9 @@ def run_setup_wizard(env: dict) -> dict:
         print("\n[INFO] Installation cancelled by user.")
         sys.exit(0)
 
+    if install_type == "developer":
+        _prepare_developer_storage_assets(env)
+
     persisted_env = dict(env)
     if handoff_authoritative:
         # Handoff values remain runtime-only. In particular, never copy the
@@ -3314,6 +3515,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "action",
         choices=("audit", "reconcile"),
         help="Audit is read-only; reconcile reapplies replication policy without unpinning.",
+    )
+    resume_parser = subparsers.add_parser(
+        "resume",
+        help="Continue a partial installation without rerunning completed stages.",
+    )
+    resume_parser.add_argument(
+        "--from",
+        dest="from_stage",
+        required=True,
+        choices=INSTALL_STAGES,
+        help="First installation stage to execute.",
     )
 
     rebuild_parser = subparsers.add_parser(
@@ -3400,7 +3612,7 @@ def main() -> None:
 
     env = load_env()
 
-    if args.command not in {"rebuild", "validate", "plan", "storage"}:
+    if args.command not in {"rebuild", "resume", "validate", "plan", "storage"}:
         env = run_setup_wizard(env)
 
     install_type, prefix = resolve_profile_prefix(env)
@@ -3437,6 +3649,14 @@ def main() -> None:
             print("[OK] Installation configuration is valid.")
         return
 
+    if args.command == "resume" and args.from_stage != "blockchain":
+        validate_root_env_integration()
+        _merge_root_env_integration_into_env(
+            env=env,
+            prefix=prefix,
+            authoritative=True,
+        )
+
     for role in ("deployer", "admin", "minter"):
         private_key = get_role_private_key(env, role)
         if private_key:
@@ -3451,7 +3671,11 @@ def main() -> None:
 
     validate_install_configuration(prefix, env)
     ensure_docker_running()
-    install_profile(prefix=prefix, env=env)
+    install_profile(
+        prefix=prefix,
+        env=env,
+        resume_from=args.from_stage if args.command == "resume" else None,
+    )
     print_install_summary(prefix=prefix, env=env)
 
     print("=== Installation complete ===")
