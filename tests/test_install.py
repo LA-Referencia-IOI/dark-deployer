@@ -17,6 +17,29 @@ SPEC.loader.exec_module(installer)
 
 
 class CommandParsingTests(unittest.TestCase):
+    def test_developer_wizard_selects_ha_topology(self):
+        env = {
+            "TYPE": "developer",
+            "DEVELOPER_INSTALL_COMPONENTS": "all",
+            "DEVELOPER_STORAGE_SITE_ID": "site-a",
+        }
+        with (
+            mock.patch.object(installer, "_ask_choice", side_effect=[1, 2]),
+            mock.patch.object(installer, "_ask_confirm", return_value=True),
+            mock.patch.object(
+                installer, "_prepare_developer_storage_assets"
+            ) as prepare,
+            mock.patch.object(installer, "update_env_file"),
+        ):
+            selected = installer.run_setup_wizard(env)
+
+        self.assertEqual(selected["DEVELOPER_STORAGE_MODE"], "ha")
+        self.assertEqual(
+            selected["DEVELOPER_STORAGE_TOPOLOGY_FILE"],
+            "storage-topology.developer-ha.json",
+        )
+        prepare.assert_called_once_with(selected)
+
     def test_resume_requires_an_explicit_known_stage(self):
         args = installer.build_arg_parser().parse_args(
             ["resume", "--from", "store-api"]
@@ -253,6 +276,110 @@ class IntegrationTests(unittest.TestCase):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_developer_ha_assets_create_two_independent_peers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env = {
+                "TYPE": "developer",
+                "DEVELOPER_INSTALL_COMPONENTS": "all",
+                "DEVELOPER_STORAGE_MODE": "ha",
+                "DEVELOPER_STORAGE_TOPOLOGY_FILE": (
+                    "storage-topology.developer-ha.json"
+                ),
+                "DEVELOPER_STORAGE_SITE_ID": "site-a",
+                "DEVELOPER_STORAGE_NODE_ID": "site-a-storage-1",
+            }
+
+            with mock.patch.object(installer, "PROJECT_ROOT", root):
+                installer._prepare_developer_storage_assets(env)
+                topology = installer.configured_storage_topology(
+                    "DEVELOPER", env
+                )
+                installer.validate_install_configuration("DEVELOPER", env)
+
+            self.assertFalse(topology.development_single_node)
+            self.assertEqual(len(topology.peers), 2)
+            self.assertEqual(topology.policy.replication_min, 1)
+            self.assertEqual(topology.policy.replication_max, 2)
+            self.assertEqual(
+                topology.peers[1].host_ipfs_api_url,
+                "http://127.0.0.1:5101",
+            )
+            self.assertEqual(
+                topology.peers[1].host_cluster_api_url,
+                "http://127.0.0.1:9194",
+            )
+
+    def test_developer_ha_install_starts_both_storage_peers(self):
+        topology = installer.StorageTopology(
+            "dark-developer",
+            (
+                installer.StoragePeer(
+                    "site-a-storage-1",
+                    "site-a",
+                    "127.0.0.1",
+                    "http://dark-ipfs-site-a-storage-1:5001",
+                    "http://dark-ipfs-cluster-site-a-storage-1:9094",
+                    "http://dark-ipfs-cluster-site-a-storage-1:9095",
+                    "http://127.0.0.1:5001",
+                    "http://127.0.0.1:9094",
+                    "http://127.0.0.1:9095",
+                ),
+                installer.StoragePeer(
+                    "site-a-storage-2",
+                    "site-a",
+                    "127.0.0.2",
+                    "http://dark-ipfs-site-a-storage-2:5001",
+                    "http://dark-ipfs-cluster-site-a-storage-2:9094",
+                    "http://dark-ipfs-cluster-site-a-storage-2:9095",
+                    "http://127.0.0.1:5101",
+                    "http://127.0.0.1:9194",
+                    "http://127.0.0.1:9195",
+                ),
+            ),
+        )
+        env = {
+            "DEVELOPER_IPFS_REPOSITORY_URL": "https://example.invalid/ipfs.git",
+            "DEVELOPER_IPFS_REPOSITORY_BRANCH": "main",
+            "DEVELOPER_IPFS_SETUP": "True",
+            "DEVELOPER_STORAGE_SITE_ID": "site-a",
+            "DEVELOPER_STORAGE_NODE_ID": "site-a-storage-1",
+            "DEVELOPER_IPFS_SWARM_KEY_FILE": "/tmp/swarm.key",
+            "DEVELOPER_IPFS_CLUSTER_SECRET_FILE": "/tmp/cluster.secret",
+        }
+        writes = []
+        setups = []
+
+        with (
+            mock.patch.object(installer, "install_repo"),
+            mock.patch.object(
+                installer, "configured_storage_topology", return_value=topology
+            ),
+            mock.patch.object(installer, "ensure_dark_net"),
+            mock.patch.object(
+                installer,
+                "write_env_secure",
+                side_effect=lambda path, values: writes.append((path, values)),
+            ),
+            mock.patch.object(
+                installer,
+                "setup_repo",
+                side_effect=lambda **kwargs: setups.append(kwargs),
+            ),
+        ):
+            installer.install_dark_ipfs("DEVELOPER", env)
+
+        self.assertEqual(len(writes), 2)
+        self.assertEqual(len(setups), 2)
+        self.assertEqual(writes[0][1]["IPFS_API_HOST_PORT"], "5001")
+        self.assertEqual(writes[1][1]["IPFS_API_HOST_PORT"], "5101")
+        self.assertIn(
+            "dark-ipfs-site-a-storage-1",
+            writes[1][1]["IPFS_BOOTSTRAP_HOSTS"],
+        )
+        self.assertIn(".env.node.site-a-storage-1", setups[0]["commands_str"][0])
+        self.assertIn(".env.node.site-a-storage-2", setups[1]["commands_str"][0])
+
     def test_developer_wizard_assets_are_generated_once_and_securely(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

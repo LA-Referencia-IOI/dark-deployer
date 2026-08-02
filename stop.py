@@ -23,6 +23,14 @@ def has_compose_file(path: Path) -> bool:
     return any((path / name).exists() for name in ("compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"))
 
 
+def storage_env_files(path: Path) -> list[Path]:
+    ha_files = sorted(path.glob(".env.node.*"))
+    if ha_files:
+        return ha_files
+    simple = path / ".env.node"
+    return [simple] if simple.exists() else []
+
+
 def run_command(args: list[str], cwd: Path) -> bool:
     print(f"[RUN] {' '.join(args)} in {cwd}")
     result = subprocess.run(args, cwd=str(cwd))
@@ -44,8 +52,17 @@ def main() -> int:
         if not has_compose_file(target):
             print(f"[SKIP] {relative_path} has no Compose file.")
             continue
-        command = ["make", "down"] if relative_path == "components/storage/dark-ipfs" else ["docker", "compose", "stop"]
-        if not run_command(command, target):
+        if relative_path == "components/storage/dark-ipfs":
+            node_files = storage_env_files(target)
+            if not node_files:
+                print(f"[ERROR] No generated IPFS node environment found in {target}.")
+                failures.append(relative_path)
+                continue
+            for node_file in node_files:
+                command = ["make", "down", f"ENV_FILE={node_file.name}"]
+                if not run_command(command, target):
+                    failures.append(f"{relative_path}:{node_file.name}")
+        elif not run_command(["docker", "compose", "stop"], target):
             failures.append(relative_path)
 
     if failures:

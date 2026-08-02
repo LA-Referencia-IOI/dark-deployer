@@ -25,6 +25,23 @@ The interactive installation remains:
 python3 install.py
 ```
 
+For Developer, the wizard offers `Simple` (one peer) and `HA simulation` (two
+peers in one site). HA creates two runtime files in `dark-ipfs`:
+
+```text
+.env.node.site-a-storage-1
+.env.node.site-a-storage-2
+```
+
+Each file can be operated independently by passing `ENV_FILE` to Make, which
+allows controlled failover tests without deleting persistent volumes:
+
+```bash
+make identity ENV_FILE=.env.node.site-a-storage-1
+make down ENV_FILE=.env.node.site-a-storage-1
+make up ENV_FILE=.env.node.site-a-storage-1
+```
+
 ### Resume an interrupted installation
 
 Do not rerun completed blockchain stages after a later component fails. Resume

@@ -19,9 +19,9 @@ and Cluster traffic travels over the VPN; Store APIs do not replicate to or
 control one another. See [IPFS architecture](docs/ipfs-architecture.md) for the
 failure model and design rationale.
 
-The `developer` profile has one explicit local-only exception: the wizard runs
-one Kubo + Cluster peer on the same machine as Store API. It is not accepted by
-the `sandbox` or `production` profiles.
+The `developer` profile has local-only modes: one lightweight peer or two
+independent peers simulating site HA on the same machine as Store API. The
+single-peer topology is not accepted by `sandbox` or `production`.
 
 ## Requirements
 
@@ -44,10 +44,17 @@ cp .env.example .env
 python3 install.py
 ```
 
-The wizard creates `storage-topology.json` and two developer-only IPFS secrets
-under `.dark-secrets/developer/` if they do not exist. It never overwrites
-existing topology or secret files, and both generated paths are excluded from
-Git.
+The wizard offers two storage modes:
+
+- `Simple`: one local Kubo + Cluster peer, using `storage-topology.json`.
+- `HA simulation`: two independent peers in one site, using
+  `storage-topology.developer-ha.json`.
+
+Both modes share one private-swarm key and one Cluster secret under
+`.dark-secrets/developer/`. Existing topology and secret files are never
+overwritten, and all generated paths are excluded from Git. HA simulation uses
+separate containers, identities, networks and volumes, but both peers still
+share the same physical Docker host.
 
 For sandbox and production infrastructure, configure the topology and secrets
 explicitly:

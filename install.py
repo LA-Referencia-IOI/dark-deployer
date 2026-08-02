@@ -444,6 +444,7 @@ def storage_probe_url(
     configured_url: str,
     vpn_address: str,
     port: int,
+    host_url: str = "",
 ) -> str:
     """Return a host-reachable health URL for a storage endpoint.
 
@@ -452,6 +453,8 @@ def storage_probe_url(
     resolvable by the host running the installer, while the same services are
     published on loopback for operations and health checks.
     """
+    if host_url:
+        return host_url
     if topology.development_single_node:
         return f"http://{vpn_address}:{port}"
     return configured_url
@@ -548,10 +551,18 @@ def print_install_summary(prefix: str, env: dict) -> None:
         site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
         for index, peer in enumerate(topology.site_peers(site_id), 1):
             ipfs_probe_url = storage_probe_url(
-                topology, peer.ipfs_api_url, peer.vpn_address, 5001
+                topology,
+                peer.ipfs_api_url,
+                peer.vpn_address,
+                5001,
+                peer.host_ipfs_api_url,
             )
             cluster_probe_url = storage_probe_url(
-                topology, peer.cluster_api_url, peer.vpn_address, 9094
+                topology,
+                peer.cluster_api_url,
+                peer.vpn_address,
+                9094,
+                peer.host_cluster_api_url,
             )
             print(
                 f"- Site IPFS {index}: {peer.ipfs_api_url} "
@@ -2582,20 +2593,72 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
     )
 
     topology = configured_storage_topology(prefix, env)
-    node_id = env.get(f"{prefix}_STORAGE_NODE_ID", "").strip()
-    generated = node_environment(
-        topology,
-        node_id,
-        env[f"{prefix}_IPFS_SWARM_KEY_FILE"].strip(),
-        env[f"{prefix}_IPFS_CLUSTER_SECRET_FILE"].strip(),
-    )
-    node_env_path = Path(target).resolve() / ".env.node"
-    write_env_secure(node_env_path, generated)
-    print(f"[OK] Generated '{node_env_path}' for {node_id}.")
+    site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
+    site_peers = topology.site_peers(site_id)
+    developer_ha = prefix == "DEVELOPER" and len(site_peers) == 2
+    if developer_ha:
+        selected_peers = site_peers
+    else:
+        node_id = env.get(f"{prefix}_STORAGE_NODE_ID", "").strip()
+        selected_peers = (topology.peer(node_id),)
+
+    generated_nodes: list[tuple[str, Path]] = []
+    for index, peer in enumerate(selected_peers):
+        generated = node_environment(
+            topology,
+            peer.id,
+            env[f"{prefix}_IPFS_SWARM_KEY_FILE"].strip(),
+            env[f"{prefix}_IPFS_CLUSTER_SECRET_FILE"].strip(),
+        )
+        if prefix == "DEVELOPER":
+            ipfs_internal_host = urllib.parse.urlparse(peer.ipfs_api_url).hostname
+            cluster_internal_host = urllib.parse.urlparse(peer.cluster_api_url).hostname
+            host_ipfs = urllib.parse.urlparse(peer.host_ipfs_api_url)
+            host_cluster = urllib.parse.urlparse(peer.host_cluster_api_url)
+            host_proxy = urllib.parse.urlparse(peer.host_cluster_proxy_url)
+            remote_peers = tuple(candidate for candidate in site_peers if candidate != peer)
+            generated.update({
+                "HOST_BIND_ADDRESS": host_ipfs.hostname or "127.0.0.1",
+                "IPFS_API_HOST_PORT": str(host_ipfs.port or 5001),
+                "IPFS_SWARM_HOST_PORT": str(4001 + (index * 100)),
+                "CLUSTER_REST_HOST_PORT": str(host_cluster.port or 9094),
+                "CLUSTER_PROXY_HOST_PORT": str(host_proxy.port or 9095),
+                "CLUSTER_SWARM_HOST_PORT": str((host_proxy.port or 9095) + 1),
+                "IPFS_DARK_NET_ALIAS": ipfs_internal_host or f"dark-ipfs-{peer.id}",
+                "CLUSTER_DARK_NET_ALIAS": (
+                    cluster_internal_host or f"dark-ipfs-cluster-{peer.id}"
+                ),
+                "IPFS_ANNOUNCE_MULTIADDRESS": (
+                    f"/dns4/{ipfs_internal_host}/tcp/4001"
+                ),
+                "CLUSTER_ANNOUNCE_MULTIADDRESS": (
+                    f"/dns4/{cluster_internal_host}/tcp/9096"
+                ),
+                "IPFS_BOOTSTRAP_HOSTS": " ".join(
+                    urllib.parse.urlparse(candidate.ipfs_api_url).hostname or ""
+                    for candidate in remote_peers
+                ),
+                "CLUSTER_BOOTSTRAP_HOSTS": " ".join(
+                    urllib.parse.urlparse(candidate.cluster_api_url).hostname or ""
+                    for candidate in remote_peers
+                ),
+            })
+
+        env_filename = f".env.node.{peer.id}" if developer_ha else ".env.node"
+        node_env_path = Path(target).resolve() / env_filename
+        write_env_secure(node_env_path, generated)
+        generated_nodes.append((peer.id, node_env_path))
+        print(f"[OK] Generated '{node_env_path}' for {peer.id}.")
 
     if do_setup:
         ensure_dark_net()
-        setup_repo(target_dir=target, commands_str=commands)
+        for node_id, node_env_path in generated_nodes:
+            node_commands = [
+                f"ENV_FILE={shlex.quote(str(node_env_path))} {command}"
+                for command in commands
+            ]
+            print(f"[INFO] Starting IPFS peer '{node_id}'...")
+            setup_repo(target_dir=target, commands_str=node_commands)
     else:
         print("[INFO] SETUP=False — 'dark-ipfs' cloned, setup skipped.\n")
 
@@ -2921,10 +2984,27 @@ def validate_install_configuration(prefix: str, env: dict) -> None:
             print(f"[ERROR] {prefix}_STORAGE_SITE_ID is required in global-cluster mode.")
             sys.exit(1)
         try:
-            topology.site_peers(site_id)
+            site_peers = topology.site_peers(site_id)
         except StorageTopologyError as exc:
             print(f"[ERROR] {exc}")
             sys.exit(1)
+        if prefix == "DEVELOPER":
+            storage_mode = env.get("DEVELOPER_STORAGE_MODE", "simple").strip().lower()
+            valid_shape = (
+                storage_mode == "simple"
+                and topology.development_single_node
+                and len(site_peers) == 1
+            ) or (
+                storage_mode == "ha"
+                and not topology.development_single_node
+                and len(site_peers) == 2
+            )
+            if not valid_shape:
+                print(
+                    "[ERROR] Developer storage topology does not match "
+                    f"DEVELOPER_STORAGE_MODE={storage_mode!r}."
+                )
+                sys.exit(1)
         if install_storage:
             node_id = env.get(f"{prefix}_STORAGE_NODE_ID", "").strip()
             try:
@@ -3028,6 +3108,7 @@ def cluster_operation_endpoints(
             peer.cluster_api_url,
             peer.vpn_address,
             9094,
+            peer.host_cluster_api_url,
         )
         for peer in peers
     ]
@@ -3184,9 +3265,8 @@ def _prepare_developer_storage_assets(env: dict) -> None:
     """Create the local-only topology and IPFS secrets required by developer.
 
     Production and sandbox topologies always keep the two-peers-per-site
-    invariant. The developer wizard instead promises a complete stack on one
-    machine, so it receives an explicit one-site/one-peer topology whose API
-    endpoints use the shared Docker network.
+    invariant. Developer can either run one lightweight peer or simulate both
+    peers of one site on the same Docker host.
     """
     prefix = "DEVELOPER"
     _, install_storage, install_apps = _selected_tiers(prefix, env)
@@ -3200,6 +3280,13 @@ def _prepare_developer_storage_assets(env: dict) -> None:
     )
     env[f"{prefix}_STORAGE_SITE_ID"] = site_id
     env[f"{prefix}_STORAGE_NODE_ID"] = node_id
+    storage_mode = env.get(f"{prefix}_STORAGE_MODE", "simple").strip().lower()
+    if storage_mode not in {"simple", "ha"}:
+        print(f"[ERROR] {prefix}_STORAGE_MODE must be 'simple' or 'ha'.")
+        sys.exit(1)
+    if storage_mode == "ha":
+        node_id = f"{site_id}-storage-1"
+        env[f"{prefix}_STORAGE_NODE_ID"] = node_id
 
     raw_topology_path = (
         env.get(f"{prefix}_STORAGE_TOPOLOGY_FILE", "").strip()
@@ -3211,27 +3298,59 @@ def _prepare_developer_storage_assets(env: dict) -> None:
     env[f"{prefix}_STORAGE_TOPOLOGY_FILE"] = raw_topology_path
 
     if not topology_path.exists():
+        if storage_mode == "ha":
+            peers = [
+                {
+                    "id": f"{site_id}-storage-1",
+                    "vpn_address": "127.0.0.1",
+                    "ipfs_api_url": f"http://dark-ipfs-{site_id}-storage-1:5001",
+                    "cluster_api_url": (
+                        f"http://dark-ipfs-cluster-{site_id}-storage-1:9094"
+                    ),
+                    "cluster_proxy_url": (
+                        f"http://dark-ipfs-cluster-{site_id}-storage-1:9095"
+                    ),
+                    "host_ipfs_api_url": "http://127.0.0.1:5001",
+                    "host_cluster_api_url": "http://127.0.0.1:9094",
+                    "host_cluster_proxy_url": "http://127.0.0.1:9095",
+                },
+                {
+                    "id": f"{site_id}-storage-2",
+                    "vpn_address": "127.0.0.2",
+                    "ipfs_api_url": f"http://dark-ipfs-{site_id}-storage-2:5001",
+                    "cluster_api_url": (
+                        f"http://dark-ipfs-cluster-{site_id}-storage-2:9094"
+                    ),
+                    "cluster_proxy_url": (
+                        f"http://dark-ipfs-cluster-{site_id}-storage-2:9095"
+                    ),
+                    "host_ipfs_api_url": "http://127.0.0.1:5101",
+                    "host_cluster_api_url": "http://127.0.0.1:9194",
+                    "host_cluster_proxy_url": "http://127.0.0.1:9195",
+                },
+            ]
+        else:
+            peers = [
+                {
+                    "id": node_id,
+                    "vpn_address": "127.0.0.1",
+                    "ipfs_api_url": "http://dark-ipfs-local:5001",
+                    "cluster_api_url": "http://dark-ipfs-cluster-local:9094",
+                    "cluster_proxy_url": "http://dark-ipfs-cluster-local:9095",
+                    "host_ipfs_api_url": "http://127.0.0.1:5001",
+                    "host_cluster_api_url": "http://127.0.0.1:9094",
+                    "host_cluster_proxy_url": "http://127.0.0.1:9095",
+                }
+            ]
         topology_document = {
             "version": 1,
             "cluster_name": "dark-developer",
-            "development_single_node": True,
+            "development_single_node": storage_mode == "simple",
             "strict_single_site": False,
             "sites": [
                 {
                     "id": site_id,
-                    "peers": [
-                        {
-                            "id": node_id,
-                            "vpn_address": "127.0.0.1",
-                            "ipfs_api_url": "http://dark-ipfs-local:5001",
-                            "cluster_api_url": (
-                                "http://dark-ipfs-cluster-local:9094"
-                            ),
-                            "cluster_proxy_url": (
-                                "http://dark-ipfs-cluster-local:9095"
-                            ),
-                        }
-                    ],
+                    "peers": peers,
                 }
             ],
         }
@@ -3240,7 +3359,10 @@ def _prepare_developer_storage_assets(env: dict) -> None:
             json.dumps(topology_document, indent=2) + "\n",
             mode=0o644,
         )
-        print(f"[OK] Generated single-node developer topology at '{topology_path}'.")
+        print(
+            f"[OK] Generated developer {storage_mode.upper()} topology "
+            f"at '{topology_path}'."
+        )
 
     secret_dir = PROJECT_ROOT / ".dark-secrets" / "developer"
     secret_specs = (
@@ -3350,6 +3472,14 @@ def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
     if {"all", "apps", "storage-node"} & {
         value.strip() for value in components.split(",")
     }:
+        if install_type == "developer":
+            storage_mode = env.get("DEVELOPER_STORAGE_MODE", "simple")
+            mode_label = (
+                "HA simulation (2 peers)"
+                if storage_mode == "ha"
+                else "Simple (1 peer)"
+            )
+            print(f"  Storage mode    : {mode_label}")
         print(f"  Storage site    : {env.get(f'{prefix}_STORAGE_SITE_ID', '(not configured)')}")
         print(f"  Storage node    : {env.get(f'{prefix}_STORAGE_NODE_ID', '(apps only)')}")
         print(f"  Topology file   : {env.get(f'{prefix}_STORAGE_TOPOLOGY_FILE', 'storage-topology.json')}")
@@ -3392,6 +3522,27 @@ def run_setup_wizard(env: dict) -> dict:
 
     if install_type == "developer":
         _apply_local_blockchain_defaults(env)
+        storage_choice = _ask_choice(
+            "How should storage run in the Developer profile?",
+            [
+                "Simple        — one local Kubo + Cluster peer",
+                "HA simulation — two independent peers in one site",
+            ],
+            default={"simple": 1, "ha": 2}.get(
+                env.get("DEVELOPER_STORAGE_MODE", "simple").strip().lower(),
+                1,
+            ),
+        )
+        storage_mode = {1: "simple", 2: "ha"}[storage_choice]
+        env["DEVELOPER_STORAGE_MODE"] = storage_mode
+        env["DEVELOPER_STORAGE_TOPOLOGY_FILE"] = (
+            "storage-topology.json"
+            if storage_mode == "simple"
+            else "storage-topology.developer-ha.json"
+        )
+        env["DEVELOPER_STORAGE_NODE_ID"] = (
+            f"{env.get('DEVELOPER_STORAGE_SITE_ID', 'site-a')}-storage-1"
+        )
     else:
         print(f"\n  Configuring infrastructure for {install_type.upper()} profile:")
 

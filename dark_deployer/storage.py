@@ -26,6 +26,9 @@ class StoragePeer:
     ipfs_api_url: str
     cluster_api_url: str
     cluster_proxy_url: str
+    host_ipfs_api_url: str = ""
+    host_cluster_api_url: str = ""
+    host_cluster_proxy_url: str = ""
 
 @dataclass(frozen=True)
 class ReplicationPolicy:
@@ -107,6 +110,12 @@ def _http_url(value: Any, field: str, default: str) -> str:
     return url.rstrip("/")
 
 
+def _optional_http_url(value: Any, field: str) -> str:
+    if value in (None, ""):
+        return ""
+    return _http_url(value, field, "")
+
+
 def load_storage_topology(path: Path) -> StorageTopology:
     """Load and strictly validate the global storage topology JSON file."""
     try:
@@ -172,25 +181,40 @@ def load_storage_topology(path: Path) -> StorageTopology:
                     raise StorageTopologyError(f"duplicate {label} {value!r}")
                 seen_values[label].add(value)
 
+            ipfs_api_url = _http_url(
+                peer_value.get("ipfs_api_url"),
+                f"{field}.ipfs_api_url",
+                f"http://{vpn_address}:5001",
+            )
+            cluster_api_url = _http_url(
+                peer_value.get("cluster_api_url"),
+                f"{field}.cluster_api_url",
+                f"http://{vpn_address}:9094",
+            )
+            cluster_proxy_url = _http_url(
+                peer_value.get("cluster_proxy_url"),
+                f"{field}.cluster_proxy_url",
+                f"http://{vpn_address}:9095",
+            )
             peers.append(
                 StoragePeer(
                     id=peer_id,
                     site=site_id,
                     vpn_address=vpn_address,
-                    ipfs_api_url=_http_url(
-                        peer_value.get("ipfs_api_url"),
-                        f"{field}.ipfs_api_url",
-                        f"http://{vpn_address}:5001",
+                    ipfs_api_url=ipfs_api_url,
+                    cluster_api_url=cluster_api_url,
+                    cluster_proxy_url=cluster_proxy_url,
+                    host_ipfs_api_url=_optional_http_url(
+                        peer_value.get("host_ipfs_api_url"),
+                        f"{field}.host_ipfs_api_url",
                     ),
-                    cluster_api_url=_http_url(
-                        peer_value.get("cluster_api_url"),
-                        f"{field}.cluster_api_url",
-                        f"http://{vpn_address}:9094",
+                    host_cluster_api_url=_optional_http_url(
+                        peer_value.get("host_cluster_api_url"),
+                        f"{field}.host_cluster_api_url",
                     ),
-                    cluster_proxy_url=_http_url(
-                        peer_value.get("cluster_proxy_url"),
-                        f"{field}.cluster_proxy_url",
-                        f"http://{vpn_address}:9095",
+                    host_cluster_proxy_url=_optional_http_url(
+                        peer_value.get("host_cluster_proxy_url"),
+                        f"{field}.host_cluster_proxy_url",
                     ),
                 )
             )
@@ -237,6 +261,14 @@ def node_environment(
         "CLUSTER_BOOTSTRAP_HOSTS": " ".join(peer.vpn_address for peer in remote),
         "CLUSTER_REPLICATION_MIN": str(policy.replication_min),
         "CLUSTER_REPLICATION_MAX": str(policy.replication_max),
+        "HOST_BIND_ADDRESS": local.vpn_address,
+        "IPFS_API_HOST_PORT": "5001",
+        "IPFS_SWARM_HOST_PORT": "4001",
+        "CLUSTER_REST_HOST_PORT": "9094",
+        "CLUSTER_PROXY_HOST_PORT": "9095",
+        "CLUSTER_SWARM_HOST_PORT": "9096",
+        "IPFS_DARK_NET_ALIAS": f"dark-ipfs-{local.id}",
+        "CLUSTER_DARK_NET_ALIAS": f"dark-ipfs-cluster-{local.id}",
     }
 
 

@@ -46,6 +46,15 @@ def has_compose_file(path: Path) -> bool:
     return any((path / name).exists() for name in ("compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"))
 
 
+def storage_env_files(path: Path) -> list[Path]:
+    """Return every HA node file, or the legacy/simple node file."""
+    ha_files = sorted(path.glob(".env.node.*"))
+    if ha_files:
+        return ha_files
+    simple = path / ".env.node"
+    return [simple] if simple.exists() else []
+
+
 def wait_for_health(url: str, method: str = "GET", timeout: int = 60) -> bool:
     deadline = time.monotonic() + timeout
     last_error = "not ready"
@@ -78,12 +87,46 @@ def main() -> int:
         if not has_compose_file(target):
             print(f"[SKIP] {relative_path} has no Compose file.")
             continue
-        command = ["make", "up"] if relative_path == "components/storage/dark-ipfs" else ["docker", "compose", "up", "-d"]
-        print(f"[RUN] {' '.join(command)} in {target}")
-        result = subprocess.run(command, cwd=str(target))
-        if result.returncode != 0:
-            failures.append(relative_path)
-            continue
+        if relative_path == "components/storage/dark-ipfs":
+            node_files = storage_env_files(target)
+            if not node_files:
+                print(f"[ERROR] No generated IPFS node environment found in {target}.")
+                failures.append(relative_path)
+                continue
+            failed = False
+            for node_file in node_files:
+                command = ["make", "up", f"ENV_FILE={node_file.name}"]
+                print(f"[RUN] {' '.join(command)} in {target}")
+                result = subprocess.run(command, cwd=str(target))
+                if result.returncode != 0:
+                    failures.append(f"{relative_path}:{node_file.name}")
+                    failed = True
+                    continue
+                node_env = load_env(node_file)
+                bind_address = node_env.get("HOST_BIND_ADDRESS", "127.0.0.1")
+                ipfs_port = node_env.get("IPFS_API_HOST_PORT", "5001")
+                cluster_port = node_env.get("CLUSTER_REST_HOST_PORT", "9094")
+                health_checks.extend([
+                    (
+                        f"{relative_path}:{node_file.name}",
+                        f"http://{bind_address}:{ipfs_port}/api/v0/version",
+                        "POST",
+                    ),
+                    (
+                        f"{relative_path}:{node_file.name}",
+                        f"http://{bind_address}:{cluster_port}/id",
+                        "GET",
+                    ),
+                ])
+            if failed:
+                continue
+        else:
+            command = ["docker", "compose", "up", "-d"]
+            print(f"[RUN] {' '.join(command)} in {target}")
+            result = subprocess.run(command, cwd=str(target))
+            if result.returncode != 0:
+                failures.append(relative_path)
+                continue
         if endpoint_key:
             configured = env.get(endpoint_key, "").rstrip("/")
             default = DEFAULT_ENDPOINTS[endpoint_key]
@@ -93,21 +136,6 @@ def main() -> int:
                 else configured or default
             )
             health_checks.append((relative_path, url, "GET"))
-        if relative_path == "components/storage/dark-ipfs":
-            node_env = load_env(target / ".env.node")
-            vpn_address = node_env.get("VPN_ADDRESS", "127.0.0.1")
-            health_checks.extend([
-                (
-                    relative_path,
-                    f"http://{vpn_address}:5001/api/v0/version",
-                    "POST",
-                ),
-                (
-                    relative_path,
-                    f"http://{vpn_address}:9094/id",
-                    "GET",
-                ),
-            ])
 
     for relative_path, url, method in health_checks:
         if not wait_for_health(url, method=method):

@@ -293,10 +293,12 @@ IPFS_CLUSTER_WRITE_MIN_SITES=1
 
 That profile pauses minting when either server fails.
 
-### 8.3 Developer-only single-node exception
+### 8.3 Developer-only local modes
 
-The interactive `developer` profile runs the complete stack on one machine. It
-therefore generates a topology with one site and one peer, marked explicitly:
+The interactive `developer` profile runs the complete stack on one machine and
+offers two local storage modes.
+
+`Simple` generates one site and one peer, marked explicitly:
 
 ```json
 {
@@ -304,10 +306,19 @@ therefore generates a topology with one site and one peer, marked explicitly:
 }
 ```
 
-Its replication minimum and maximum are both one. Store API reaches Kubo and
-Cluster through aliases on the shared `dark-net` Docker network while host
-ports bind only to loopback. This mode provides no storage redundancy and is
-rejected by the `sandbox` and `production` profiles.
+Its replication minimum and maximum are both one.
+
+`HA simulation` generates one site with two independent peers. Each peer has a
+separate Kubo identity, Cluster identity, Compose project, network and set of
+persistent volumes. Store API receives both Docker-network endpoints and uses
+`min=1/max=2`: writes remain available with either peer and converge to two
+copies when both are present. The second peer publishes its administrative
+ports on loopback at `5101`, `9194` and `9195` to avoid collisions.
+
+Both modes use aliases on the shared `dark-net` network and bind host APIs only
+to loopback. HA simulation validates replication and application failover, but
+does not simulate loss of the physical host, Docker daemon or underlying disk.
+The one-peer exception remains rejected by `sandbox` and `production`.
 
 ### 8.4 Growing from one site to two
 
