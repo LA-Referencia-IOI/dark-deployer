@@ -116,6 +116,10 @@ For an apps host, use `PRODUCTION_INSTALL_COMPONENTS=apps` and omit the node and
 storage secret fields. It still needs `PRODUCTION_STORAGE_SITE_ID` so the
 installer can generate both local endpoint lists.
 
+For a complete, address-by-address production runbook covering one blockchain
+server, one apps server and two IPFS servers on one LAN, see
+[Production four-server installation](docs/production-single-site-four-server-installation.md).
+
 ## Roles
 
 | Value | Installed on this server |
