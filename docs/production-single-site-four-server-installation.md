@@ -1,6 +1,6 @@
 # Production installation: one blockchain, one apps, and two IPFS servers
 
-This runbook installs the current `codex/global-ipfs-cluster` version on four
+This runbook installs the current `main` version on four
 physical or virtual servers in one private local network:
 
 - one blockchain server;
@@ -223,7 +223,7 @@ Run this as `dark` on all four servers:
 
 ```bash
 cd /opt
-git clone --branch codex/global-ipfs-cluster \
+git clone --branch main \
   https://github.com/LA-Referencia-IOI/dark-deployer.git dark-deployer
 cd /opt/dark-deployer
 git status --short --branch
@@ -231,7 +231,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-The expected branch is `codex/global-ipfs-cluster`. Before a formal production
+The expected branch is `main`. Before a formal production
 rollout, prefer a reviewed release tag or an immutable commit instead of a
 floating feature branch. Keep the same deployer revision on all four servers.
 
@@ -341,7 +341,7 @@ Run on `10.20.30.10` as `dark`:
 
 ```bash
 cd /opt/dark-deployer
-git clone --branch codex/global-ipfs-cluster \
+git clone --branch master \
   https://github.com/LA-Referencia-IOI/dark-env \
   components/blockchain/dark-env
 cd components/blockchain/dark-env
@@ -415,7 +415,7 @@ MINTER_PRIVATE_KEY_FILE=/opt/dark-secrets/minter.key
 PRODUCTION_INSTALL_COMPONENTS=blockchain
 
 PRODUCTION_BLOCKCHAIN_DARK_ENV_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-env
-PRODUCTION_BLOCKCHAIN_DARK_ENV_REPOSITORY_BRANCH=codex/global-ipfs-cluster
+PRODUCTION_BLOCKCHAIN_DARK_ENV_REPOSITORY_BRANCH=master
 PRODUCTION_BLOCKCHAIN_DARK_ENV_SETUP=True
 PRODUCTION_BLOCKCHAIN_DARK_ENV_COMMANDS_JSON=["chmod +x setup.sh","chmod +x scripts/*.sh","./setup.sh","docker compose up -d"]
 
@@ -504,7 +504,7 @@ PRODUCTION_IPFS_SWARM_KEY_FILE=/opt/dark-secrets/ipfs-swarm.key
 PRODUCTION_IPFS_CLUSTER_SECRET_FILE=/opt/dark-secrets/ipfs-cluster-secret
 
 PRODUCTION_IPFS_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-ipfs.git
-PRODUCTION_IPFS_REPOSITORY_BRANCH=codex/global-ipfs-cluster
+PRODUCTION_IPFS_REPOSITORY_BRANCH=main
 PRODUCTION_IPFS_SETUP=True
 PRODUCTION_IPFS_COMMANDS_JSON=["make up"]
 ```
@@ -556,7 +556,7 @@ PRODUCTION_IPFS_SWARM_KEY_FILE=/opt/dark-secrets/ipfs-swarm.key
 PRODUCTION_IPFS_CLUSTER_SECRET_FILE=/opt/dark-secrets/ipfs-cluster-secret
 
 PRODUCTION_IPFS_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-ipfs.git
-PRODUCTION_IPFS_REPOSITORY_BRANCH=codex/global-ipfs-cluster
+PRODUCTION_IPFS_REPOSITORY_BRANCH=main
 PRODUCTION_IPFS_SETUP=True
 PRODUCTION_IPFS_COMMANDS_JSON=["make up"]
 ```
@@ -653,7 +653,7 @@ PRODUCTION_CORE_ADMIN_API_REPOSITORY_BRANCH=main
 PRODUCTION_CORE_ADMIN_API_SETUP=True
 
 PRODUCTION_STORE_API_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-store-api.git
-PRODUCTION_STORE_API_REPOSITORY_BRANCH=codex/global-ipfs-cluster
+PRODUCTION_STORE_API_REPOSITORY_BRANCH=main
 PRODUCTION_STORE_API_SETUP=True
 
 PRODUCTION_RESOLVER_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-core-resolver-api.git
