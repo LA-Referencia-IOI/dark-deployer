@@ -64,7 +64,8 @@ The installer keeps operator configuration separate from deployment state:
 | --- | --- | --- |
 | `.env` | Profile, topology, repository URLs, setup options | Normal source |
 | `.env.integration` | Public deployed state: RPC, chain, contracts, ABI and Store API | Authoritative for apps-only and remote handoffs |
-| `.env.integration.secrets` | Admin and minter signer handoff | Authoritative for apps-only and remote handoffs |
+| `PLATFORM_PRIVATE_KEY_FILE` | Shared Production V1 signer, provisioned outside the deployer | Authoritative in `SIGNER_MODE=shared` |
+| `.env.integration.secrets` | Legacy Admin and Minter signer handoff | Backward compatibility only |
 | `*_PRIVATE_KEY_FILE` | Raw secret mounted by an external secret manager | Preferred over legacy master fallback |
 
 Blank values from `.env.example` never shadow a populated handoff. When an
@@ -77,7 +78,7 @@ for compatibility and produce a warning. Regenerate them as soon as possible.
 
 ## 3. Signer roles
 
-The installer recognizes three roles:
+Legacy profiles recognize three separate role variables:
 
 | Role | Direct variable | File variable | Used by |
 | --- | --- | --- | --- |
@@ -88,12 +89,14 @@ The installer recognizes three roles:
 Secret files contain the raw hexadecimal key, optionally prefixed with `0x`.
 Relative paths are resolved from the deployer repository root.
 
-`MASTER_PRIVATE_KEY` remains a compatibility fallback and is populated by a
-local `dark-env` installation. Production requires explicit, distinct admin
-and minter keys. Those accounts must also be authorized on-chain; validation
-can verify key shape and separation, but cannot infer contract permissions.
+`MASTER_PRIVATE_KEY` remains a compatibility fallback. Production V1 instead
+requires `SIGNER_MODE=shared` and one absolute `PLATFORM_PRIVATE_KEY_FILE` with
+mode `0600`. The installer derives the public platform address and resolves the
+deployer, Admin and Minter roles from that one file.
 
-The public handoff never contains a private key. The secret handoff contains:
+The Production public handoff never contains a private key. It contains the
+derived `DARK_PLATFORM_ADDRESS`; Apps checks this against its independently
+provisioned key file. The legacy secret handoff may contain:
 
 ```ini
 DARK_ADMIN_PRIVATE_KEY=0x...
@@ -118,7 +121,9 @@ git add components.lock.json
 git commit -m "Lock tested dARK component versions"
 ```
 
-When `components.lock.json` exists, installation checks out the exact recorded
+Production requires `components.lock.json`, a complete entry for every selected
+component, and `DEPLOYER_COMMIT` matching the current checkout. Other profiles
+may omit the lock. When present, installation checks out the exact recorded
 commit in detached-HEAD mode. Verify an installed server against the lock with:
 
 ```bash

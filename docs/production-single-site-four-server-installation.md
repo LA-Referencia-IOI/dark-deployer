@@ -1,6 +1,12 @@
 # Production installation: one blockchain, one apps, and two IPFS servers
 
-This runbook installs the current `main` version on four
+> **Current workflow:** use the canonical inventory and rendered host bundles
+> described in [Production deployment bundles](production-deployment-bundles.md).
+> The manual `.env` examples below remain useful as a network worksheet, but
+> Production validation now requires `SIGNER_MODE=shared`, `DEPLOYER_COMMIT`,
+> and a complete `components.lock.json`.
+
+This runbook installs one immutable release on four
 physical or virtual servers in one private local network:
 
 - one blockchain server;
@@ -695,66 +701,26 @@ Confirm:     Y
 The installer reads both handoff files, generates a local Store API configured
 with `10.20.30.31` and `10.20.30.32`, and starts each selected application.
 
-## 14. Current signer compatibility requirement
+## 14. Shared platform signer
 
-Do not skip this section for the current branch.
+Production V1 explicitly uses one platform signer because the current Authority
+contract and authority-wallet encryption flow require Admin capability during
+minting. Configure only an external key file:
 
-The production validator requires distinct `ADMIN_PRIVATE_KEY` and
-`MINTER_PRIVATE_KEY` values. However, the current `Authority` contract restricts
-`get_authority_key()` to the contract Admin, and Core Library encrypts authority
-wallet keys with the Admin key. Consequently, a truly separate Minter key
-cannot yet retrieve or decrypt those authority wallets.
-
-For end-to-end minting on this version, the Minter component must temporarily
-use the Admin signer after installation. This weakens role separation: a
-compromised Minter then has Admin capability. Restrict apps-server access and
-plan a code migration to delegated contract access plus a separate encryption
-key before treating signer separation as complete.
-
-Apply the compatibility override on the apps server without printing the key:
-
-```bash
-cd /opt/dark-deployer
-python3.12 - <<'PY'
-from pathlib import Path
-
-def read_env(path):
-    values = {}
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, value = line.split('=', 1)
-        values[key] = value
-    return values
-
-secrets = read_env(Path('.env.integration.secrets'))
-admin = secrets['DARK_ADMIN_PRIVATE_KEY']
-target = Path('components/services/dark-core-minter-api/.env.integration')
-lines = target.read_text().splitlines()
-updated = []
-found = False
-for line in lines:
-    if line.startswith('DARK_ADMIN_PRIVATE_KEY='):
-        updated.append(f'DARK_ADMIN_PRIVATE_KEY={admin}')
-        found = True
-    else:
-        updated.append(line)
-if not found:
-    updated.append(f'DARK_ADMIN_PRIVATE_KEY={admin}')
-target.write_text('\n'.join(updated) + '\n')
-target.chmod(0o600)
-print('Minter compatibility signer applied without displaying secret material.')
-PY
-
-docker compose \
-  -f components/services/dark-core-minter-api/docker-compose.yml \
-  --project-directory components/services/dark-core-minter-api \
-  up -d --force-recreate
+```ini
+SIGNER_MODE=shared
+PLATFORM_PRIVATE_KEY_FILE=/opt/dark-deployer/secrets/platform.key
 ```
 
-Reapply and retest this override after any Minter rebuild. Do not copy the
-modified component `.env.integration` off the apps server.
+The installer maps that key to deployment, Admin and Minter without writing it
+to `.env` or a handoff. Blockchain publishes only `DARK_PLATFORM_ADDRESS`, and
+Apps rejects a platform key that derives a different address. The former manual
+Minter compatibility override is no longer required.
+
+This is a deliberate V1 trust model, not signer isolation. Compromise of the
+Apps signer grants Admin capability. Keep the file at mode `0600`, restrict
+Apps access to the VPN, and treat separate signers as a later contract and key
+management redesign.
 
 ## 15. Acceptance tests
 
