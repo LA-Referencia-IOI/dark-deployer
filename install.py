@@ -66,6 +66,14 @@ from pathlib import Path
 from typing import Optional
 
 from dark_deployer.commands import get_commands, parse_commands
+from dark_deployer.deployment import (
+    DeploymentError,
+    host_status,
+    load_deployment_inventory,
+    materialize_host_bundle,
+    render_deployment,
+    validate_host_bundle,
+)
 from dark_deployer.files import parse_env_file, write_env_secure, write_text_secure
 from dark_deployer.process import (
     redact_url_credentials,
@@ -175,6 +183,10 @@ def load_component_locks() -> dict:
         commit = entry.get("commit", "") if isinstance(entry, dict) else ""
         if not re.fullmatch(r"[0-9a-f]{40}", commit):
             print(f"[ERROR] Invalid locked commit for component '{name}'.")
+            sys.exit(1)
+        repository = entry.get("repository", "") if isinstance(entry, dict) else ""
+        if not isinstance(repository, str) or not repository.strip():
+            print(f"[ERROR] Lock entry for component '{name}' requires a repository.")
             sys.exit(1)
     return document["components"]
 
@@ -524,15 +536,26 @@ def print_install_summary(prefix: str, env: dict) -> None:
     install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
 
     rpc_url = env.get("RPC_URL", "http://localhost:8545").strip() or "http://localhost:8545"
+    rpc_public_url = env.get("RPC_PUBLIC_URL", rpc_url).strip() or rpc_url
     explorer_port = env.get("EXPLORER_PORT", "25000").strip() or "25000"
     explorer_url = f"http://localhost:{explorer_port}"
-    admin_url = "http://localhost:8000"
-    resolver_url = "http://localhost:8002"
-    store_api_url = "http://localhost:8003"
-    minter_url = "http://localhost:8001"
+    apps_probe_host = env.get("APPS_BIND_ADDRESS", "127.0.0.1").strip() or "127.0.0.1"
+    admin_url = f"http://{apps_probe_host}:8000"
+    resolver_url = f"http://{apps_probe_host}:8002"
+    store_api_url = f"http://{apps_probe_host}:8003"
+    minter_url = f"http://{apps_probe_host}:8001"
+
+    def advertised(name: str, local_url: str) -> str:
+        return env.get(f"{prefix}_{name}_PUBLIC_URL", local_url).strip() or local_url
 
     if install_bc or install_apps:
-        print(f"- Blockchain RPC: {rpc_url} [{probe_rpc_block(rpc_url)}]")
+        blockchain_probe_host = (
+            env.get("BLOCKCHAIN_BIND_ADDRESS", "127.0.0.1").strip()
+            or "127.0.0.1"
+        )
+        probe_url = f"http://{blockchain_probe_host}:8545" if install_bc else rpc_url
+        print(f"- Blockchain RPC host probe: {probe_url} [{probe_rpc_block(probe_url)}]")
+        print(f"  Advertised over private network: {rpc_public_url}")
 
     explorer_selected = install_bc and bool(get_url(env, f"{prefix}_BLOCKCHAIN_DARK_EXPLORADOR_REPOSITORY_URL"))
     if explorer_selected:
@@ -541,10 +564,11 @@ def print_install_summary(prefix: str, env: dict) -> None:
     admin_selected = install_apps and bool(get_url(env, f"{prefix}_CORE_ADMIN_API_REPOSITORY_URL"))
     if admin_selected:
         print(
-            f"- Core Admin API: {admin_url} "
+            f"- Core Admin API host probe: {admin_url} "
             f"[health: {probe_http_status(f'{admin_url}/health')}] "
             f"[docs: {admin_url}/docs]"
         )
+        print(f"  Advertised over private network: {advertised('ADMIN', admin_url)}")
 
     if install_storage or install_apps:
         topology = configured_storage_topology(prefix, env)
@@ -576,27 +600,30 @@ def print_install_summary(prefix: str, env: dict) -> None:
     store_api_selected = install_apps and bool(get_url(env, f"{prefix}_STORE_API_REPOSITORY_URL"))
     if store_api_selected:
         print(
-            f"- Store API: {store_api_url} "
+            f"- Store API host probe: {store_api_url} "
             f"[health: {probe_http_status(f'{store_api_url}/health')}] "
             f"[docs: {store_api_url}/docs]"
         )
+        print(f"  Advertised over private network: {advertised('STORE_API', store_api_url)}")
 
     resolver_selected = install_apps and bool(get_url(env, f"{prefix}_RESOLVER_REPOSITORY_URL"))
     if resolver_selected:
         print(
-            f"- Core Resolver API: {resolver_url} "
+            f"- Core Resolver API host probe: {resolver_url} "
             f"[health: {probe_http_status(f'{resolver_url}/health')}] "
             f"[docs: {resolver_url}/docs]"
         )
+        print(f"  Advertised over private network: {advertised('RESOLVER', resolver_url)}")
 
     minter_selected = install_apps and bool(get_url(env, f"{prefix}_MINTER_REPOSITORY_URL"))
     if minter_selected:
         print(
-            f"- Core Minter API: {minter_url} "
+            f"- Core Minter API host probe: {minter_url} "
             f"[health: {probe_http_status(f'{minter_url}/health')}] "
             f"[workers: {probe_minter_worker_status(minter_url)}] "
             f"[docs: {minter_url}/docs]"
         )
+        print(f"  Advertised over private network: {advertised('MINTER', minter_url)}")
 
     core_lib_selected = install_apps and bool(
         get_url(env, f"{prefix}_CORE_LIB_REPOSITORY_URL")
@@ -713,6 +740,22 @@ def get_url(env: dict, key: str) -> str:
 
 def get_role_private_key(env: dict, role: str) -> str:
     """Resolve a role key from a direct value, mounted file, or legacy master key."""
+    signer_mode = env.get("SIGNER_MODE", "legacy").strip().lower() or "legacy"
+    if signer_mode == "shared":
+        platform_file = env.get("PLATFORM_PRIVATE_KEY_FILE", "").strip()
+        if not platform_file:
+            print("[ERROR] SIGNER_MODE=shared requires PLATFORM_PRIVATE_KEY_FILE.")
+            sys.exit(1)
+        secret_path = Path(platform_file)
+        if not secret_path.is_absolute():
+            print("[ERROR] PLATFORM_PRIVATE_KEY_FILE must be an absolute path.")
+            sys.exit(1)
+        try:
+            return secret_path.read_text().strip()
+        except OSError as exc:
+            print(f"[ERROR] Cannot read PLATFORM_PRIVATE_KEY_FILE: {exc}")
+            sys.exit(1)
+
     role_key = f"{role.upper()}_PRIVATE_KEY"
     direct = env.get(role_key, "").strip()
     if direct:
@@ -731,6 +774,76 @@ def get_role_private_key(env: dict, role: str) -> str:
 
     # MASTER_PRIVATE_KEY remains a compatibility fallback for existing installs.
     return env.get("MASTER_PRIVATE_KEY", "").strip()
+
+
+def private_key_identity(private_key: str) -> tuple[str, str]:
+    """Return the checksum address and public key for a private key."""
+    normalized = private_key.strip().removeprefix("0x")
+    try:
+        try:
+            from eth_keys import keys
+        except ImportError:
+            candidates = list(SHARED_VENV_DIR.glob("lib/python*/site-packages"))
+            candidates.extend(SHARED_VENV_DIR.glob("Lib/site-packages"))
+            for candidate in candidates:
+                candidate_value = str(candidate)
+                if candidate_value not in sys.path:
+                    sys.path.insert(0, candidate_value)
+            from eth_keys import keys
+
+        key = keys.PrivateKey(bytes.fromhex(normalized))
+    except (ImportError, ValueError) as exc:
+        print(f"[ERROR] Cannot derive platform signer identity: {exc}")
+        sys.exit(1)
+    return key.public_key.to_checksum_address(), "0x" + key.public_key.to_hex().removeprefix("0x")
+
+
+def prepare_dark_env_platform_wallet(target_dir: str, env: dict) -> None:
+    """Fund the configured shared platform signer in a new dark-env genesis."""
+    if env.get("SIGNER_MODE", "legacy").strip().lower() != "shared":
+        return
+    private_key = get_role_private_key(env, "deployer")
+    validate_private_key(private_key, env.get("TYPE", "developer").lower())
+    address, public_key = private_key_identity(private_key)
+    configured = env.get("PLATFORM_ADDRESS", "").strip()
+    if configured and configured.lower() != address.lower():
+        print(
+            "[ERROR] PLATFORM_ADDRESS does not match PLATFORM_PRIVATE_KEY_FILE "
+            f"({configured} != {address})."
+        )
+        sys.exit(1)
+    env["PLATFORM_ADDRESS"] = address
+    env["MASTER_WALLET_ADDRESS"] = address
+    env["MASTER_PUBLIC_KEY"] = public_key
+    address_path = Path(target_dir) / "config" / "master-wallet"
+    if address_path.exists():
+        existing_address = address_path.read_text().strip()
+        if existing_address.lower() != address.lower():
+            print(
+                "[ERROR] Existing dark-env master wallet does not match the "
+                "configured platform signer. A production genesis cannot be re-keyed."
+            )
+            sys.exit(1)
+    genesis_path = Path(target_dir) / "config" / "genesis.json"
+    if genesis_path.exists():
+        try:
+            genesis = json.loads(genesis_path.read_text())
+            allocations = genesis.get("alloc", {})
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[ERROR] Cannot validate existing dark-env genesis: {exc}")
+            sys.exit(1)
+        normalized_allocations = {
+            str(key).removeprefix("0x").lower() for key in allocations
+        }
+        if address.removeprefix("0x").lower() not in normalized_allocations:
+            print(
+                "[ERROR] Existing dark-env genesis does not fund the configured "
+                "platform signer. Recreate the greenfield release before deployment."
+            )
+            sys.exit(1)
+    else:
+        write_text_secure(address_path, address + "\n", mode=0o600)
+    print(f"[OK] Prepared dark-env genesis allocation for platform signer {address}.")
 
 
 def validate_private_key(private_key: str, profile: str) -> None:
@@ -1235,6 +1348,8 @@ def install_blockchain(prefix: str, env: dict) -> None:
         install_repo(name=folder, repo_url=repo_url, branch=branch, target_dir=target)
 
         if do_setup:
+            if folder == "dark-env":
+                prepare_dark_env_platform_wallet(target, env)
             # dark-dapp has a dedicated installer that generates config.ini
             # and deploys smart contracts instead of running generic COMMANDS.
             if folder == "dark-dapp":
@@ -1347,6 +1462,7 @@ def _write_root_env_integration(new_vars: dict) -> None:
     # Private keys belong exclusively in .env.integration.secrets.
     existing.pop("DARK_ADMIN_PRIVATE_KEY", None)
     existing.pop("DARK_MINTER_PRIVATE_KEY", None)
+    existing.pop("DARK_PLATFORM_PRIVATE_KEY", None)
     write_env_secure(_ROOT_ENV_INTEGRATION, existing)
 
 
@@ -1368,27 +1484,38 @@ def _generate_root_env_integration_blockchain(env: dict) -> None:
         "DARK_CONTRACT_ADDRESS":  dark_contract,
         "DARK_AUTHORITY_ADDRESS": authority_contract,
     }
+    shared_signer = env.get("SIGNER_MODE", "legacy").strip().lower() == "shared"
+    if shared_signer:
+        platform_key = get_role_private_key(env, "deployer")
+        platform_address, _ = private_key_identity(platform_key)
+        vars["DARK_PLATFORM_ADDRESS"] = platform_address
+        env["PLATFORM_ADDRESS"] = platform_address
     if dark_abi_json:
         vars["DARK_ABI_JSON"] = dark_abi_json
     if authority_abi_json:
         vars["AUTHORITY_ABI_JSON"] = authority_abi_json
 
     _write_root_env_integration(vars)
-    admin_key = get_role_private_key(env, "admin")
-    minter_key = get_role_private_key(env, "minter")
-    secret_values = {}
-    if admin_key:
-        secret_values["DARK_ADMIN_PRIVATE_KEY"] = admin_key
-    if minter_key:
-        secret_values["DARK_MINTER_PRIVATE_KEY"] = minter_key
-    if secret_values:
-        _write_root_env_integration_secrets(secret_values)
+    if not shared_signer:
+        admin_key = get_role_private_key(env, "admin")
+        minter_key = get_role_private_key(env, "minter")
+        secret_values = {}
+        if admin_key:
+            secret_values["DARK_ADMIN_PRIVATE_KEY"] = admin_key
+        if minter_key:
+            secret_values["DARK_MINTER_PRIVATE_KEY"] = minter_key
+        if secret_values:
+            _write_root_env_integration_secrets(secret_values)
 
     abi_note = " (+ ABI)" if dark_abi_json else ""
     print(
         f"[OK] Generated root '.env.integration' with blockchain connection vars{abi_note}.\n"
         "     Copy this public file to each apps server.\n"
-        "     Copy '.env.integration.secrets' only to an apps server that must sign transactions."
+        + (
+            "     The platform signer remains in PLATFORM_PRIVATE_KEY_FILE; no secret handoff was generated."
+            if shared_signer
+            else "     Copy '.env.integration.secrets' only to an apps server that must sign transactions."
+        )
     )
 
 
@@ -1412,8 +1539,8 @@ def validate_root_env_integration() -> None:
         " Copy it to this server before running the services install.\n"
         "\n  Steps:\n"
         "    1. On the blockchain server: run the installer — it generates .env.integration\n"
-        "       and .env.integration.secrets\n"
-        "    2. Copy the public file and signer secret directly to this apps server\n"
+        "    2. Copy that public file to this apps server\n"
+        "       (Production shared-signer keys are provisioned separately by file)\n"
         "    3. Re-run the installer\n"
         f"\n  Expected path: {_ROOT_ENV_INTEGRATION.resolve()}"
     )
@@ -1459,6 +1586,7 @@ def _merge_root_env_integration_into_env(
         f"{prefix}_STORE_API_URL": root.get("METADATA_STORE_API_URL", ""),
         "DARK_ABI_JSON": root.get("DARK_ABI_JSON", ""),
         "AUTHORITY_ABI_JSON": root.get("AUTHORITY_ABI_JSON", ""),
+        "PLATFORM_ADDRESS": root.get("DARK_PLATFORM_ADDRESS", ""),
     }
 
     for key, incoming_value in mappings.items():
@@ -2891,6 +3019,19 @@ def configured_storage_topology(prefix: str, env: dict) -> StorageTopology:
     path = Path(raw_path)
     if not path.is_absolute():
         path = PROJECT_ROOT / path
+    expected_hash = env.get(f"{prefix}_STORAGE_TOPOLOGY_SHA256", "").strip()
+    if expected_hash:
+        try:
+            actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            print(f"[ERROR] Cannot hash global storage topology: {exc}")
+            sys.exit(1)
+        if actual_hash != expected_hash:
+            print(
+                "[ERROR] Global storage topology hash does not match the "
+                f"deployment ({actual_hash} != {expected_hash})."
+            )
+            sys.exit(1)
     try:
         return load_storage_topology(path)
     except StorageTopologyError as exc:
@@ -2938,6 +3079,92 @@ def _validate_storage_secret_file(name: str, path_value: str, kind: str) -> Path
         print(f"[ERROR] {name} must contain {description}.")
         sys.exit(1)
     return path
+
+
+def _required_locked_components(prefix: str, env: dict) -> set[str]:
+    install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
+    required: set[str] = set()
+    if install_bc:
+        required.update({"dark-env", "dark-dapp", "dark-explorador"})
+    if install_storage:
+        required.add("dark-ipfs")
+    if install_apps:
+        required.update({
+            "dark-core-lib",
+            "dark-core-admin-api",
+            "dark-core-resolver-api",
+            "dark-store-api",
+            "dark-core-minter-api",
+            "dashboard-web",
+        })
+    return required
+
+
+def validate_production_release(prefix: str, env: dict) -> None:
+    """Require an immutable deployer revision and complete component lock."""
+    deployer_commit = env.get("DEPLOYER_COMMIT", "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", deployer_commit):
+        print("[ERROR] Production requires DEPLOYER_COMMIT as a full 40-character commit.")
+        sys.exit(1)
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    current_commit = result.stdout.strip() if result.returncode == 0 else ""
+    if current_commit != deployer_commit:
+        print(
+            "[ERROR] DEPLOYER_COMMIT does not match this checkout "
+            f"({deployer_commit} != {current_commit or 'unknown'})."
+        )
+        sys.exit(1)
+
+    if not COMPONENT_LOCK_PATH.is_file():
+        print("[ERROR] Production requires components.lock.json.")
+        sys.exit(1)
+    locks = load_component_locks()
+    missing = sorted(_required_locked_components(prefix, env) - set(locks))
+    if missing:
+        print("[ERROR] Production component lock is incomplete: " + ", ".join(missing))
+        sys.exit(1)
+
+
+def validate_shared_platform_signer(env: dict, profile: str) -> None:
+    """Validate the one supported V1 production signer configuration."""
+    mode = env.get("SIGNER_MODE", "legacy").strip().lower() or "legacy"
+    if profile == "production" and mode != "shared":
+        print("[ERROR] Production requires SIGNER_MODE=shared in this release.")
+        sys.exit(1)
+    if mode != "shared":
+        return
+    raw_path = env.get("PLATFORM_PRIVATE_KEY_FILE", "").strip()
+    if not raw_path or not Path(raw_path).is_absolute():
+        print("[ERROR] PLATFORM_PRIVATE_KEY_FILE must be an absolute path.")
+        sys.exit(1)
+    path = Path(raw_path)
+    try:
+        mode_bits = path.stat().st_mode & 0o777
+    except OSError as exc:
+        print(f"[ERROR] PLATFORM_PRIVATE_KEY_FILE is unavailable: {exc}")
+        sys.exit(1)
+    if mode_bits & 0o077:
+        print(
+            "[ERROR] PLATFORM_PRIVATE_KEY_FILE must not grant group/world access "
+            f"(mode {mode_bits:04o})."
+        )
+        sys.exit(1)
+    private_key = get_role_private_key(env, "deployer")
+    validate_private_key(private_key, profile)
+    derived_address, _ = private_key_identity(private_key)
+    configured_address = env.get("PLATFORM_ADDRESS", "").strip()
+    if configured_address and configured_address.lower() != derived_address.lower():
+        print(
+            "[ERROR] PLATFORM_ADDRESS from the public handoff does not match "
+            "PLATFORM_PRIVATE_KEY_FILE."
+        )
+        sys.exit(1)
+    env["PLATFORM_ADDRESS"] = derived_address
 
 
 def validate_install_configuration(prefix: str, env: dict) -> None:
@@ -3031,12 +3258,17 @@ def validate_install_configuration(prefix: str, env: dict) -> None:
                 sys.exit(1)
 
     profile = env.get("TYPE", "developer").lower()
+    if install_apps or install_bc:
+        validate_shared_platform_signer(env, profile)
     role_keys = {
         role: get_role_private_key(env, role)
         for role in ("deployer", "admin", "minter")
     }
     for private_key in set(role_keys.values()) - {""}:
         validate_private_key(private_key, profile)
+
+    if profile == "production":
+        validate_production_release(prefix, env)
 
     if profile == "production" and (install_apps or install_bc):
         missing_roles = [
@@ -3048,8 +3280,11 @@ def validate_install_configuration(prefix: str, env: dict) -> None:
                 + ", ".join(missing_roles)
             )
             sys.exit(1)
-        if role_keys["admin"] == role_keys["minter"]:
-            print("[ERROR] Production requires distinct ADMIN_PRIVATE_KEY and MINTER_PRIVATE_KEY values.")
+        if env.get("SIGNER_MODE", "").strip().lower() == "shared" and (
+            role_keys["deployer"] != role_keys["admin"]
+            or role_keys["admin"] != role_keys["minter"]
+        ):
+            print("[ERROR] Shared signer mode must resolve one key for deployer, Admin and Minter.")
             sys.exit(1)
 
 
@@ -3072,11 +3307,15 @@ def print_install_plan(prefix: str, env: dict) -> None:
             f"min={policy.replication_min}, max={policy.replication_max}, "
             f"write={policy.write_min_peers} peer(s)/{policy.write_min_sites} site(s)"
         )
-    configured_roles = [
-        role for role in ("deployer", "admin", "minter")
-        if get_role_private_key(env, role)
-    ]
-    print(f"Signers     : {', '.join(configured_roles) if configured_roles else 'not yet generated'}")
+    if env.get("SIGNER_MODE", "legacy").strip().lower() == "shared":
+        signer_state = "shared platform signer (deployer + Admin + Minter)"
+    else:
+        configured_roles = [
+            role for role in ("deployer", "admin", "minter")
+            if get_role_private_key(env, role)
+        ]
+        signer_state = ", ".join(configured_roles) if configured_roles else "not yet generated"
+    print(f"Signers     : {signer_state}")
     print("No files, repositories, containers, or networks were changed.")
 
 
@@ -3211,6 +3450,12 @@ def run_storage_operation(action: str, prefix: str, env: dict) -> None:
     except StorageTopologyError as exc:
         print(f"[ERROR] {exc}")
         sys.exit(1)
+    deployment_id = env.get("DEPLOYMENT_ID", "").strip()
+    expected_hash = env.get(f"{prefix}_STORAGE_TOPOLOGY_SHA256", "").strip()
+    if deployment_id:
+        print(f"[INFO] Deployment: {deployment_id}")
+    if expected_hash:
+        print(f"[INFO] Topology SHA-256: {expected_hash}")
     summary = (
         audit_storage(topology, site_id)
         if action == "audit"
@@ -3641,6 +3886,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
+    deployment_parser = subparsers.add_parser(
+        "deployment",
+        help="Validate or render a canonical production deployment inventory.",
+    )
+    deployment_subparsers = deployment_parser.add_subparsers(
+        dest="deployment_action", required=True
+    )
+    deployment_validate = deployment_subparsers.add_parser(
+        "validate", help="Validate an inventory and its immutable release lock."
+    )
+    deployment_validate.add_argument("--inventory", required=True, type=Path)
+    deployment_render = deployment_subparsers.add_parser(
+        "render", help="Generate deterministic, secret-free host bundles."
+    )
+    deployment_render.add_argument("--inventory", required=True, type=Path)
+    deployment_render.add_argument("--output", required=True, type=Path)
+
+    host_parser = subparsers.add_parser(
+        "host", help="Validate, inspect or apply one rendered host bundle."
+    )
+    host_subparsers = host_parser.add_subparsers(dest="host_action", required=True)
+    for action in ("validate", "plan", "apply", "status"):
+        action_parser = host_subparsers.add_parser(action)
+        action_parser.add_argument("--config", required=True, type=Path)
+        if action == "status":
+            action_parser.add_argument("--json", action="store_true")
+
     subparsers.add_parser(
         "validate",
         help="Validate the saved non-interactive configuration without making changes.",
@@ -3754,19 +4026,90 @@ def main() -> None:
     ensure_supported_python()
     args = build_arg_parser().parse_args()
 
+    try:
+        if args.command == "deployment":
+            if args.deployment_action == "validate":
+                inventory = load_deployment_inventory(args.inventory, PROJECT_ROOT)
+                print(
+                    "[OK] Production deployment inventory is valid: "
+                    f"{inventory['deployment_id']}"
+                )
+            else:
+                bundle = render_deployment(args.inventory, args.output, PROJECT_ROOT)
+                print(f"[OK] Rendered production deployment bundle at '{bundle}'.")
+            return
+
+        if args.command == "host" and args.host_action != "apply":
+            if args.host_action == "validate":
+                validated = validate_host_bundle(args.config, require_secrets=True)
+                print(
+                    "[OK] Host bundle and required secret files are valid for "
+                    f"{validated['config']['host']['id']}."
+                )
+            elif args.host_action == "plan":
+                validated = validate_host_bundle(args.config, require_secrets=False)
+                config = validated["config"]
+                print("\n=== Production host plan ===")
+                print(f"Deployment : {config['deployment_id']}")
+                print(f"Host       : {config['host']['id']}")
+                print(f"Role       : {config['host']['role']}")
+                print(f"VPN address: {config['host']['vpn_address']}")
+                print(f"Commit     : {config['release']['deployer_commit']}")
+                print("No files, repositories, containers or networks were changed.")
+            else:
+                status = host_status(args.config, PROJECT_ROOT)
+                if args.json:
+                    print(json.dumps(status, indent=2, sort_keys=True))
+                else:
+                    print(f"Deployment : {status['deployment_id']}")
+                    print(f"Host       : {status['host']['id']} ({status['host']['role']})")
+                    print(f"Expected   : {status['expected_deployer_commit']}")
+                    print(f"Installed  : {status['installed_deployer_commit'] or 'unknown'}")
+            return
+    except DeploymentError as exc:
+        print(f"[ERROR] {exc}")
+        sys.exit(1)
+
     if args.command == "lock":
         generate_component_lock(check=args.check)
         return
 
+    host_apply = args.command == "host" and args.host_action == "apply"
     if args.command not in {"validate", "plan", "storage"}:
         _ensure_docker_group()
 
+    if host_apply:
+        try:
+            materialize_host_bundle(args.config, PROJECT_ROOT)
+        except DeploymentError as exc:
+            print(f"[ERROR] {exc}")
+            sys.exit(1)
+        print("[OK] Materialized verified host configuration into this checkout.")
+
     env = load_env()
 
-    if args.command not in {"rebuild", "resume", "validate", "plan", "storage"}:
+    if args.command not in {"rebuild", "resume", "validate", "plan", "storage", "host"}:
         env = run_setup_wizard(env)
 
     install_type, prefix = resolve_profile_prefix(env)
+
+    # Compose interpolation happens before env_file is loaded. Export only the
+    # non-secret host bind addresses so every component publishes on the VPN
+    # interface selected by the production bundle (loopback by default).
+    for bind_key in ("APPS_BIND_ADDRESS", "BLOCKCHAIN_BIND_ADDRESS"):
+        bind_value = env.get(bind_key, "").strip()
+        if bind_value:
+            os.environ[bind_key] = bind_value
+
+    if host_apply:
+        install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
+        if install_bc:
+            _apply_local_blockchain_defaults(env)
+        if install_apps and not install_bc:
+            validate_root_env_integration()
+            _merge_root_env_integration_into_env(
+                env=env, prefix=prefix, authoritative=True
+            )
 
     if args.command == "storage":
         run_storage_operation(args.action, prefix, env)
@@ -3808,10 +4151,12 @@ def main() -> None:
             authoritative=True,
         )
 
-    for role in ("deployer", "admin", "minter"):
-        private_key = get_role_private_key(env, role)
-        if private_key:
-            validate_private_key(private_key, install_type)
+    install_bc, _, install_apps = _selected_tiers(prefix, env)
+    if install_bc or install_apps:
+        for role in ("deployer", "admin", "minter"):
+            private_key = get_role_private_key(env, role)
+            if private_key:
+                validate_private_key(private_key, install_type)
 
     print(f"[INFO] Profile: {install_type.upper()}")
 

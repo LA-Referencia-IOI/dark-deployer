@@ -224,6 +224,35 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(secrets["DARK_MINTER_PRIVATE_KEY"], "0xprivate")
         self.assertEqual(self.secret_path.stat().st_mode & 0o777, 0o600)
 
+    def test_shared_signer_handoff_contains_only_platform_address(self):
+        key_path = Path(self.temporary.name) / "platform.key"
+        key_path.write_text("33" * 32 + "\n")
+        key_path.chmod(0o600)
+        env = {
+            "TYPE": "production",
+            "SIGNER_MODE": "shared",
+            "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            "RPC_URL": "http://localhost:8545",
+            "CHAIN_ID": "2025",
+        }
+        with (
+            mock.patch.object(
+                installer,
+                "resolve_contract_addresses",
+                return_value=("0xdark", "0xauthority"),
+            ),
+            mock.patch.object(
+                installer,
+                "read_deployed_contract_abis",
+                return_value=("[]", "[]"),
+            ),
+        ):
+            installer._generate_root_env_integration_blockchain(env)
+
+        public = installer.load_optional_env(self.public_path)
+        self.assertRegex(public["DARK_PLATFORM_ADDRESS"], r"^0x[0-9A-Fa-f]{40}$")
+        self.assertFalse(self.secret_path.exists())
+
     def test_secure_writer_replaces_permissive_mode(self):
         target = Path(self.temporary.name) / "service.env"
         target.write_text("OLD=value\n")
@@ -566,26 +595,59 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             installer.validate_install_configuration("SANDBOX", env)
 
-    def test_production_requires_distinct_application_signers(self):
-        shared_key = "22" * 32
-        env = {
-            "TYPE": "production",
-            "PRODUCTION_INSTALL_COMPONENTS": "apps",
-            "RPC_URL": "https://rpc.example",
-            "CHAIN_ID": "2025",
-            "PRODUCTION_DARK_CONTRACT_ADDRESS": "0x" + "1" * 40,
-            "PRODUCTION_AUTHORITY_CONTRACT_ADDRESS": "0x" + "2" * 40,
-            "PRODUCTION_STORE_API_URL": "https://store.example",
-            "PRODUCTION_STORAGE_SITE_ID": "site-a",
-            "ADMIN_PRIVATE_KEY": shared_key,
-            "MINTER_PRIVATE_KEY": shared_key,
-        }
-        topology = installer.load_storage_topology(PROJECT_ROOT / "storage-topology.example.json")
-        with (
-            mock.patch.object(installer, "configured_storage_topology", return_value=topology),
-            self.assertRaises(SystemExit),
-        ):
-            installer.validate_install_configuration("PRODUCTION", env)
+    def test_production_accepts_explicit_shared_platform_signer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            key_path = Path(temporary) / "platform.key"
+            key_path.write_text("22" * 32 + "\n")
+            key_path.chmod(0o600)
+            env = {
+                "TYPE": "production",
+                "PRODUCTION_INSTALL_COMPONENTS": "apps",
+                "RPC_URL": "https://rpc.example",
+                "CHAIN_ID": "2025",
+                "PRODUCTION_DARK_CONTRACT_ADDRESS": "0x" + "1" * 40,
+                "PRODUCTION_AUTHORITY_CONTRACT_ADDRESS": "0x" + "2" * 40,
+                "PRODUCTION_STORE_API_URL": "https://store.example",
+                "PRODUCTION_STORAGE_SITE_ID": "site-a",
+                "SIGNER_MODE": "shared",
+                "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            }
+            topology = installer.load_storage_topology(
+                PROJECT_ROOT / "storage-topology.example.json"
+            )
+            with (
+                mock.patch.object(
+                    installer, "configured_storage_topology", return_value=topology
+                ),
+                mock.patch.object(installer, "validate_production_release"),
+            ):
+                installer.validate_install_configuration("PRODUCTION", env)
+
+        self.assertRegex(env["PLATFORM_ADDRESS"], r"^0x[0-9A-Fa-f]{40}$")
+
+    def test_shared_signer_preseeds_genesis_and_rejects_existing_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            key_path = root / "platform.key"
+            key_path.write_text("44" * 32 + "\n")
+            key_path.chmod(0o600)
+            target = root / "dark-env"
+            env = {
+                "TYPE": "production",
+                "SIGNER_MODE": "shared",
+                "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            }
+
+            installer.prepare_dark_env_platform_wallet(str(target), env)
+            address_file = target / "config" / "master-wallet"
+            self.assertEqual(address_file.read_text().strip(), env["PLATFORM_ADDRESS"])
+            self.assertEqual(address_file.stat().st_mode & 0o777, 0o600)
+
+            (target / "config" / "genesis.json").write_text(json.dumps({
+                "alloc": {"0x" + "0" * 40: {"balance": "1"}}
+            }))
+            with self.assertRaises(SystemExit):
+                installer.prepare_dark_env_platform_wallet(str(target), env)
 
 
 class GitInstallerTests(unittest.TestCase):

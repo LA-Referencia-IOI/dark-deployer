@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "environment": "production",
+  "deployment_id": "dark-site-a-1",
+  "chain_id": 2025,
+  "release": {
+    "deployer_commit": "REPLACE_WITH_THE_40_CHARACTER_DEPLOYER_COMMIT",
+    "components_lock": "components.lock.json"
+  },
+  "network": {
+    "trust_boundary": "vpn",
+    "vpn_cidr": "10.20.30.0/24",
+    "trusted_minter_clients": [
+      "10.20.30.50/32"
+    ]
+  },
+  "signing": {
+    "mode": "shared",
+    "platform_key_target": "/opt/dark-deployer/secrets/platform.key"
+  },
+  "storage": {
+    "cluster_name": "dark-global",
+    "strict_single_site": false,
+    "swarm_key_target": "/opt/dark-deployer/secrets/ipfs-swarm.key",
+    "cluster_secret_target": "/opt/dark-deployer/secrets/ipfs-cluster-secret"
+  },
+  "sites": [
+    {
+      "id": "site-a",
+      "hosts": [
+        {
+          "id": "site-a-blockchain-1",
+          "management_address": "blockchain.internal.example",
+          "vpn_address": "10.20.30.10",
+          "roles": [
+            "blockchain"
+          ]
+        },
+        {
+          "id": "site-a-apps-1",
+          "management_address": "apps.internal.example",
+          "vpn_address": "10.20.30.20",
+          "roles": [
+            "apps"
+          ],
+          "advertised_urls": {
+            "admin": "http://10.20.30.20:8000",
+            "minter": "http://10.20.30.20:8001",
+            "resolver": "http://10.20.30.20:8002",
+            "store_api": "http://10.20.30.20:8003",
+            "dashboard": "http://10.20.30.20:8081"
+          }
+        },
+        {
+          "id": "site-a-storage-1",
+          "management_address": "ipfs-1.internal.example",
+          "vpn_address": "10.20.30.31",
+          "roles": [
+            "storage-node"
+          ]
+        },
+        {
+          "id": "site-a-storage-2",
+          "management_address": "ipfs-2.internal.example",
+          "vpn_address": "10.20.30.32",
+          "roles": [
+            "storage-node"
+          ]
+        }
+      ]
+    }
+  ]
+}
