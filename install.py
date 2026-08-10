@@ -987,15 +987,13 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
         return None
 
     def build_repo_url_candidates(url: str) -> list[str]:
-        """Build URL candidates, preserving the configured transport first."""
-        candidates = [url]
-        ssh_url = github_https_to_ssh(url)
-        https_url = github_ssh_to_https(url)
+        """Build URL candidates, always trying SSH before HTTPS."""
+        ssh_url = url if url.startswith("git@") else github_https_to_ssh(url)
+        https_url = github_ssh_to_https(url) if url.startswith("git@") else url
 
-        if ssh_url:
-            candidates.append(ssh_url)
-        elif https_url:
-            candidates.append(https_url)
+        candidates = [candidate for candidate in (ssh_url, https_url) if candidate]
+        if not candidates:
+            candidates = [url]
 
         # Deduplicate while preserving order.
         seen = set()
@@ -3494,9 +3492,9 @@ def _ask_confirm(question: str, default: bool = True) -> bool:
 
 
 _BLOCKCHAIN_REPO_DEFAULTS: dict = {
-    "DARK_ENV":        "https://github.com/LA-Referencia-IOI/dark-env",
-    "DARK_DAPP":       "https://github.com/LA-Referencia-IOI/dark-dapp",
-    "DARK_EXPLORADOR": "https://github.com/LA-Referencia-IOI/dark-explorer.git",
+    "DARK_ENV":        "git@github.com:LA-Referencia-IOI/dark-env.git",
+    "DARK_DAPP":       "git@github.com:LA-Referencia-IOI/dark-dapp.git",
+    "DARK_EXPLORADOR": "git@github.com:LA-Referencia-IOI/dark-explorer.git",
 }
 
 # Each entry: label → (env-key suffix after prefix, default URL)
