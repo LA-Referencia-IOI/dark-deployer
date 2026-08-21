@@ -6,18 +6,18 @@
       "repository": "https://github.com/LA-Referencia-IOI/dark-core-admin-api.git"
     },
     "dark-core-lib": {
-      "branch": "main",
-      "commit": "521db61ded43ae5beae10e2adb298574e951e2d4",
+      "branch": "codex/production-deployment-readiness",
+      "commit": "50f73e6cf85f257f4791b66163c032e25ee3f088",
       "repository": "https://github.com/LA-Referencia-IOI/dark-core-lib.git"
     },
     "dark-core-minter-api": {
       "branch": "codex/production-deployment-readiness",
-      "commit": "f6d6f6d52032c617547966d54cd2316da1823a44",
+      "commit": "2ab43cce683e154450c5388e67cb2d295b1ae4de",
       "repository": "https://github.com/LA-Referencia-IOI/dark-core-minter-api.git"
     },
     "dark-core-resolver-api": {
       "branch": "codex/production-deployment-readiness",
-      "commit": "83f1416d54454b87cbed88555914fd915db6274f",
+      "commit": "03f84a720650cf44741c0a90a91e16c7e1ce34bd",
       "repository": "https://github.com/LA-Referencia-IOI/dark-core-resolver-api.git"
     },
     "dark-dapp": {
@@ -42,7 +42,7 @@
     },
     "dark-store-api": {
       "branch": "codex/production-deployment-readiness",
-      "commit": "8f37c97672b5ea6e7e2a821ae562fef1dc4fede0",
+      "commit": "a5f3e775ef7fae8bb3ab7c7f09bf197201110aa5",
       "repository": "git@github.com:LA-Referencia-IOI/dark-store-api.git"
     },
     "dashboard-web": {
