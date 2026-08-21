@@ -91,10 +91,36 @@ corresponde a cada etapa.
 - Conservar el orden Level 2 → Level 1 dentro de cada ARK.
 - Hacer que el cambio sea gradual, configurable y reversible.
 
-## 5. Propuesta simple y confiable
+## 5. Modelo de confirmación y persistencia
 
-La propuesta principal es conservar la confirmación sincrónica mínima y
-paralelizar el trabajo entre ARKs:
+La topología sigue siendo un único IPFS Cluster global. El problema a resolver
+no requiere crear clusters independientes ni agregar infraestructura. Requiere
+separar cuatro momentos que hoy suceden casi juntos:
+
+```text
+T0  CID calculado o aceptado por Cluster
+T1  contenido PINNED en al menos un peer
+T2  contenido PINNED en los dos peers de la sede local
+T3  contenido PINNED en al menos dos sedes
+T4  contenido PINNED en todos los peers objetivo
+```
+
+Para cada momento se debe decidir independientemente:
+
+- cuándo Store API responde con éxito;
+- cuándo el ARK queda habilitado para el Chain Worker;
+- cuándo la metadata original puede eliminarse de PostgreSQL;
+- cuál es el objetivo final que debe mantener IPFS Cluster.
+
+Una respuesta rápida de Store API no obliga a eliminar el payload ni a publicar
+el CID inmediatamente en blockchain.
+
+## 6. Componentes comunes a todas las opciones
+
+### 6.1 Concurrencia limitada entre ARKs
+
+El orden Level 2 → Level 1 debe conservarse dentro de cada ARK, pero varios ARKs
+pueden procesarse en paralelo:
 
 ```text
 ARK A: Level 2 → Level 1 ┐
@@ -103,9 +129,83 @@ ARK C: Level 2 → Level 1 ┤
 ARK D: Level 2 → Level 1 ┘
 ```
 
-### 5.1 Quorum de escritura
+Configuración propuesta:
 
-Mantener para la sede de dos nodos:
+```dotenv
+METADATA_WORKER_CONCURRENCY=4
+```
+
+La primera prueba debe comparar concurrencia 1, 2 y 4. Solamente se debería
+subir a 8 después de medir CPU, memoria, conexiones PostgreSQL, disco, red,
+Store API e IPFS. `METADATA_WORKER_PAGE_SIZE` continúa siendo el tamaño de la
+página seleccionada, no el nivel de concurrencia.
+
+### 6.2 Reutilización de conexiones
+
+Se deben reutilizar clientes HTTP de larga vida en:
+
+- Minter → Store API;
+- Store API → Kubo/IPFS Cluster.
+
+Los clientes deben cerrarse durante el shutdown y sus pools deben tener límites
+compatibles con la concurrencia configurada.
+
+### 6.3 Mediciones por etapa
+
+Todas las opciones necesitan medir separadamente:
+
+- preparación de Level 2;
+- `POST /v1/store` de Level 2;
+- preparación de Level 1;
+- `POST /v1/store` de Level 1;
+- `add` en Cluster Proxy;
+- tiempo hasta el primer pin;
+- tiempo hasta el quorum de publicación;
+- tiempo hasta la réplica objetivo;
+- consultas de estado de replicación;
+- commit PostgreSQL;
+- duración y throughput total del ciclo.
+
+Las métricas deben incluir p50, p95 y p99. El dashboard debe estimar el tiempo
+de drenaje usando throughput observado, no el intervalo de sleep del worker.
+
+## 7. Opciones de diseño
+
+| Opción | Store responde | Minting | Purga del payload | Complejidad |
+| --- | --- | --- | --- | --- |
+| A. Optimizar flujo actual | quorum actual | inmediata | quorum actual | baja |
+| B. Un pin + reconciliación oportunista | T1 | T1 | objetivo de persistencia | media-baja |
+| C. Publicación en dos fases | T1 | T2 o T3 | objetivo de persistencia | media |
+| D. Réplica objetivo sincrónica | T2, T3 o T4 | inmediata | al responder | baja-media |
+| E. Spool durable en Store API | spool local | quorum posterior | quorum posterior | media-alta |
+| F. Batch/CAR | por lote | por lote o CID | por lote | alta |
+| G. Workers horizontales | sin cambio | sin cambio | según política | alta |
+
+### 7.1 Opción A — Optimizar el flujo actual
+
+Mantener la semántica actual y agregar solamente pooling, concurrencia y
+métricas.
+
+Ventajas:
+
+- cambio funcional mínimo;
+- rollback sencillo;
+- permite comprobar si la espera de IPFS es realmente el límite dominante.
+
+Desventajas:
+
+- el payload continúa eliminándose al alcanzar el quorum mínimo;
+- no queda una fuente local durante la ventana hasta la réplica objetivo.
+
+Esta opción debe ser la primera línea base optimizada, pero no resuelve por sí
+sola la ventana de durabilidad.
+
+### 7.2 Opción B — Un pin confirmado y reconciliación oportunista
+
+Esta es la opción simple solicitada y la principal candidata para una primera
+implementación completa.
+
+Para una sede con dos peers:
 
 ```dotenv
 IPFS_CLUSTER_EXPECTED_PEERS=2
@@ -113,235 +213,374 @@ IPFS_CLUSTER_WRITE_MIN_PEERS=1
 IPFS_CLUSTER_WRITE_MIN_SITES=1
 ```
 
-Store API solamente responde con éxito cuando observa el quorum mínimo. IPFS
-Cluster continúa intentando alcanzar la réplica objetivo en el segundo peer.
+El flujo sería:
 
-Esto permite seguir escribiendo cuando un servidor IPFS está temporalmente
-caído.
-
-### 5.2 Concurrencia limitada
-
-Agregar una concurrencia configurable al Metadata Worker:
-
-```dotenv
-METADATA_WORKER_CONCURRENCY=4
+```text
+1. guardar Level 2 y esperar un PINNED
+2. guardar Level 1 y esperar un PINNED
+3. conservar Level 1 y Level 2 en PostgreSQL
+4. marcar replication_pending
+5. permitir que el Chain Worker continúe
+6. cuando el Metadata Worker tenga capacidad ociosa, verificar ambos CIDs
+7. eliminar el payload solamente cuando ambos alcancen el objetivo
 ```
 
-La primera prueba debería usar cuatro ARKs concurrentes. Solamente se debería
-subir a 8 o más después de medir CPU, memoria, conexiones PostgreSQL, disco,
-red, Store API e IPFS.
+IPFS Cluster continúa distribuyendo los pins sin bloquear el camino principal.
+El Metadata Worker reutiliza sus períodos ociosos para comprobar y, cuando sea
+necesario, reparar la persistencia.
 
-`METADATA_WORKER_PAGE_SIZE` seguiría siendo el límite de selección de una
-página, no el nivel de concurrencia.
+Un reconciliador estrictamente limitado a momentos sin nuevos ARKs puede sufrir
+starvation durante una carga continua. Por eso se recomienda:
 
-### 5.3 Reutilización de conexiones
-
-Reutilizar clientes HTTP de larga vida en:
-
-- Minter → Store API;
-- Store API → Kubo/IPFS Cluster.
-
-Los clientes deben cerrarse durante el shutdown de cada servicio. El pool de
-conexiones debe tener límites compatibles con la concurrencia configurada.
-
-### 5.4 Conservación del payload durante la ventana de replicación
-
-Después del quorum mínimo, el Chain Worker puede continuar usando los CIDs.
-Sin embargo, Level 1 y Level 2 no deberían eliminarse inmediatamente de
-PostgreSQL.
-
-Un paso de reconciliación ejecutado por el mismo Metadata Worker comprobaría
-periódicamente el estado de ambos CIDs. Solamente cuando los dos alcancen la
-réplica objetivo se eliminaría el payload local.
+- prioridad para nuevas escrituras;
+- reconciliación inmediata cuando no existan ARKs listos;
+- un pequeño presupuesto obligatorio de mantenimiento cuando una replicación
+  supere una antigüedad máxima, aunque continúe entrando trabajo nuevo.
 
 Configuración propuesta:
 
 ```dotenv
-METADATA_REPLICATION_TARGET_PEERS=2
+METADATA_REPLICATION_ENABLED=true
+METADATA_REPLICATION_IDLE_FIRST=true
+METADATA_REPLICATION_BATCH_SIZE=50
+METADATA_REPLICATION_CONCURRENCY=4
 METADATA_REPLICATION_CHECK_DELAY_SECONDS=30
+METADATA_REPLICATION_MAX_STARVATION_SECONDS=300
+
+# Condición para eliminar Level 1 y Level 2 de PostgreSQL.
+METADATA_REPLICATION_PURGE_MIN_LOCAL_PEERS=2
+METADATA_REPLICATION_PURGE_MIN_REMOTE_PEERS=0
+METADATA_REPLICATION_PURGE_MIN_SITES=1
 ```
 
-No es necesario crear otro servicio. La reconciliación puede ser una segunda
-fase del ciclo existente y procesar estados concurrentemente.
+En una instalación multisede, una política posible sería:
 
-Para Developer con un único peer, el objetivo debería ser 1. Para Developer HA,
-Sandbox y Production de una sede con dos peers, el objetivo debería ser 2.
+```dotenv
+METADATA_REPLICATION_PURGE_MIN_LOCAL_PEERS=2
+METADATA_REPLICATION_PURGE_MIN_REMOTE_PEERS=1
+METADATA_REPLICATION_PURGE_MIN_SITES=2
+```
 
-## 6. Garantías y límites
+También puede configurarse la purga para esperar todos los peers objetivo. La
+política debe comprobar Level 1 y Level 2 de manera independiente; no se pueden
+sumar copias de ambos CIDs ni asumir que están fijados en los mismos peers.
 
-Con esta propuesta:
-
-- existe al menos una copia confirmada antes de avanzar;
-- el minting puede continuar con un solo peer disponible;
-- PostgreSQL conserva la fuente mientras falta la segunda réplica;
-- la segunda réplica se verifica sin bloquear cada escritura individual;
-- una caída temporal del segundo peer no bloquea toda la cola.
-
-Existe una decisión importante: si el ARK se publica en blockchain después del
-quorum de un peer, puede haber una ventana con una sola copia IPFS. Conservar el
-payload permite recuperación, pero no garantiza disponibilidad IPFS si ese
-único peer también desaparece antes de completar la segunda réplica.
-
-Si se exige cero ventana de una sola copia, el Chain Worker deberá esperar dos
-peers. Esa alternativa mejora durabilidad antes del minting, pero detiene nuevos
-mintings cuando cualquiera de los dos peers está caído.
-
-## 7. Alternativas consideradas
-
-### Alternativa A — Solo concurrencia y pooling
-
-Mantener exactamente la semántica actual y agregar únicamente:
-
-- concurrencia limitada entre ARKs;
-- reutilización de conexiones HTTP;
-- métricas por etapa.
+Si un CID conserva al menos una copia pero todavía no alcanza el objetivo, el
+reconciliador solamente vuelve a consultar o solicita la reparación del pin. Si
+un CID llega a cero copias, debe volver a ejecutar el `add` desde el payload
+retenido y verificar que el CID resultante sea exactamente el esperado.
 
 Ventajas:
 
-- menor cambio funcional;
-- sin cambios de estado ni reconciliación;
-- rollback sencillo.
+- confirma al menos una copia antes de avanzar;
+- mantiene el minting disponible con un peer local caído;
+- no necesita Redis, Kafka ni otro servicio;
+- aprovecha la capacidad ociosa del worker;
+- conserva una fuente de recuperación hasta alcanzar la política de purga.
 
-Desventajas:
+Límites:
 
-- el payload continúa eliminándose después del quorum mínimo;
-- no existe una fuente local durante la ventana hasta la segunda réplica.
+- el CID puede publicarse durante una ventana con una sola copia IPFS;
+- PostgreSQL puede crecer durante una falla prolongada;
+- necesita estados, métricas, backoff y alertas de reconciliación.
 
-Esta alternativa debería evaluarse primero porque puede resolver gran parte del
-problema sin cambiar la política de persistencia.
+### 7.3 Opción C — Persistencia y publicación en dos fases
 
-### Alternativa B — Concurrencia, pooling y reconciliación
+Store API responde después de T1 y el Metadata Worker marca el registro como
+almacenado, pero el Chain Worker solamente publica cuando se alcanza T2 o T3:
 
-Es la propuesta principal descrita en la sección 5.
+```text
+metadata_pending
+  → replication_pending
+  → replication_ready
+  → chain_pending
+  → published
+```
+
+Esta alternativa desacopla la ingestión de la latencia geográfica sin publicar
+en blockchain un CID que todavía no cumple la durabilidad acordada.
 
 Ventajas:
 
-- mejora de rendimiento;
-- mantiene disponibilidad con un peer;
-- conserva material de recuperación hasta llegar a dos réplicas.
+- absorbe cargas rápidamente;
+- permite exigir dos copias locales o dos sedes antes del minting;
+- conserva el payload para reparar cualquier pérdida previa a la publicación.
 
 Desventajas:
 
-- agrega un estado implícito o explícito de replicación pendiente;
-- requiere controlar el crecimiento temporal de PostgreSQL;
-- necesita métricas y alertas de reconciliación.
+- agrega un estado explícito al pipeline;
+- el backlog puede trasladarse de metadata a replicación;
+- requiere definir con precisión el quorum que habilita al Chain Worker.
 
-### Alternativa C — Responder sin confirmar ningún pin
+### 7.4 Opción D — Esperar sincrónicamente la réplica objetivo
 
-Store API devolvería el CID inmediatamente después de que el Cluster acepte el
-`add`, sin comprobar un peer fijado.
+Cada `POST /v1/store` espera T2, T3 o T4 antes de responder. Es la opción más
+simple de razonar, pero coloca toda la latencia de replicación local o WAN en el
+Metadata Worker.
 
-No se recomienda para producción. Introduce una ventana en la que el CID existe
-en la aplicación pero todavía no hay una copia durable observada.
+En una sede, esperar dos peers detiene el minting si cualquiera falla. En varias
+sedes, esperar tres peers en dos sedes ofrece fuerte durabilidad previa al
+minting, pero reduce disponibilidad durante particiones y aumenta la latencia.
 
-### Alternativa D — Varios procesos Metadata Worker
+### 7.5 Opción E — Spool durable en Store API
 
-Levantar múltiples réplicas del worker no funciona directamente con el diseño
-actual porque existe un advisory lock por worker. Para escalar horizontalmente
-sería necesario:
+Store API calcula el CID, guarda el payload en un spool durable y responde. Un
+proceso interno completa después el `add`, pin y replicación.
 
-- reemplazar el lock global por claims por registro;
-- usar `FOR UPDATE SKIP LOCKED` o leases;
-- asegurar idempotencia de cada etapa;
-- coordinar estadísticas y heartbeats entre instancias.
+Esta opción desacopla completamente la ingestión, pero Store API tendría que
+implementar cola durable, recuperación tras reinicio, idempotencia, límites de
+disco, estados y limpieza. PostgreSQL en Minter ya puede cumplir esta función,
+por lo que no se recomienda inicialmente.
 
-Es una alternativa válida a futuro, pero no es la más simple para el problema
-actual.
+Responder sin confirmar un pin y sin un spool durable no se considera aceptable
+para producción.
 
-### Alternativa E — API batch de Store API
+### 7.6 Opción F — API batch o archivos CAR/DAG
 
-Enviar múltiples documentos en una solicitud puede reducir overhead HTTP, pero
-complica resultados parciales, reintentos e idempotencia. Debería considerarse
-solamente si concurrencia y pooling no alcanzan el throughput requerido.
+Agrupar documentos reduce llamadas HTTP o cantidad de pins, pero complica
+resultados parciales, reintentos, recuperación individual, auditoría y unpin.
+Debe considerarse solamente si pooling y concurrencia no alcanzan y las métricas
+demuestran que el número de pins es el cuello de botella.
 
-## 8. Instrumentación necesaria antes de decidir
+### 7.7 Opción G — Varios procesos Metadata Worker
 
-Agregar mediciones separadas para:
+El advisory lock global actual impide escalar el worker directamente. Sería
+necesario usar claims por registro, `FOR UPDATE SKIP LOCKED` o leases, asegurar
+idempotencia y recuperar tareas abandonadas. Es una opción futura, no la más
+simple para el problema actual.
 
-- preparación de Level 2;
-- `POST /v1/store` de Level 2;
-- preparación de Level 1;
-- `POST /v1/store` de Level 1;
-- `add` en Cluster Proxy;
-- tiempo hasta quorum mínimo;
-- consultas de estado de replicación;
-- commit PostgreSQL;
-- duración y throughput total del ciclo.
+## 8. Observabilidad de copias locales y remotas
 
-Las métricas deberían incluir percentiles p50, p95 y p99, no solamente el
-promedio del último ciclo.
+Store API ya conoce el mapa `peer → site`. Se propone ampliar
+`GET /v1/status/{cid}` para devolver una vista explícita de replicación:
 
-El dashboard también debería calcular la estimación de drenaje usando el
-throughput observado. Multiplicar páginas pendientes por el tiempo de sleep no
-representa correctamente ciclos largos.
+```dotenv
+IPFS_CLUSTER_LOCAL_SITE_ID=site-a
+```
 
-## 9. Plan de evaluación gradual
+El deployer debe derivar este valor del sitio al que pertenece la instancia de
+Store API y validarlo contra el mapa de peers de la topología.
 
-### Fase 0 — Línea base
+```json
+{
+  "cid": "bafy...",
+  "status": "pinned",
+  "replication": {
+    "local_site": "site-a",
+    "pinned_peers_total": 4,
+    "pinned_peers_local": 2,
+    "pinned_peers_remote": 2,
+    "pinned_sites_total": 2,
+    "sites": {
+      "site-a": 2,
+      "site-b": 2
+    },
+    "write_min_peers": 1,
+    "write_min_sites": 1,
+    "purge_min_local_peers": 2,
+    "purge_min_remote_peers": 1,
+    "purge_min_sites": 2,
+    "write_quorum_met": true,
+    "purge_target_met": true,
+    "checked_at": "2026-08-21T12:00:00Z"
+  }
+}
+```
+
+`local` siempre significa la sede configurada para esa instancia de Store API,
+no necesariamente el peer que recibió originalmente el contenido. `remote`
+significa cualquier peer perteneciente a otra sede del mismo cluster global.
+
+El recuento se obtiene de los peers con estado `PINNED`, no de allocations,
+peers conectados ni pins en progreso. Un peer `PINNING`, `PIN_ERROR` o
+inalcanzable no cuenta como copia durable.
+
+### 8.1 Estado persistido por CID
+
+Level 1 y Level 2 deben seguirse individualmente. La opción más precisa es una
+tabla de replicación con una fila por CID y referencias desde los ARKs:
+
+```text
+cid
+document_role                 L1 | L2
+state                         pending | target_met | degraded | error
+local_pinned_peers
+remote_pinned_peers
+pinned_sites
+site_copies_json
+write_quorum_met_at
+target_met_at
+last_checked_at
+next_check_at
+last_error
+retry_count
+```
+
+El estado agregado de un ARK se calcula usando el resultado más débil de sus dos
+CIDs. El payload solamente se elimina cuando L1 y L2 cumplen la política. Esto
+evita mostrar “dos copias” si L1 tiene dos pero L2 solamente una.
+
+### 8.2 Dashboard y alertas
+
+El dashboard debería mostrar:
+
+- ARKs con replicación pendiente, completa, degradada y en error;
+- antigüedad del pendiente más antiguo;
+- CIDs con 0, 1, 2 y más copias;
+- copias locales y remotas;
+- distribución de copias por sede;
+- tiempo p50/p95/p99 hasta primer pin y hasta objetivo;
+- payload retenido en PostgreSQL, tanto registros como bytes;
+- última ejecución y throughput del reconciliador.
+
+Alertas mínimas:
+
+- cualquier CID con cero copias y payload recuperable;
+- replicación pendiente por encima de la antigüedad máxima;
+- payload no recuperable que no cumple el quorum;
+- crecimiento de PostgreSQL por encima del límite operativo;
+- una sede completa sin copias o sin peers visibles.
+
+## 9. Política de quorum por entorno
+
+| Entorno | Store responde | Chain publica | Purga PostgreSQL | Objetivo Cluster |
+| --- | --- | --- | --- | --- |
+| Developer simple | 1 peer | 1 peer | 1 peer | 1 peer |
+| Developer HA / una sede | 1 local | 1 local | 2 locales | 2 peers |
+| Multisede disponible | 1 local | 1 local | 2 locales + 1 remoto, 2 sedes | todos |
+| Multisede equilibrado | 1 local | 2 peers, 2 sedes | 2 locales + 1 remoto, 2 sedes | todos |
+| Multisede estricto | 3 peers, 2 sedes | al responder | al responder o todos | todos |
+
+La variante “multisede equilibrado” evita bloquear la ingestión por la WAN,
+pero no permite minting hasta observar una copia remota. La variante disponible
+prioriza continuidad y acepta una ventana de una sola sede, mitigada por la
+retención en PostgreSQL.
+
+## 10. Comportamiento del reconciliador
+
+El reconciliador es una fase del Metadata Worker, no un servicio nuevo:
+
+1. procesar la página normal de metadata pendiente;
+2. si no hay trabajo listo, seleccionar replicaciones vencidas por
+   `next_check_at`;
+3. consultar L1 y L2 con concurrencia limitada;
+4. actualizar recuentos locales, remotos y por sede;
+5. si ambos alcanzaron la política, marcar `target_met` y purgar el payload;
+6. si existe al menos una copia, mantener el payload y aplicar backoff;
+7. si no existe ninguna copia, reingresar el contenido conservado y comprobar
+   que el CID obtenido coincide;
+8. si hay carga continua, ejecutar un lote pequeño cuando se cumpla
+   `METADATA_REPLICATION_MAX_STARVATION_SECONDS`.
+
+Las operaciones deben ser idempotentes. Un reinicio entre la comprobación y la
+purga no debe perder el payload: la purga se realiza en una transacción que
+vuelve a verificar que el estado persistido cumple la política.
+
+## 11. Plan de evaluación gradual
+
+### Fase 0 — Línea base e instrumentación
 
 1. Ejecutar una carga representativa con el código actual.
 2. Registrar throughput, latencias por etapa y recursos.
 3. Repetir con un nodo IPFS detenido.
-4. Verificar ausencia de errores y disponibilidad de resolución.
+4. Medir separadamente primer pin y réplica completa.
 
 ### Fase 1 — Pooling
 
 1. Reutilizar clientes HTTP sin cambiar concurrencia.
-2. Repetir la misma carga.
-3. Comparar latencias y conexiones.
+2. Repetir la carga y comparar conexiones y latencias.
 
 ### Fase 2 — Concurrencia
 
-1. Activar concurrencia 2.
-2. Probar concurrencia 4.
-3. Evaluar 8 solamente si los recursos tienen margen.
-4. Mantener Level 2 → Level 1 dentro de cada ARK.
+1. Probar concurrencia 2 y luego 4.
+2. Evaluar 8 solamente si los recursos tienen margen.
+3. Mantener Level 2 → Level 1 dentro de cada ARK.
 
-### Fase 3 — Retención y reconciliación
+### Fase 3 — Un pin, retención y observabilidad
 
-1. Conservar payload después del quorum mínimo.
-2. Verificar ambos CIDs en segundo plano.
-3. Purgar solamente al alcanzar el objetivo.
-4. Simular caída y recuperación de un peer.
-5. Definir alertas y política de retención máxima.
+1. Confirmar un pin antes de avanzar.
+2. Conservar L1 y L2 en PostgreSQL.
+3. Exponer conteos locales, remotos y por sede.
+4. Mostrar `replication_pending` y su antigüedad.
 
-## 10. Criterios de aceptación
+### Fase 4 — Reconciliación oportunista
+
+1. Ejecutarla primero durante períodos ociosos.
+2. Verificar que el límite de starvation funciona bajo carga continua.
+3. Simular caída y recuperación de cada peer y de una sede.
+4. Purgar solamente cuando L1 y L2 cumplan la política.
+5. Probar recuperación desde PostgreSQL cuando un CID llega a cero copias.
+
+### Fase 5 — Política previa al minting
+
+Comparar con la misma carga:
+
+- publicación con un peer local;
+- publicación con dos peers locales;
+- publicación con dos peers en dos sedes;
+- publicación con tres peers en dos sedes.
+
+## 12. Criterios de aceptación
 
 - Cero pérdida de metadata durante pruebas de falla controlada.
-- Cero ARKs publicados con CIDs inexistentes en el quorum mínimo.
+- Cero ARKs publicados sin alcanzar el quorum de publicación configurado.
 - Level 1 siempre referencia correctamente el CID de Level 2.
-- Los reintentos no producen resultados inconsistentes.
-- Un peer caído no detiene el minting cuando el quorum mínimo es 1.
-- Al recuperar el segundo peer, los CIDs pendientes alcanzan dos réplicas.
-- El payload local solamente se purga después de la política definida.
+- Los reintentos y reinicios no producen resultados inconsistentes.
+- Un peer caído no detiene el minting cuando el mínimo es uno.
+- El reconciliador no queda postergado indefinidamente bajo carga continua.
+- Al recuperar peers o sedes, los CIDs pendientes alcanzan el objetivo.
+- Los recuentos locales, remotos y por sede reflejan estados `PINNED` reales.
+- El payload se purga solamente cuando L1 y L2 cumplen la política definida.
+- Un CID con cero copias puede reconstruirse desde el payload retenido.
 - El throughput mejora de manera medible frente a la línea base.
 - CPU, memoria, disco, red y pool PostgreSQL permanecen dentro de límites
   operativos acordados.
 - El cambio puede desactivarse mediante configuración y rollback de imagen.
 
-## 11. Preguntas abiertas
+## 13. Riesgos y límites
 
-1. ¿El Chain Worker debe publicar con un peer confirmado o esperar dos?
-2. ¿Cuánto tiempo puede conservarse el payload en PostgreSQL?
-3. ¿Cuál es el crecimiento esperado de PostgreSQL durante una caída larga?
-4. ¿El reconciliador debe solamente verificar o también volver a ejecutar el
-   `add` cuando un CID no tiene ninguna copia?
-5. ¿La réplica objetivo es dos peers locales o incluye sedes remotas?
+- Publicar con un solo pin crea una ventana con una sola copia IPFS. La copia en
+  PostgreSQL permite recuperación, pero no disponibilidad IPFS inmediata si el
+  único peer desaparece.
+- Esperar una copia remota antes del minting elimina la ventana de una sola sede,
+  pero introduce dependencia de la VPN y de otra sede.
+- Una caída larga puede hacer crecer PostgreSQL; deben definirse capacidad,
+  alertas y una política que nunca purgue payload no protegido.
+- Los conteos son una fotografía: pueden cambiar después de la consulta. La
+  decisión de purga debe registrar cuándo y con qué política se tomó.
+- IPFS Cluster sigue siendo responsable de mantener allocations. El
+  reconciliador de Minter conserva y reingresa contenido; no debe implementar
+  un segundo sistema de asignación de peers.
+
+## 14. Preguntas abiertas
+
+1. ¿El Chain Worker debe publicar con un peer local, dos locales o dos sedes?
+2. ¿La purga multisede requiere todos los peers o una política mínima estable?
+3. ¿Cuánto payload y durante cuánto tiempo puede conservar PostgreSQL?
+4. ¿Cuál es el máximo aceptable para
+   `METADATA_REPLICATION_MAX_STARVATION_SECONDS`?
+5. ¿El reconciliador puede solicitar explícitamente un nuevo pin o solamente
+   reingresar contenido cuando detecte cero copias?
 6. ¿Cuál es el throughput mínimo requerido para producción?
 7. ¿Qué límites de CPU, IOPS y red tienen los servidores IPFS actuales?
-8. ¿Se necesita preservar el orden global de ARKs o solamente el orden Level 2
-   → Level 1 por ARK?
-9. ¿Cómo se mostrarán `replication_pending`, antigüedad y errores en el
-   dashboard?
+8. ¿Se necesita preservar orden global o solamente Level 2 → Level 1 por ARK?
+9. ¿Qué período histórico de snapshots de replicación necesita el dashboard?
 
-## 12. Recomendación para el próximo paso
+## 15. Recomendación
 
-No implementar todavía el flujo asíncrono completo.
+Mantener el único Cluster global y no agregar infraestructura nueva.
 
-El siguiente experimento debería limitarse a instrumentación, reutilización de
-conexiones y concurrencia configurable, comenzando con 2 y luego 4. Con esos
-resultados se podrá determinar si la reconciliación asíncrona es necesaria o si
-el cuello de botella queda resuelto sin cambiar la semántica de persistencia.
+La evolución recomendada es:
 
-La decisión sobre publicar con una o dos réplicas debe tomarse explícitamente
-antes de implementar la fase de retención y reconciliación.
+1. instrumentación y clientes HTTP persistentes;
+2. concurrencia configurable, comenzando con 2 y luego 4;
+3. confirmar un pin y conservar el payload;
+4. reconciliar prioritariamente cuando el worker esté ocioso, con un límite de
+   starvation para garantizar progreso;
+5. exponer copias locales, remotas y por sede para cada CID;
+6. purgar solamente cuando Level 1 y Level 2 alcancen el objetivo acordado.
+
+Antes de implementar la fase que habilita el Chain Worker se debe elegir
+explícitamente entre disponibilidad —publicar con un pin— y durabilidad
+geográfica —esperar al menos dos sedes—. Esta decisión puede ser configurable
+por entorno sin cambiar la arquitectura del cluster.
