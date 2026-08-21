@@ -2,11 +2,10 @@
 
 ## Estado de este documento
 
-Esta es una propuesta de trabajo, no una implementación activa.
-
-El cambio experimental que motivó este documento fue revertido para poder
-evaluar alternativas con calma. El comportamiento actual del Minter, Store API
-e IPFS Cluster permanece sin cambios.
+La opción B de este documento fue seleccionada e implementada. Store API
+confirma un pin, el Minter conserva los payloads hasta alcanzar la política
+derivada de la topología y el Metadata Worker reconcilia en segundo plano.
+Las demás opciones se conservan como análisis histórico.
 
 ## 1. Problema observado
 
@@ -205,13 +204,8 @@ sola la ventana de durabilidad.
 Esta es la opción simple solicitada y la principal candidata para una primera
 implementación completa.
 
-Para una sede con dos peers:
-
-```dotenv
-IPFS_CLUSTER_EXPECTED_PEERS=2
-IPFS_CLUSTER_WRITE_MIN_PEERS=1
-IPFS_CLUSTER_WRITE_MIN_SITES=1
-```
+Store API deriva la política de la topología y de
+`IPFS_CLUSTER_LOCAL_SITE_ID`; no existen mínimos manuales de escritura o purga.
 
 El flujo sería:
 
@@ -237,32 +231,19 @@ starvation durante una carga continua. Por eso se recomienda:
 - un pequeño presupuesto obligatorio de mantenimiento cuando una replicación
   supere una antigüedad máxima, aunque continúe entrando trabajo nuevo.
 
-Configuración propuesta:
+La implementación utiliza solamente:
 
 ```dotenv
-METADATA_REPLICATION_ENABLED=true
-METADATA_REPLICATION_IDLE_FIRST=true
-METADATA_REPLICATION_BATCH_SIZE=50
-METADATA_REPLICATION_CONCURRENCY=4
-METADATA_REPLICATION_CHECK_DELAY_SECONDS=30
-METADATA_REPLICATION_MAX_STARVATION_SECONDS=300
-
-# Condición para eliminar Level 1 y Level 2 de PostgreSQL.
-METADATA_REPLICATION_PURGE_MIN_LOCAL_PEERS=2
-METADATA_REPLICATION_PURGE_MIN_REMOTE_PEERS=0
-METADATA_REPLICATION_PURGE_MIN_SITES=1
+METADATA_WORKER_CONCURRENCY=4
+IPFS_CLUSTER_LOCAL_SITE_ID=site-a
 ```
 
-En una instalación multisede, una política posible sería:
-
-```dotenv
-METADATA_REPLICATION_PURGE_MIN_LOCAL_PEERS=2
-METADATA_REPLICATION_PURGE_MIN_REMOTE_PEERS=1
-METADATA_REPLICATION_PURGE_MIN_SITES=2
-```
-
-También puede configurarse la purga para esperar todos los peers objetivo. La
-política debe comprobar Level 1 y Level 2 de manera independiente; no se pueden
+Los valores fijos son un lote máximo de 50 ARKs y un intervalo máximo de cinco
+minutos bajo carga continua. Una topología de un peer exige una copia; una
+sede de dos peers exige dos copias locales; una topología multisede exige dos
+copias locales y al menos una remota. Estos objetivos no se almacenan en
+PostgreSQL.
+La política comprueba Level 1 y Level 2 de manera independiente; no se pueden
 sumar copias de ambos CIDs ni asumir que están fijados en los mismos peers.
 
 Si un CID conserva al menos una copia pero todavía no alcanza el objetivo, el
@@ -366,21 +347,13 @@ Store API y validarlo contra el mapa de peers de la topología.
   "cid": "bafy...",
   "status": "pinned",
   "replication": {
-    "local_site": "site-a",
-    "pinned_peers_total": 4,
-    "pinned_peers_local": 2,
-    "pinned_peers_remote": 2,
-    "pinned_sites_total": 2,
+    "total_replicas": 4,
+    "local_replicas": 2,
+    "remote_replicas": 2,
     "sites": {
       "site-a": 2,
       "site-b": 2
     },
-    "write_min_peers": 1,
-    "write_min_sites": 1,
-    "purge_min_local_peers": 2,
-    "purge_min_remote_peers": 1,
-    "purge_min_sites": 2,
-    "write_quorum_met": true,
     "purge_target_met": true,
     "checked_at": "2026-08-21T12:00:00Z"
   }
@@ -395,43 +368,32 @@ El recuento se obtiene de los peers con estado `PINNED`, no de allocations,
 peers conectados ni pins en progreso. Un peer `PINNING`, `PIN_ERROR` o
 inalcanzable no cuenta como copia durable.
 
-### 8.1 Estado persistido por CID
+### 8.1 Estado persistido por ARK
 
-Level 1 y Level 2 deben seguirse individualmente. La opción más precisa es una
-tabla de replicación con una fila por CID y referencias desde los ARKs:
+No se agregó una tabla de replicación. `ark_metadata` conserva solamente:
 
 ```text
-cid
-document_role                 L1 | L2
-state                         pending | target_met | degraded | error
-local_pinned_peers
-remote_pinned_peers
-pinned_sites
-site_copies_json
-write_quorum_met_at
-target_met_at
-last_checked_at
-next_check_at
-last_error
-retry_count
+level1_replica_count
+level2_replica_count
+replication_checked_at
+replication_last_error
 ```
 
-El estado agregado de un ARK se calcula usando el resultado más débil de sus dos
-CIDs. El payload solamente se elimina cuando L1 y L2 cumplen la política. Esto
-evita mostrar “dos copias” si L1 tiene dos pero L2 solamente una.
+Los estados `pending`, `complete`, `degraded` y `error` se derivan al consultar;
+no se persisten. La distribución local/remota y por sede se obtiene en vivo de
+Store API. El payload solamente se elimina cuando L1 y L2 cumplen la política.
 
-### 8.2 Dashboard y alertas
+### 8.2 API operativa
 
-El dashboard debería mostrar:
+Esta entrega no modifica el dashboard. `/api/v1/worker/status` agrega:
 
 - ARKs con replicación pendiente, completa, degradada y en error;
 - antigüedad del pendiente más antiguo;
-- CIDs con 0, 1, 2 y más copias;
-- copias locales y remotas;
-- distribución de copias por sede;
-- tiempo p50/p95/p99 hasta primer pin y hasta objetivo;
-- payload retenido en PostgreSQL, tanto registros como bytes;
-- última ejecución y throughput del reconciliador.
+- payloads retenidos;
+- última ejecución con revisados, reparados, purgados y fallidos.
+
+`/api/v1/worker/replication` lista CIDs, los dos conteos, fecha y último error.
+La distribución por sede se consulta directamente en Store API.
 
 Alertas mínimas:
 
@@ -441,36 +403,31 @@ Alertas mínimas:
 - crecimiento de PostgreSQL por encima del límite operativo;
 - una sede completa sin copias o sin peers visibles.
 
-## 9. Política de quorum por entorno
+## 9. Política implementada por entorno
 
 | Entorno | Store responde | Chain publica | Purga PostgreSQL | Objetivo Cluster |
 | --- | --- | --- | --- | --- |
 | Developer simple | 1 peer | 1 peer | 1 peer | 1 peer |
 | Developer HA / una sede | 1 local | 1 local | 2 locales | 2 peers |
 | Multisede disponible | 1 local | 1 local | 2 locales + 1 remoto, 2 sedes | todos |
-| Multisede equilibrado | 1 local | 2 peers, 2 sedes | 2 locales + 1 remoto, 2 sedes | todos |
-| Multisede estricto | 3 peers, 2 sedes | al responder | al responder o todos | todos |
 
-La variante “multisede equilibrado” evita bloquear la ingestión por la WAN,
-pero no permite minting hasta observar una copia remota. La variante disponible
-prioriza continuidad y acepta una ventana de una sola sede, mitigada por la
-retención en PostgreSQL.
+La política prioriza continuidad y acepta una ventana de una sola copia,
+mitigada por la retención en PostgreSQL. No hay variantes configurables.
 
 ## 10. Comportamiento del reconciliador
 
 El reconciliador es una fase del Metadata Worker, no un servicio nuevo:
 
 1. procesar la página normal de metadata pendiente;
-2. si no hay trabajo listo, seleccionar replicaciones vencidas por
-   `next_check_at`;
+2. si no hay trabajo listo, seleccionar los payloads retenidos con la
+   comprobación más antigua;
 3. consultar L1 y L2 con concurrencia limitada;
-4. actualizar recuentos locales, remotos y por sede;
-5. si ambos alcanzaron la política, marcar `target_met` y purgar el payload;
-6. si existe al menos una copia, mantener el payload y aplicar backoff;
+4. actualizar solamente los conteos totales y la fecha;
+5. si ambos alcanzaron la política, purgar el payload;
+6. si existe al menos una copia, mantener el payload;
 7. si no existe ninguna copia, reingresar el contenido conservado y comprobar
    que el CID obtenido coincide;
-8. si hay carga continua, ejecutar un lote pequeño cuando se cumpla
-   `METADATA_REPLICATION_MAX_STARVATION_SECONDS`.
+8. si hay carga continua, ejecutar un lote máximo de 50 cada cinco minutos.
 
 Las operaciones deben ser idempotentes. Un reinicio entre la comprobación y la
 purga no debe perder el payload: la purga se realiza en una transacción que
@@ -557,8 +514,7 @@ Comparar con la misma carga:
 1. ¿El Chain Worker debe publicar con un peer local, dos locales o dos sedes?
 2. ¿La purga multisede requiere todos los peers o una política mínima estable?
 3. ¿Cuánto payload y durante cuánto tiempo puede conservar PostgreSQL?
-4. ¿Cuál es el máximo aceptable para
-   `METADATA_REPLICATION_MAX_STARVATION_SECONDS`?
+4. ¿Cinco minutos sigue siendo el presupuesto correcto bajo carga continua?
 5. ¿El reconciliador puede solicitar explícitamente un nuevo pin o solamente
    reingresar contenido cuando detecte cero copias?
 6. ¿Cuál es el throughput mínimo requerido para producción?

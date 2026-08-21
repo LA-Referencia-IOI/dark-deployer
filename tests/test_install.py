@@ -299,9 +299,10 @@ class IntegrationTests(unittest.TestCase):
 
         generated = installer.load_optional_env(store_path / ".env.integration")
         self.assertEqual(len(json.loads(generated["IPFS_API_URLS_JSON"])), 2)
-        self.assertEqual(generated["IPFS_CLUSTER_EXPECTED_PEERS"], "4")
-        self.assertEqual(generated["IPFS_CLUSTER_WRITE_MIN_PEERS"], "3")
-        self.assertEqual(generated["IPFS_CLUSTER_WRITE_MIN_SITES"], "2")
+        self.assertEqual(generated["IPFS_CLUSTER_LOCAL_SITE_ID"], "site-a")
+        self.assertNotIn("IPFS_CLUSTER_EXPECTED_PEERS", generated)
+        self.assertNotIn("IPFS_CLUSTER_WRITE_MIN_PEERS", generated)
+        self.assertNotIn("IPFS_CLUSTER_WRITE_MIN_SITES", generated)
 
 
 class ValidationTests(unittest.TestCase):

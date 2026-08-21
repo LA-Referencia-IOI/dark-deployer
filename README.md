@@ -70,7 +70,6 @@ contain exactly two peers:
 {
   "version": 1,
   "cluster_name": "dark-global",
-  "strict_single_site": false,
   "sites": [
     {
       "id": "site-a",
@@ -208,11 +207,11 @@ The deployer calculates policy from topology size:
 
 | Topology | Cluster min/max | Successful Store API write |
 | --- | --- | --- |
-| one site | `1/2` | at least 1 pinned peer in 1 site |
-| one strict site | `2/2` | 2 pinned peers in 1 site |
-| two or more sites | `3/(2 × sites)` | at least 3 pinned peers in 2 sites |
+| developer single node | `1/1` | 1 pinned peer |
+| one site | `1/2` | 1 pinned peer; purge after 2 local copies |
+| two or more sites | `3/(2 × sites)` | 1 pinned peer; purge after 2 local and 1 remote copies |
 
-Store API returns `503` when it creates a CID but cannot observe this quorum
+Store API returns `503` when it creates a CID but cannot observe one pinned peer
 before timeout. Minter must not publish that CID on-chain until a retry succeeds.
 
 Health endpoints:

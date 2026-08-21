@@ -60,7 +60,6 @@ class DeploymentInventoryTests(unittest.TestCase):
             },
             "storage": {
                 "cluster_name": "dark-global",
-                "strict_single_site": False,
                 "swarm_key_target": "/opt/dark/secrets/swarm.key",
                 "cluster_secret_target": "/opt/dark/secrets/cluster.secret",
             },

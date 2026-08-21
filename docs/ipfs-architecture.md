@@ -54,8 +54,8 @@ The architecture must:
 
 - keep two storage nodes in every healthy site;
 - tolerate the loss of one storage server without losing read availability;
-- continue minting after one server fails when the configured write quorum is
-  still available;
+- continue minting after one local storage server fails while another local
+  write path remains available;
 - preserve reads when an entire site disappears;
 - with three or more sites, continue minting after one complete site loss;
 - allow deployment to begin with one site and expand the same cluster later;
@@ -241,13 +241,12 @@ expected peer count = 2 * N
 CLUSTER_REPLICATION_MIN=3
 CLUSTER_REPLICATION_MAX=<2 * N>
 CLUSTER_DISABLE_REPINNING=false
-IPFS_CLUSTER_WRITE_MIN_PEERS=3
-IPFS_CLUSTER_WRITE_MIN_SITES=2
 ```
 
 Because no site has more than two peers, three pinned peers necessarily span at
-least two sites. Store API nevertheless verifies both peer and site counts to
-detect topology errors.
+least two sites. Store API confirms the first pinned copy for the foreground
+write. Its live status response marks the purge target as met only after both
+local peers and at least one remote peer are `PINNED`.
 
 Examples:
 
@@ -258,9 +257,8 @@ Examples:
 | 4 | 8 | 3 | 8 |
 
 Cluster attempts to allocate up to the maximum and accepts a pin allocation
-when the minimum can be fulfilled. Store API adds a stronger application gate:
-it waits for actual `PINNED` status on the required number of peers and sites
-before allowing Minter to publish the CID.
+when the minimum can be fulfilled. Minter keeps the PostgreSQL payload until
+both L1 and L2 meet Store API's purge target.
 
 Reference: [IPFS Cluster replication factors](https://ipfscluster.io/documentation/guides/pinning/).
 
@@ -271,8 +269,6 @@ The same global cluster can begin with one site and two peers:
 ```ini
 CLUSTER_REPLICATION_MIN=1
 CLUSTER_REPLICATION_MAX=2
-IPFS_CLUSTER_WRITE_MIN_PEERS=1
-IPFS_CLUSTER_WRITE_MIN_SITES=1
 ```
 
 With both peers healthy, every CID targets two copies. If one server fails,
@@ -280,18 +276,8 @@ reads and minting continue with one copy and reconciliation restores the second
 copy after recovery.
 
 This profile prioritizes availability. It cannot guarantee two copies while
-only one server is alive.
-
-An optional strict single-site profile can require two peers:
-
-```ini
-CLUSTER_REPLICATION_MIN=2
-CLUSTER_REPLICATION_MAX=2
-IPFS_CLUSTER_WRITE_MIN_PEERS=2
-IPFS_CLUSTER_WRITE_MIN_SITES=1
-```
-
-That profile pauses minting when either server fails.
+only one server is alive, so Minter retains the payload until both local copies
+are observed. There is no strict single-site mode.
 
 ### 8.3 Developer-only local modes
 
@@ -368,34 +354,37 @@ Minter
   -> paired Kubo receives content
   -> global Cluster allocates and distributes the pin
   -> remote Kubo peers fetch blocks over the VPN
-  -> Store API verifies replication quorum
+  -> Store API confirms at least one PINNED peer
   -> Minter publishes the CID on-chain
+  -> Metadata Worker reconciles L1 and L2 in the background
+  -> Minter purges the retained payload after both targets are met
 ```
 
 Store API must not treat CID creation alone as durable success. It returns a
-successful storage response only after:
+successful storage response after:
 
 ```text
-pinned peers >= IPFS_CLUSTER_WRITE_MIN_PEERS
-pinned sites >= IPFS_CLUSTER_WRITE_MIN_SITES
+at least one peer reports PINNED
 ```
 
-Example durable response:
+Example response:
 
 ```json
 {
   "cid": "bafy...",
   "size": 14520,
   "replication": {
-    "status": "durable",
-    "pinned_peers": 3,
-    "pinned_sites": 2,
-    "target_peers": 6
+    "total_replicas": 3,
+    "local_replicas": 2,
+    "remote_replicas": 1,
+    "sites": {"site-a": 2, "site-b": 1},
+    "purge_target_met": true,
+    "checked_at": "2026-08-21T12:00:00Z"
   }
 }
 ```
 
-If quorum is not reached before the configured timeout, Store API returns a
+If the first `PINNED` peer is not observed before the configured timeout, Store API returns a
 retryable `503`. A partial pin may remain, but Minter must not publish its CID.
 Retrying the same immutable content is safe because it produces the same CID
 when import parameters are unchanged.
@@ -456,32 +445,30 @@ Store API exposes separate health dimensions:
 | --- | --- | --- |
 | `/health/live` | Process is running | Container runtime |
 | `/health/read` | At least one local Kubo is usable | Resolver/load balancer |
-| `/health/write` | Local proxy plus required peers/sites are available | Minter |
+| `/health/write` | A local write path and a known Cluster peer are available | Minter |
 
 Write readiness requires:
 
 ```text
 at least one local Kubo
 at least one local Cluster Proxy
-healthy peers >= IPFS_CLUSTER_WRITE_MIN_PEERS
-healthy sites >= IPFS_CLUSTER_WRITE_MIN_SITES
+at least one visible Cluster peer in a known site
 ```
 
-Read readiness does not require the global write quorum.
+Read readiness does not require the write path.
 
 ## 14. Failure behavior
 
 | Failure | Reads | Minting |
 | --- | --- | --- |
-| One storage peer | Continue through the local partner | Continues when quorum remains |
-| One site, with two total sites | Continue in the surviving site | Pauses because only two peers remain |
-| One site, with three or more sites | Continue | Continues with at least four peers |
-| One site isolated alone by VPN | Local reads continue | Pauses because it sees only two peers |
-| Partition containing two or more sites | Continue | May continue if peer/site quorum is met |
+| One local storage peer | Continue through the local partner | Continues through the remaining local endpoint |
+| One complete remote site | Continue through local peers | Continues locally; retained payloads wait for a remote copy |
+| Local site isolated by VPN | Local reads continue | Continues while one local peer is available; purge waits |
+| Partition containing two or more sites | Continue | Continues through local endpoints; purge follows live topology status |
 | Store API process failure | That application site is unavailable | Another application site must serve traffic |
 
-An isolated site must not lower quorum automatically. Degraded policies require
-an explicit operator decision.
+An isolated site does not alter the purge target automatically. Retained
+payloads remain in PostgreSQL until the normal topology target is restored.
 
 Because content and pins are treated as append-only, CRDT partitions can
 converge by merging pin additions after connectivity returns. Automatic global
@@ -537,7 +524,7 @@ Adding a site does not create a new cluster and does not change existing CIDs.
 
 Storage servers are upgraded one at a time:
 
-1. verify write quorum;
+1. verify at least one local write path;
 2. stop one peer pair;
 3. upgrade and restart it;
 4. wait for Kubo and Cluster recovery;
@@ -558,7 +545,7 @@ Required metrics:
 - `PIN_ERROR` and pin queue depth;
 - free disk space and repository size per Kubo;
 - VPN reachability and latency per site;
-- time to reach durable quorum;
+- time to reach the first pin;
 - time to reach full replication;
 - expected versus observed peers.
 
@@ -602,7 +589,9 @@ from a healthy cluster: [Data, backups and recovery](https://ipfscluster.io/docu
 
 - accept ordered lists of local Kubo, Cluster REST and Proxy endpoints;
 - fail over between local endpoints;
-- wait for actual pinned peer/site quorum;
+- confirm the first actual `PINNED` peer with progressive polling;
+- report total, local, remote and per-site replicas plus `purge_target_met`;
+- round-robin all local endpoint types with 30-second failure cooldown;
 - expose separate read and write health;
 - return replication state with the stored CID.
 

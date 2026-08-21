@@ -45,9 +45,9 @@ The supported role shape is exactly:
 | 1 | `apps` | Admin `8000`, Minter `8001`, Resolver `8002`, Store `8003`, Dashboard `8081` |
 | 2 | `storage-node` | Kubo/Cluster `4001`, `5001`, `9094`–`9096` |
 
-`storage.strict_single_site` must be `false`. Cluster still targets both peers,
-but accepts one confirmed copy during a peer outage so minting remains
-available. `storage reconcile` restores two copies after recovery.
+Cluster targets both peers, while Store API confirms one pinned copy during a
+peer outage so minting remains available. Metadata reconciliation retains the
+database payload and restores the second copy after recovery.
 
 ## 3. Validate and render
 

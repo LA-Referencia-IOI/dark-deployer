@@ -20,7 +20,6 @@
   },
   "storage": {
     "cluster_name": "dark-global",
-    "strict_single_site": false,
     "swarm_key_target": "/opt/dark-deployer/secrets/ipfs-swarm.key",
     "cluster_secret_target": "/opt/dark-deployer/secrets/ipfs-cluster-secret"
   },

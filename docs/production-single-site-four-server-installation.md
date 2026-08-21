@@ -251,7 +251,6 @@ does not consume this file.
 {
   "version": 1,
   "cluster_name": "dark-production",
-  "strict_single_site": false,
   "sites": [
     {
       "id": "site-a",
@@ -276,10 +275,9 @@ does not consume this file.
 }
 ```
 
-Do not set `development_single_node` in production. Do not use
-`strict_single_site: true` for the requested availability behavior: strict mode
-would require both peers before accepting a write and would therefore stop
-minting when either IPFS server fails.
+Do not set `development_single_node` in production. Store API always confirms
+one pin for the foreground write; the reconciler retains PostgreSQL payloads
+until both local peers hold L1 and L2.
 
 Validate the copied files without printing secrets:
 
@@ -921,9 +919,9 @@ version limitation, not an IPFS failure.
 
 ### Store API write health fails with one IPFS node running
 
-Confirm `strict_single_site` is `false`, both topology peers belong to `site-a`,
-and the generated Store API environment contains write minimums of one peer and
-one site.
+Confirm both topology peers belong to `site-a` and the generated Store API
+environment contains `IPFS_CLUSTER_LOCAL_SITE_ID=site-a`. Check that at least
+one local Kubo, Cluster REST and Cluster Proxy endpoint is reachable.
 
 ### Safe restart
 

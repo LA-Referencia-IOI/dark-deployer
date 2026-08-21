@@ -267,7 +267,6 @@ Ejemplo conceptual:
   },
   "storage": {
     "cluster_name": "dark-global",
-    "strict_single_site": false,
     "swarm_key_file": "${DARK_IPFS_SWARM_KEY_FILE}",
     "cluster_secret_file": "${DARK_IPFS_CLUSTER_SECRET_FILE}"
   },

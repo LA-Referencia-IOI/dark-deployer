@@ -1803,6 +1803,10 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "METADATA_WORKER_PAGE_SIZE",
             template_env.get("METADATA_WORKER_PAGE_SIZE", "100"),
         ).strip(),
+        "METADATA_WORKER_CONCURRENCY": env.get(
+            "METADATA_WORKER_CONCURRENCY",
+            template_env.get("METADATA_WORKER_CONCURRENCY", "4"),
+        ).strip(),
         "METADATA_WORKER_SLEEP_SECONDS": env.get(
             "METADATA_WORKER_SLEEP_SECONDS",
             template_env.get("METADATA_WORKER_SLEEP_SECONDS", "2"),
@@ -1940,7 +1944,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
 
 
 def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
-    """Generate Store API failover and quorum settings from the global topology."""
+    """Generate Store API endpoint pools and local-site policy input."""
     template_env = load_optional_env(store_api_path / ".env.example")
 
     _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
@@ -1951,7 +1955,6 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
         "STORE_API_HOST": template_env.get("STORE_API_HOST", "0.0.0.0").strip(),
         "STORE_API_PORT": "8003",
         "STORAGE_BACKEND": template_env.get("STORAGE_BACKEND", "ipfs_cluster").strip(),
-        "IPFS_ADD_MODE": "cluster_proxy",
         "IPFS_HEALTH_CACHE_TTL_SECONDS": env.get(
             "IPFS_HEALTH_CACHE_TTL_SECONDS",
             template_env.get("IPFS_HEALTH_CACHE_TTL_SECONDS", "10"),
@@ -1965,11 +1968,6 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
         "IPFS_REPLICATION_CONFIRM_TIMEOUT_SECONDS",
         template_env.get("IPFS_REPLICATION_CONFIRM_TIMEOUT_SECONDS", "120"),
     ).strip()
-    integration_env["IPFS_REPLICATION_CONFIRM_INTERVAL_SECONDS"] = env.get(
-        "IPFS_REPLICATION_CONFIRM_INTERVAL_SECONDS",
-        template_env.get("IPFS_REPLICATION_CONFIRM_INTERVAL_SECONDS", "2"),
-    ).strip()
-
     env_path = store_api_path / ".env.integration"
     write_env_secure(env_path, integration_env)
 
@@ -3302,8 +3300,8 @@ def print_install_plan(prefix: str, env: dict) -> None:
         print(f"Topology    : {len(topology.sites)} site(s), {len(topology.peers)} peer(s)")
         print(
             "Replication : "
-            f"min={policy.replication_min}, max={policy.replication_max}, "
-            f"write={policy.write_min_peers} peer(s)/{policy.write_min_sites} site(s)"
+            f"cluster min={policy.replication_min}, max={policy.replication_max}; "
+            "store confirms one pinned peer"
         )
     if env.get("SIGNER_MODE", "legacy").strip().lower() == "shared":
         signer_state = "shared platform signer (deployer + Admin + Minter)"
@@ -3589,7 +3587,6 @@ def _prepare_developer_storage_assets(env: dict) -> None:
             "version": 1,
             "cluster_name": "dark-developer",
             "development_single_node": storage_mode == "simple",
-            "strict_single_site": False,
             "sites": [
                 {
                     "id": site_id,

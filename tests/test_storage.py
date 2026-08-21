@@ -43,16 +43,14 @@ class StorageTopologyTests(unittest.TestCase):
         self.assertEqual(topology.sites, ("site-1", "site-2"))
         self.assertEqual(topology.policy.replication_min, 3)
         self.assertEqual(topology.policy.replication_max, 4)
-        self.assertEqual(topology.policy.write_min_sites, 2)
         generated = store_api_environment(topology, "site-1")
         self.assertEqual(len(json.loads(generated["IPFS_API_URLS_JSON"])), 2)
-        self.assertEqual(generated["IPFS_CLUSTER_WRITE_MIN_PEERS"], "3")
+        self.assertEqual(generated["IPFS_CLUSTER_LOCAL_SITE_ID"], "site-1")
+        self.assertNotIn("IPFS_CLUSTER_WRITE_MIN_PEERS", generated)
 
-    def test_single_site_available_and_strict_policies(self):
+    def test_single_site_policy(self):
         document = topology_document(1)
         self.assertEqual(self.load(document).policy.replication_min, 1)
-        document["strict_single_site"] = True
-        self.assertEqual(self.load(document).policy.replication_min, 2)
 
     def test_explicit_developer_topology_allows_exactly_one_peer(self):
         document = topology_document(1)
@@ -77,9 +75,10 @@ class StorageTopologyTests(unittest.TestCase):
         with self.assertRaisesRegex(StorageTopologyError, "exactly one peer"):
             self.load(document)
 
-        document["sites"][0]["peers"] = document["sites"][0]["peers"][:1]
+    def test_rejects_removed_strict_single_site_option(self):
+        document = topology_document(1)
         document["strict_single_site"] = True
-        with self.assertRaisesRegex(StorageTopologyError, "cannot require"):
+        with self.assertRaisesRegex(StorageTopologyError, "no longer supported"):
             self.load(document)
 
     def test_node_environment_uses_all_other_peers_as_bootstraps(self):

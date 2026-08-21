@@ -217,10 +217,6 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
     if not isinstance(storage, dict):
         raise DeploymentError("storage must be an object")
     _identifier(storage.get("cluster_name"), "storage.cluster_name")
-    if storage.get("strict_single_site") is not False:
-        raise DeploymentError(
-            "storage.strict_single_site must be false to preserve minting during one-peer loss"
-        )
     _absolute_path(storage.get("swarm_key_target"), "storage.swarm_key_target")
     _absolute_path(storage.get("cluster_secret_target"), "storage.cluster_secret_target")
     if storage["swarm_key_target"] == storage["cluster_secret_target"]:
@@ -311,7 +307,6 @@ def _topology(inventory: dict) -> dict:
     return {
         "version": 1,
         "cluster_name": inventory["storage"]["cluster_name"],
-        "strict_single_site": inventory["storage"]["strict_single_site"],
         "sites": [{
             "id": site["id"],
             "peers": [

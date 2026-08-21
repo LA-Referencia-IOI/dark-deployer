@@ -1,7 +1,6 @@
 {
   "version": 1,
   "cluster_name": "dark-global",
-  "strict_single_site": false,
   "sites": [
     {
       "id": "site-a",
