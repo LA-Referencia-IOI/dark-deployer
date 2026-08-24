@@ -177,6 +177,9 @@ For direct ARK imports without metadata and NAAN authorization audits, see
 require a Minter revision that includes their CLI modules; update
 `components.lock.json` intentionally before rebuilding a deployed component.
 
+For the required DARK 2 `2MM` shoulder format and its minter-code assignment
+rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).
+
 ## 7. Runtime lifecycle
 
 All lifecycle scripts resolve paths from their own repository location, so they
