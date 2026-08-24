@@ -12,7 +12,7 @@
     },
     "dark-core-minter-api": {
       "branch": "codex/production-deployment-readiness",
-      "commit": "2ab43cce683e154450c5388e67cb2d295b1ae4de",
+      "commit": "95a82b85a571f5143eda4819d3a408b0640726a4",
       "repository": "https://github.com/LA-Referencia-IOI/dark-core-minter-api.git"
     },
     "dark-core-resolver-api": {
