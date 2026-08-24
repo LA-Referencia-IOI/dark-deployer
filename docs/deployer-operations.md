@@ -172,6 +172,11 @@ Useful flags:
 | `--skip-migrate` | Skip the normally automatic minter migration |
 | `--with-dependents` | Rebuild admin, resolver and minter after core-lib |
 
+For direct ARK imports without metadata and NAAN authorization audits, see
+[Direct ARK Import and NAAN Audit](minter-direct-ark-import.md). Those commands
+require a Minter revision that includes their CLI modules; update
+`components.lock.json` intentionally before rebuilding a deployed component.
+
 ## 7. Runtime lifecycle
 
 All lifecycle scripts resolve paths from their own repository location, so they
