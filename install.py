@@ -905,6 +905,27 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
                 ordered.append(candidate)
         return ordered
 
+    def configured_branch_is_missing(candidates: list[str], candidate_branch: str) -> bool:
+        """Return true only when a reachable remote reports the branch missing."""
+        if candidate_branch == "main":
+            return False
+
+        results = [
+            subprocess.run(
+                ["git", "ls-remote", "--exit-code", "--heads", url, candidate_branch],
+                capture_output=True,
+            ).returncode
+            for url in candidates
+        ]
+        return 2 in results and 0 not in results
+
+    def warn_and_fallback_to_main(candidate_branch: str) -> str:
+        print(
+            f"[WARNING] Branch '{candidate_branch}' was not found for '{name}'. "
+            "Falling back to 'main'."
+        )
+        return "main"
+
     target = Path(target_dir)
     repo_candidates = build_repo_url_candidates(repo_url)
 
@@ -939,6 +960,8 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
         repo_candidates = [current_origin_url] + [
             candidate for candidate in repo_candidates if candidate != current_origin_url
         ]
+        if configured_branch_is_missing(repo_candidates, branch):
+            branch = warn_and_fallback_to_main(branch)
 
         fetch_success = False
         last_exc: Optional[SystemExit] = None
@@ -966,7 +989,26 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
                 )
 
         if not fetch_success and last_exc is not None:
-            raise last_exc
+            if not configured_branch_is_missing(repo_candidates, branch):
+                raise last_exc
+
+            branch = warn_and_fallback_to_main(branch)
+            for candidate_url in repo_candidates:
+                if current_origin_url != candidate_url:
+                    run_command(
+                        ["git", "remote", "set-url", "origin", candidate_url],
+                        cwd=str(target),
+                    )
+                    current_origin_url = candidate_url
+                try:
+                    run_command(["git", "fetch", "origin", branch], cwd=str(target))
+                    fetch_success = True
+                    break
+                except SystemExit as exc:
+                    last_exc = exc
+
+            if not fetch_success:
+                raise last_exc
 
         local_branch = subprocess.run(
             ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -984,6 +1026,8 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
             cwd=str(target),
         )
     else:
+        if configured_branch_is_missing(repo_candidates, branch):
+            branch = warn_and_fallback_to_main(branch)
         print(
             f"[INFO] Cloning '{name}' from {redact_url_credentials(repo_url)} "
             f"(branch: {branch})..."
@@ -1008,7 +1052,25 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
                 )
 
         if not clone_success and last_exc is not None:
-            raise last_exc
+            if not configured_branch_is_missing(repo_candidates, branch):
+                raise last_exc
+
+            branch = warn_and_fallback_to_main(branch)
+            for candidate_url in repo_candidates:
+                try:
+                    run_command(
+                        [
+                            "git", "clone", "--branch", branch, "--single-branch",
+                            "--", candidate_url, str(target),
+                        ]
+                    )
+                    clone_success = True
+                    break
+                except SystemExit as exc:
+                    last_exc = exc
+
+            if not clone_success:
+                raise last_exc
 
     print(f"[OK] '{name}' ready at '{target_dir}'.\n")
 

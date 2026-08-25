@@ -114,6 +114,10 @@ and advanced only with a fast-forward merge. Wrong origins, non-Git target
 directories, divergent branches and conflicting local changes fail instead of
 being overwritten.
 
+If a configured component branch is not published by a reachable remote, the
+installer prints a warning and uses `main`. Connection, authentication and
+other repository failures are not silently replaced by this fallback.
+
 For example:
 
 ```ini
