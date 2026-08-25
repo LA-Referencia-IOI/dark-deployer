@@ -110,8 +110,8 @@ Neste repositório:
    mapa peer→site, sem reintroduzir mínimos manuais.
 2. Confirmar que `storage audit`/`storage reconcile` continuam reaplicando a
    política do Cluster sem apagar pins.
-3. Atualizar `components.lock.json` somente depois que os testes dos quatro
-   componentes acima passarem no commit fixado.
+3. Atualizar as branches correspondentes em `.env` somente depois que os testes
+   dos quatro componentes acima passarem.
 
 **Aceite:** `python3 -m unittest discover -s tests -v` passa e uma instalação
 renderizada contém apenas a configuração nova.
@@ -149,8 +149,8 @@ adicionais.
 
 1. Executar migrações e testes unitários/integrados em sandbox com dois peers.
 2. Rodar o notebook completo, incluindo a seção de registro IPFS, em sandbox.
-3. Fixar os commits aprovados em `components.lock.json`, renderizar o bundle e
-   repetir o teste em uma janela controlada de produção.
+3. Registrar as branches aprovadas em `.env`, renderizar o bundle e repetir o
+   teste em uma janela controlada de produção.
 4. Monitorar ARKs com payload retido, idade máxima de réplica, erros de reparo,
    espaço PostgreSQL e tempo até o alvo de purge.
 

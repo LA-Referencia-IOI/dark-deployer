@@ -126,40 +126,41 @@ def _read_json(path: Path, description: str) -> dict:
     return value
 
 
-def _load_component_lock(path: Path, required: set[str]) -> dict:
-    document = _read_json(path, "components lock")
-    if document.get("version") != 1 or not isinstance(document.get("components"), dict):
-        raise DeploymentError("components lock must use schema version 1")
-    if set(document) != {"version", "components"}:
-        raise DeploymentError("components lock contains unsupported top-level fields")
-    components = document["components"]
-    missing = sorted(required - set(components))
-    if missing:
-        raise DeploymentError(
-            "components lock is incomplete; missing: " + ", ".join(missing)
-        )
-    for name, entry in components.items():
-        if not isinstance(entry, dict):
-            raise DeploymentError(f"lock entry {name!r} must be an object")
-        if set(entry) - {"repository", "commit", "branch"}:
-            raise DeploymentError(f"lock entry {name!r} contains unsupported fields")
-        if not re.fullmatch(r"[0-9a-f]{40}", str(entry.get("commit", ""))):
-            raise DeploymentError(f"lock entry {name!r} requires a full commit")
-        repository = _string(entry.get("repository"), f"components.{name}.repository")
-        parsed_repository = urlparse(repository)
-        if parsed_repository.username or parsed_repository.password:
-            raise DeploymentError(f"lock entry {name!r} repository contains credentials")
-    return document
-
-
-def current_deployer_commit(project_root: Path) -> str:
+def current_deployer_branch(project_root: Path) -> str:
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        ["git", "branch", "--show-current"],
         cwd=project_root,
         capture_output=True,
         text=True,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _load_repository_environment(project_root: Path) -> dict[str, str]:
+    """Load branch-based repository configuration from the root env files."""
+    values = parse_env_file(project_root / ".env.example", required=True)
+    active = parse_env_file(project_root / ".env", required=False)
+    values.update({key: value for key, value in active.items() if value})
+
+    deployer_branch = _string(values.get("DEPLOYER_BRANCH"), "DEPLOYER_BRANCH")
+    current_branch = current_deployer_branch(project_root)
+    if current_branch != deployer_branch:
+        raise DeploymentError(
+            f"configured deployer branch {deployer_branch!r} does not match "
+            f"checkout {current_branch or 'detached HEAD'!r}"
+        )
+
+    required_components = set().union(*COMPONENTS_BY_ROLE.values())
+    for component in sorted(required_components):
+        env_prefix = COMPONENT_ENV_PREFIX[component]
+        repository_key = f"{env_prefix}_REPOSITORY_URL"
+        branch_key = f"{env_prefix}_REPOSITORY_BRANCH"
+        repository = _string(values.get(repository_key), repository_key)
+        _string(values.get(branch_key), branch_key)
+        parsed_repository = urlparse(repository)
+        if parsed_repository.username or parsed_repository.password:
+            raise DeploymentError(f"{repository_key} must not contain credentials")
+    return values
 
 
 def load_deployment_inventory(path: Path, project_root: Path) -> dict:
@@ -170,22 +171,6 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
     if inventory.get("environment") != "production":
         raise DeploymentError("deployment inventory environment must be 'production'")
     _identifier(inventory.get("deployment_id"), "deployment_id")
-
-    release = inventory.get("release")
-    if not isinstance(release, dict):
-        raise DeploymentError("release must be an object")
-    deployer_commit = str(release.get("deployer_commit", ""))
-    if not re.fullmatch(r"[0-9a-f]{40}", deployer_commit):
-        raise DeploymentError("release.deployer_commit must be a full 40-character commit")
-    current_commit = current_deployer_commit(project_root)
-    if current_commit and current_commit != deployer_commit:
-        raise DeploymentError(
-            f"inventory deployer commit {deployer_commit} does not match checkout {current_commit}"
-        )
-    lock_value = _string(release.get("components_lock"), "release.components_lock")
-    lock_path = Path(lock_value)
-    if not lock_path.is_absolute():
-        lock_path = path.parent / lock_path
 
     network = inventory.get("network")
     if not isinstance(network, dict) or network.get("trust_boundary") != "vpn":
@@ -270,12 +255,8 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
             "host roles must contain one blockchain, one apps and two storage-node hosts"
         )
 
-    required_components = set().union(
-        *(COMPONENTS_BY_ROLE[host["roles"][0]] for host in hosts)
-    )
-    _load_component_lock(lock_path.resolve(), required_components)
+    inventory["_repository_env"] = _load_repository_environment(project_root)
     inventory["_inventory_path"] = str(path.resolve())
-    inventory["_lock_path"] = str(lock_path.resolve())
     return inventory
 
 
@@ -348,8 +329,7 @@ def _host_env(
     inventory: dict,
     host: dict,
     endpoints: dict,
-    lock: dict,
-    template_env: dict[str, str],
+    repository_env: dict[str, str],
     topology_hash: str,
 ) -> dict[str, str]:
     site_id = inventory["sites"][0]["id"]
@@ -358,7 +338,7 @@ def _host_env(
         "TYPE": "production",
         "PRODUCTION_INSTALL_COMPONENTS": role,
         "DEPLOYMENT_ID": inventory["deployment_id"],
-        "DEPLOYER_COMMIT": inventory["release"]["deployer_commit"],
+        "DEPLOYER_BRANCH": repository_env["DEPLOYER_BRANCH"],
         "SIGNER_MODE": "shared",
         "PLATFORM_PRIVATE_KEY_FILE": inventory["signing"]["platform_key_target"],
         "PLATFORM_ADDRESS": "",
@@ -385,15 +365,13 @@ def _host_env(
     }
     for component in sorted(COMPONENTS_BY_ROLE[role]):
         env_prefix = COMPONENT_ENV_PREFIX[component]
-        entry = lock["components"][component]
-        values[f"{env_prefix}_REPOSITORY_URL"] = entry["repository"]
-        values[f"{env_prefix}_REPOSITORY_BRANCH"] = (
-            entry.get("branch")
-            or template_env.get(f"{env_prefix}_REPOSITORY_BRANCH", "main")
-        )
+        repository_key = f"{env_prefix}_REPOSITORY_URL"
+        branch_key = f"{env_prefix}_REPOSITORY_BRANCH"
+        values[repository_key] = _string(repository_env.get(repository_key), repository_key)
+        values[branch_key] = _string(repository_env.get(branch_key), branch_key)
         values[f"{env_prefix}_SETUP"] = "True"
         commands_key = f"{env_prefix}_COMMANDS_JSON"
-        values[commands_key] = template_env.get(commands_key, "[]")
+        values[commands_key] = repository_env.get(commands_key, "[]")
     return values
 
 
@@ -408,10 +386,8 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
     inventory_hash = sha256_json(public_inventory)
     topology = _topology(inventory)
     endpoints = _endpoints(inventory)
-    lock_path = Path(inventory["_lock_path"])
-    lock_hash = sha256_file(lock_path)
-    lock_document = _read_json(lock_path, "components lock")
-    template_env = parse_env_file(project_root / ".env.example", required=True)
+    repository_env = inventory["_repository_env"]
+    deployer_branch = repository_env["DEPLOYER_BRANCH"]
 
     bundle = output_dir.resolve()
     if bundle.exists() and any(bundle.iterdir()):
@@ -428,9 +404,6 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
     _write_json(endpoints_path, {"version": 1, "advertised": endpoints})
     _write_json(firewall_path, _firewall_policy(inventory))
     topology_hash = sha256_file(topology_path)
-    shutil.copyfile(lock_path, bundle / "components.lock.json")
-    (bundle / "components.lock.json").chmod(0o644)
-
     for host in inventory["sites"][0]["hosts"]:
         host_dir = hosts_dir / host["id"]
         host_dir.mkdir(parents=True, exist_ok=True)
@@ -438,8 +411,7 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
             inventory,
             host,
             endpoints,
-            lock_document,
-            template_env,
+            repository_env,
             topology_hash,
         )
         environment_path = host_dir / ".env.public"
@@ -455,16 +427,14 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
                 "vpn_address": host["vpn_address"],
             },
             "release": {
-                "deployer_commit": inventory["release"]["deployer_commit"],
+                "deployer_branch": deployer_branch,
                 "inventory_sha256": inventory_hash,
                 "topology_sha256": topology_hash,
-                "components_lock_sha256": lock_hash,
                 "environment_sha256": sha256_file(environment_path),
             },
             "files": {
                 "environment": ".env.public",
                 "topology": "../../shared/storage-topology.json",
-                "components_lock": "../../components.lock.json",
             },
             "secrets": {
                 "platform_key": inventory["signing"]["platform_key_target"],
@@ -476,7 +446,7 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
 
     checklist = f"""# Deployment checklist: {inventory['deployment_id']}
 
-1. Verify the deployer checkout is `{inventory['release']['deployer_commit']}`.
+1. Verify the deployer checkout uses branch `{deployer_branch}`.
 2. Copy the public bundle to each host; do not add secrets to this directory.
 3. Provision the platform key on Blockchain and Apps with mode 0600.
 4. Provision both IPFS secrets on both storage hosts with mode 0600.
@@ -496,10 +466,9 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
     manifest = {
         "version": 1,
         "deployment_id": inventory["deployment_id"],
-        "deployer_commit": inventory["release"]["deployer_commit"],
+        "deployer_branch": deployer_branch,
         "inventory_sha256": inventory_hash,
         "topology_sha256": topology_hash,
-        "components_lock_sha256": lock_hash,
         "files": file_hashes,
     }
     _write_json(bundle / "manifest.json", manifest)
@@ -530,7 +499,6 @@ def validate_host_bundle(path: Path, require_secrets: bool = True) -> dict:
     expected = {
         "environment": release["environment_sha256"],
         "topology": release["topology_sha256"],
-        "components_lock": release["components_lock_sha256"],
     }
     for name, digest in expected.items():
         if sha256_file(resolved[name]) != digest:
@@ -538,8 +506,8 @@ def validate_host_bundle(path: Path, require_secrets: bool = True) -> dict:
     env = parse_env_file(resolved["environment"], required=True)
     if env.get("DEPLOYMENT_ID") != config["deployment_id"]:
         raise DeploymentError("host environment deployment ID does not match")
-    if env.get("DEPLOYER_COMMIT") != release["deployer_commit"]:
-        raise DeploymentError("host environment deployer commit does not match")
+    if env.get("DEPLOYER_BRANCH") != release["deployer_branch"]:
+        raise DeploymentError("host environment deployer branch does not match")
 
     if require_secrets:
         role = config["host"]["role"]
@@ -561,16 +529,16 @@ def validate_host_bundle(path: Path, require_secrets: bool = True) -> dict:
 def materialize_host_bundle(path: Path, project_root: Path) -> dict:
     """Install verified public configuration into a deployer checkout."""
     validated = validate_host_bundle(path, require_secrets=True)
-    current = current_deployer_commit(project_root)
-    expected = validated["config"]["release"]["deployer_commit"]
+    current = current_deployer_branch(project_root)
+    expected = validated["config"]["release"]["deployer_branch"]
     if current != expected:
-        raise DeploymentError(f"deployer checkout {current or 'unknown'} does not match {expected}")
+        raise DeploymentError(
+            f"deployer branch {current or 'detached HEAD'} does not match {expected}"
+        )
     shutil.copyfile(validated["files"]["environment"], project_root / ".env")
     os.chmod(project_root / ".env", 0o600)
     shutil.copyfile(validated["files"]["topology"], project_root / "storage-topology.json")
     os.chmod(project_root / "storage-topology.json", 0o644)
-    shutil.copyfile(validated["files"]["components_lock"], project_root / "components.lock.json")
-    os.chmod(project_root / "components.lock.json", 0o644)
     return validated
 
 
@@ -580,9 +548,8 @@ def host_status(path: Path, project_root: Path) -> dict:
     return {
         "deployment_id": config["deployment_id"],
         "host": config["host"],
-        "expected_deployer_commit": config["release"]["deployer_commit"],
-        "installed_deployer_commit": current_deployer_commit(project_root),
+        "expected_deployer_branch": config["release"]["deployer_branch"],
+        "installed_deployer_branch": current_deployer_branch(project_root),
         "inventory_sha256": config["release"]["inventory_sha256"],
         "topology_sha256": config["release"]["topology_sha256"],
-        "components_lock_sha256": config["release"]["components_lock_sha256"],
     }

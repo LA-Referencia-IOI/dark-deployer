@@ -120,19 +120,6 @@ def _ensure_docker_group() -> None:
 PROJECT_ROOT = Path(__file__).resolve().parent
 SHARED_VENV_DIR = PROJECT_ROOT / "venv"
 MIN_PYTHON_VERSION = (3, 10)
-COMPONENT_LOCK_PATH = PROJECT_ROOT / "components.lock.json"
-COMPONENT_INSTALL_PATHS = {
-    "dark-env": "components/blockchain/dark-env",
-    "dark-dapp": "components/blockchain/dark-dapp",
-    "dark-explorador": "components/blockchain/dark-explorador",
-    "dark-ipfs": "components/storage/dark-ipfs",
-    "dark-core-lib": "components/libraries/dark-core-lib",
-    "dark-core-admin-api": "components/services/dark-core-admin-api",
-    "dark-core-resolver-api": "components/services/dark-core-resolver-api",
-    "dark-store-api": "components/services/dark-store-api",
-    "dark-core-minter-api": "components/services/dark-core-minter-api",
-    "dashboard-web": "components/frontend/dashboard-web",
-}
 _LEGACY_EXAMPLE_PRIVATE_KEY_SHA256 = (
     "c54ae1c9bcee975e5b1409b3b4129b5fadcb0d61ff945a52e0a6d192c2d37ea7"
 )
@@ -163,92 +150,6 @@ def load_env(filepath: str = ".env") -> dict:
 def load_optional_env(filepath: Path) -> dict:
     """Parse an optional env-style file, returning an empty dict if absent."""
     return parse_env_file(filepath, required=False)
-
-
-def load_component_locks() -> dict:
-    """Load and validate immutable component commit locks."""
-    if not COMPONENT_LOCK_PATH.exists():
-        return {}
-    try:
-        document = json.loads(COMPONENT_LOCK_PATH.read_text())
-    except json.JSONDecodeError as exc:
-        print(f"[ERROR] Invalid '{COMPONENT_LOCK_PATH.name}': {exc}")
-        sys.exit(1)
-
-    if document.get("version") != 1 or not isinstance(document.get("components"), dict):
-        print(f"[ERROR] '{COMPONENT_LOCK_PATH.name}' must use schema version 1.")
-        sys.exit(1)
-
-    for name, entry in document["components"].items():
-        commit = entry.get("commit", "") if isinstance(entry, dict) else ""
-        if not re.fullmatch(r"[0-9a-f]{40}", commit):
-            print(f"[ERROR] Invalid locked commit for component '{name}'.")
-            sys.exit(1)
-        repository = entry.get("repository", "") if isinstance(entry, dict) else ""
-        if not isinstance(repository, str) or not repository.strip():
-            print(f"[ERROR] Lock entry for component '{name}' requires a repository.")
-            sys.exit(1)
-    return document["components"]
-
-
-def generate_component_lock(check: bool = False) -> None:
-    """Generate or verify commit locks for all installed component repositories."""
-    components = {}
-    for name, relative_path in COMPONENT_INSTALL_PATHS.items():
-        path = PROJECT_ROOT / relative_path
-        if not (path / ".git").exists():
-            continue
-        origin = run_command(
-            ["git", "remote", "get-url", "origin"],
-            cwd=str(path),
-            capture_output=True,
-        ).stdout.strip()
-        commit = run_command(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(path),
-            capture_output=True,
-        ).stdout.strip()
-        branch_result = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=str(path),
-            capture_output=True,
-            text=True,
-        )
-        components[name] = {
-            "repository": strip_url_credentials(origin),
-            "commit": commit,
-            "branch": branch_result.stdout.strip(),
-        }
-
-    document = {"version": 1, "components": components}
-    content = json.dumps(document, indent=2, sort_keys=True) + "\n"
-    if check:
-        if not COMPONENT_LOCK_PATH.exists():
-            print(f"[ERROR] '{COMPONENT_LOCK_PATH}' does not exist.")
-            sys.exit(1)
-        locked = load_component_locks()
-        mismatches = []
-        for name, entry in locked.items():
-            installed = components.get(name)
-            if not installed:
-                mismatches.append(f"{name}: not installed")
-                continue
-            if installed["commit"] != entry["commit"]:
-                mismatches.append(
-                    f"{name}: {installed['commit']} != {entry['commit']}"
-                )
-        unlocked = sorted(set(components) - set(locked))
-        mismatches.extend(f"{name}: installed but not locked" for name in unlocked)
-        if mismatches:
-            print("[ERROR] Component lock verification failed:")
-            for mismatch in mismatches:
-                print(f"  - {mismatch}")
-            sys.exit(1)
-        print("[OK] components.lock.json matches all installed component commits.")
-        return
-
-    write_text_secure(COMPONENT_LOCK_PATH, content, mode=0o644)
-    print(f"[OK] Locked {len(components)} installed components in '{COMPONENT_LOCK_PATH}'.")
 
 
 def run_compose_up_detached(cmd: str, cwd: str, timeout_seconds: int = 180) -> None:
@@ -1006,36 +907,6 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
 
     target = Path(target_dir)
     repo_candidates = build_repo_url_candidates(repo_url)
-    lock_entry = load_component_locks().get(name, {})
-    locked_commit = lock_entry.get("commit", "")
-    locked_repository = lock_entry.get("repository", "")
-    locked_branch = lock_entry.get("branch", "")
-    if locked_branch:
-        if not isinstance(locked_branch, str):
-            print(f"[ERROR] Invalid locked branch for component '{name}'.")
-            sys.exit(1)
-        locked_branch = locked_branch.strip()
-        if not locked_branch:
-            print(f"[ERROR] Invalid locked branch for component '{name}'.")
-            sys.exit(1)
-        if locked_branch != branch:
-            print(
-                f"[INFO] Component lock selects branch '{locked_branch}' for "
-                f"'{name}' (configured branch: '{branch}')."
-            )
-        branch = locked_branch
-    if locked_repository:
-        locked_slug = github_repo_slug(locked_repository)
-        configured_slug = github_repo_slug(repo_url)
-        same_locked_repo = (
-            locked_slug == configured_slug
-            if locked_slug and configured_slug
-            else locked_repository.rstrip("/").removesuffix(".git")
-            == repo_url.rstrip("/").removesuffix(".git")
-        )
-        if not same_locked_repo:
-            print(f"[ERROR] Lock entry for '{name}' belongs to a different repository.")
-            sys.exit(1)
 
     if target.exists():
         if not target.is_dir() or not (target / ".git").exists():
@@ -1097,31 +968,21 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
         if not fetch_success and last_exc is not None:
             raise last_exc
 
-        if locked_commit:
-            commit_exists = subprocess.run(
-                ["git", "cat-file", "-e", f"{locked_commit}^{{commit}}"],
-                cwd=str(target),
-            )
-            if commit_exists.returncode != 0:
-                run_command(["git", "fetch", "origin", locked_commit], cwd=str(target))
-            run_command(["git", "checkout", "--detach", locked_commit], cwd=str(target))
-            print(f"[INFO] '{name}' pinned to commit {locked_commit}.")
+        local_branch = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            cwd=str(target),
+        )
+        if local_branch.returncode == 0:
+            run_command(["git", "switch", branch], cwd=str(target))
         else:
-            local_branch = subprocess.run(
-                ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-                cwd=str(target),
-            )
-            if local_branch.returncode == 0:
-                run_command(["git", "switch", branch], cwd=str(target))
-            else:
-                run_command(
-                    ["git", "switch", "--create", branch, "--track", f"origin/{branch}"],
-                    cwd=str(target),
-                )
             run_command(
-                ["git", "merge", "--ff-only", f"origin/{branch}"],
+                ["git", "switch", "--create", branch, "--track", f"origin/{branch}"],
                 cwd=str(target),
             )
+        run_command(
+            ["git", "merge", "--ff-only", f"origin/{branch}"],
+            cwd=str(target),
+        )
     else:
         print(
             f"[INFO] Cloning '{name}' from {redact_url_credentials(repo_url)} "
@@ -1148,16 +1009,6 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
 
         if not clone_success and last_exc is not None:
             raise last_exc
-
-        if locked_commit:
-            commit_exists = subprocess.run(
-                ["git", "cat-file", "-e", f"{locked_commit}^{{commit}}"],
-                cwd=str(target),
-            )
-            if commit_exists.returncode != 0:
-                run_command(["git", "fetch", "origin", locked_commit], cwd=str(target))
-            run_command(["git", "checkout", "--detach", locked_commit], cwd=str(target))
-            print(f"[INFO] '{name}' pinned to commit {locked_commit}.")
 
     print(f"[OK] '{name}' ready at '{target_dir}'.\n")
 
@@ -3092,52 +2943,24 @@ def _validate_storage_secret_file(name: str, path_value: str, kind: str) -> Path
     return path
 
 
-def _required_locked_components(prefix: str, env: dict) -> set[str]:
-    install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
-    required: set[str] = set()
-    if install_bc:
-        required.update({"dark-env", "dark-dapp", "dark-explorador"})
-    if install_storage:
-        required.add("dark-ipfs")
-    if install_apps:
-        required.update({
-            "dark-core-lib",
-            "dark-core-admin-api",
-            "dark-core-resolver-api",
-            "dark-store-api",
-            "dark-core-minter-api",
-            "dashboard-web",
-        })
-    return required
-
-
 def validate_production_release(prefix: str, env: dict) -> None:
-    """Require an immutable deployer revision and complete component lock."""
-    deployer_commit = env.get("DEPLOYER_COMMIT", "").strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", deployer_commit):
-        print("[ERROR] Production requires DEPLOYER_COMMIT as a full 40-character commit.")
+    """Require the deployer checkout to use the configured branch."""
+    deployer_branch = env.get("DEPLOYER_BRANCH", "").strip()
+    if not deployer_branch:
+        print("[ERROR] Production requires DEPLOYER_BRANCH.")
         sys.exit(1)
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        ["git", "branch", "--show-current"],
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
     )
-    current_commit = result.stdout.strip() if result.returncode == 0 else ""
-    if current_commit != deployer_commit:
+    current_branch = result.stdout.strip() if result.returncode == 0 else ""
+    if current_branch != deployer_branch:
         print(
-            "[ERROR] DEPLOYER_COMMIT does not match this checkout "
-            f"({deployer_commit} != {current_commit or 'unknown'})."
+            "[ERROR] DEPLOYER_BRANCH does not match this checkout "
+            f"({deployer_branch} != {current_branch or 'detached HEAD'})."
         )
-        sys.exit(1)
-
-    if not COMPONENT_LOCK_PATH.is_file():
-        print("[ERROR] Production requires components.lock.json.")
-        sys.exit(1)
-    locks = load_component_locks()
-    missing = sorted(_required_locked_components(prefix, env) - set(locks))
-    if missing:
-        print("[ERROR] Production component lock is incomplete: " + ", ".join(missing))
         sys.exit(1)
 
 
@@ -3904,7 +3727,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="deployment_action", required=True
     )
     deployment_validate = deployment_subparsers.add_parser(
-        "validate", help="Validate an inventory and its immutable release lock."
+        "validate", help="Validate an inventory and its configured release branch."
     )
     deployment_validate.add_argument("--inventory", required=True, type=Path)
     deployment_render = deployment_subparsers.add_parser(
@@ -3930,15 +3753,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "plan",
         help="Validate and print a redacted installation plan without making changes.",
-    )
-    lock_parser = subparsers.add_parser(
-        "lock",
-        help="Record exact commits for installed component repositories.",
-    )
-    lock_parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Verify that components.lock.json matches installed repositories.",
     )
     storage_parser = subparsers.add_parser(
         "storage",
@@ -4064,7 +3878,7 @@ def main() -> None:
                 print(f"Host       : {config['host']['id']}")
                 print(f"Role       : {config['host']['role']}")
                 print(f"VPN address: {config['host']['vpn_address']}")
-                print(f"Commit     : {config['release']['deployer_commit']}")
+                print(f"Branch     : {config['release']['deployer_branch']}")
                 print("No files, repositories, containers or networks were changed.")
             else:
                 status = host_status(args.config, PROJECT_ROOT)
@@ -4073,16 +3887,15 @@ def main() -> None:
                 else:
                     print(f"Deployment : {status['deployment_id']}")
                     print(f"Host       : {status['host']['id']} ({status['host']['role']})")
-                    print(f"Expected   : {status['expected_deployer_commit']}")
-                    print(f"Installed  : {status['installed_deployer_commit'] or 'unknown'}")
+                    print(f"Expected   : {status['expected_deployer_branch']}")
+                    print(
+                        f"Installed  : "
+                        f"{status['installed_deployer_branch'] or 'detached HEAD'}"
+                    )
             return
     except DeploymentError as exc:
         print(f"[ERROR] {exc}")
         sys.exit(1)
-
-    if args.command == "lock":
-        generate_component_lock(check=args.check)
-        return
 
     host_apply = args.command == "host" and args.host_action == "apply"
     if args.command not in {"validate", "plan", "storage"}:

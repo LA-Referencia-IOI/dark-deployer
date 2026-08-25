@@ -3,10 +3,6 @@
   "environment": "production",
   "deployment_id": "dark-site-a-1",
   "chain_id": 2025,
-  "release": {
-    "deployer_commit": "REPLACE_WITH_THE_40_CHARACTER_DEPLOYER_COMMIT",
-    "components_lock": "components.lock.json"
-  },
   "network": {
     "trust_boundary": "vpn",
     "vpn_cidr": "10.20.30.0/24",

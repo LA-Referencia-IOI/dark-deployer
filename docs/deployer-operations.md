@@ -106,39 +106,31 @@ DARK_MINTER_PRIVATE_KEY=0x...
 Both handoff files are ignored by Git. Sensitive files and generated service
 environment files are written atomically with mode `0600`.
 
-## 4. Reproducible component versions
+## 4. Component branches
 
-Without a lock, existing repositories are fetched, switched to their configured
-branch and advanced only with a fast-forward merge. Wrong origins, non-Git
-target directories, divergent branches and conflicting local changes fail
-instead of being overwritten.
+Component versions are selected only by the `*_REPOSITORY_BRANCH` values in
+`.env`. Existing repositories are fetched, switched to the configured branch
+and advanced only with a fast-forward merge. Wrong origins, non-Git target
+directories, divergent branches and conflicting local changes fail instead of
+being overwritten.
 
-After testing a complete stack, record every installed component commit:
+For example:
 
-```bash
-python3 install.py lock
-git add components.lock.json
-git commit -m "Lock tested dARK component versions"
+```ini
+PRODUCTION_MINTER_REPOSITORY_BRANCH=codex/production-deployment-readiness
+PRODUCTION_IPFS_REPOSITORY_BRANCH=codex/global-ipfs-cluster
 ```
 
-Production requires `components.lock.json`, a complete entry for every selected
-component, and `DEPLOYER_COMMIT` matching the current checkout. Other profiles
-may omit the lock. When present, installation checks out the exact recorded
-commit in detached-HEAD mode. Verify an installed server against the lock with:
+Production also requires `DEPLOYER_BRANCH` to match the current deployer
+checkout. No component commit lock or detached-HEAD checkout is used.
 
-```bash
-python3 install.py lock --check
-```
+To change or upgrade a component:
 
-To upgrade intentionally:
+1. Change its `*_REPOSITORY_BRANCH` value in `.env`.
+2. Run the desired install or rebuild with `--pull`.
+3. Execute the integration tests.
 
-1. Move or temporarily remove the existing lock.
-2. Run the desired installs/rebuilds with `--pull`.
-3. Execute integration tests.
-4. Regenerate and commit `components.lock.json`.
-
-Repository URLs containing credentials are redacted from logs and stored in
-the lock without HTTP user-info.
+Repository URLs containing credentials are redacted from logs.
 
 ## 5. Component setup commands
 
@@ -166,7 +158,7 @@ Useful flags:
 
 | Flag | Effect |
 | --- | --- |
-| `--pull` | Update or clone before rebuilding; respects `components.lock.json` |
+| `--pull` | Update or clone from the repository branch configured in `.env` |
 | `--no-cache` | Disable Docker build cache |
 | `--no-start` | Build and generate artifacts without starting containers |
 | `--skip-migrate` | Skip the normally automatic minter migration |
@@ -175,7 +167,7 @@ Useful flags:
 For direct ARK imports without metadata and NAAN authorization audits, see
 [Direct ARK Import and NAAN Audit](minter-direct-ark-import.md). Those commands
 require a Minter revision that includes their CLI modules; update
-`components.lock.json` intentionally before rebuilding a deployed component.
+the Minter branch in `.env` intentionally before rebuilding the component.
 
 For the required DARK 2 `2MM` shoulder format and its minter-code assignment
 rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).
@@ -225,6 +217,6 @@ python3 -m unittest discover -s tests -v
 ```
 
 Unit tests do not replace a real Docker deployment test. Before promotion,
-exercise developer, sandbox and production topologies with the actual component
-repositories and retain the generated component lock as the tested bill of
-materials.
+exercise developer, sandbox and production topologies with the component
+branches configured in `.env` and retain those branch assignments with the
+deployment record.

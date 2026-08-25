@@ -73,7 +73,7 @@ El instalador actual ya aporta una base valiosa:
 - roles `blockchain`, `storage-node`, `apps` y `all`;
 - validación no mutante mediante `install.py validate`;
 - visualización local mediante `install.py plan`;
-- fijación opcional de commits con `components.lock.json`;
+- selección de repositorios mediante branches configuradas en `.env`;
 - validación de secretos IPFS externos y sus permisos;
 - generación determinista de configuración por rol;
 - auditoría y reconciliación del clúster IPFS global;
@@ -91,8 +91,8 @@ Sin embargo, hoy la instalación completa sigue siendo una operación local:
 - no hay inventario de flota, selectores de hosts, control de concurrencia,
   bloqueo entre despliegues ni reanudación;
 - la salida es texto para humanos, no eventos estructurados;
-- sin `components.lock.json`, los componentes siguen una rama y el resultado
-  puede cambiar entre dos hosts del mismo despliegue;
+- los componentes siguen branches, por lo que una branch que avance durante
+  un despliegue puede producir diferencias entre hosts;
 - varios comandos de componentes se ejecutan mediante shell. Ese mecanismo es
   válido para comandos confiables incluidos en la release, pero no debe aceptar
   texto arbitrario proveniente del inventario remoto.
@@ -252,10 +252,7 @@ Ejemplo conceptual:
 {
   "version": 1,
   "environment": "production",
-  "release": {
-    "deployer_commit": "<40-hex-commit>",
-    "components_lock": "components.lock.json"
-  },
+  "deployer_branch": "codex/production-deployment-readiness",
   "ssh": {
     "known_hosts_file": "${DARK_KNOWN_HOSTS}",
     "connect_timeout_seconds": 10,
@@ -316,8 +313,8 @@ Antes de abrir una conexión, el validador debe comprobar:
 - una `vpn_address` IPv4 única por nodo de almacenamiento;
 - al menos un host de blockchain o un RPC externo explícito;
 - referencias existentes y permisos seguros para PEM y secretos locales;
-- commits con 40 caracteres hexadecimales en toda release de producción;
-- coincidencia entre los componentes del lock y los que instalará cada rol;
+- nombres de branch no vacíos para el deployer y cada componente requerido;
+- coincidencia entre las branches configuradas y los componentes de cada rol;
 - que cada host de aplicaciones apunte a su propia sede;
 - que la topología IPFS derivada incluya todos y sólo los `storage-node`;
 - que no haya dos escritores blockchain activos en el mismo `signer_group`,
@@ -344,29 +341,29 @@ reconciliarse.
 
 ## 7. Modelo de release y artefactos
 
-### 7.1 Inmutabilidad
+### 7.1 Identidad del despliegue
 
-Una release de producción debe fijar:
+Un despliegue de producción debe registrar:
 
-- commit exacto de dARK Deployer;
-- URL sin credenciales y commit exacto de cada componente;
+- branch de dARK Deployer;
+- URL sin credenciales y branch de cada componente;
 - versión del esquema de inventario;
 - hash del inventario normalizado;
 - hash de los archivos públicos renderizados;
 - versión mínima del contrato host-local.
 
-Las ramas sirven para desarrollo, no como identidad de una release. El
-controlador debe rechazar producción si `components.lock.json` falta, está
-incompleto o no coincide con el manifiesto.
+El controlador debe rechazar una configuración si falta una branch requerida
+o si el checkout del deployer no coincide con `DEPLOYER_BRANCH`. El hash del
+`.env.public` permite detectar diferencias de configuración entre hosts.
 
 ### 7.2 Entrega recomendada para V1
 
 Para mantener la primera versión simple:
 
-1. el controlador empaqueta el commit exacto de dARK Deployer;
-2. lo transfiere al host y verifica su SHA-256;
-3. los hosts obtienen cada componente de su repositorio usando el commit del
-   lock;
+1. el controlador empaqueta el checkout de la branch configurada del deployer;
+2. lo transfiere al host y verifica el SHA-256 del artefacto;
+3. los hosts obtienen cada componente usando las branches configuradas en
+   `.env`;
 4. las credenciales de repositorios privados se resuelven mediante un mecanismo
    Git previamente configurado en el host, nunca dentro de la URL o del log.
 
@@ -853,8 +850,8 @@ Códigos de salida propuestos:
 - transferencia atómica interrumpida;
 - dos controladores compitiendo por el lock;
 - caída del controlador entre `apply` y `verify`;
-- release bloqueada por lock incompleto;
-- repositorio inaccesible y commit inexistente;
+- despliegue bloqueado por branch ausente;
+- repositorio o branch inaccesible;
 - ejecución repetida sin cambios.
 
 ### 19.3 Laboratorio de infraestructura
@@ -949,7 +946,7 @@ mínimo es:
 3. `deploy.py validate`, `plan` y `preflight`;
 4. `deploy.py apply --limit <host>`;
 5. OpenSSH estricto con PEM local;
-6. release y componentes fijados por commit;
+6. deployer y componentes seleccionados por branch;
 7. transferencia atómica de secretos;
 8. estado, lock, health y reporte redactado.
 

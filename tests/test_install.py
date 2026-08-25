@@ -626,6 +626,20 @@ class ValidationTests(unittest.TestCase):
 
         self.assertRegex(env["PLATFORM_ADDRESS"], r"^0x[0-9A-Fa-f]{40}$")
 
+    def test_production_release_requires_matching_deployer_branch(self):
+        result = mock.Mock(returncode=0, stdout="release-branch\n")
+        with mock.patch.object(installer.subprocess, "run", return_value=result):
+            installer.validate_production_release(
+                "PRODUCTION", {"DEPLOYER_BRANCH": "release-branch"}
+            )
+            with self.assertRaises(SystemExit):
+                installer.validate_production_release(
+                    "PRODUCTION", {"DEPLOYER_BRANCH": "other-branch"}
+                )
+
+        with self.assertRaises(SystemExit):
+            installer.validate_production_release("PRODUCTION", {})
+
     def test_shared_signer_preseeds_genesis_and_rejects_existing_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -691,64 +705,12 @@ class GitInstallerTests(unittest.TestCase):
             self.assertEqual(branch, "main")
             self.assertEqual((target / "version.txt").read_text(), "two\n")
 
-    def test_component_lock_checks_out_exact_commit(self):
+    def test_configured_branch_controls_new_clone(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             remote = root / "remote.git"
             source = root / "source"
             target = root / "target"
-            lock_path = root / "components.lock.json"
-
-            self.git("init", "--bare", str(remote))
-            self.git("init", "-b", "main", str(source))
-            self.git("config", "user.email", "tests@example.invalid", cwd=source)
-            self.git("config", "user.name", "Installer Tests", cwd=source)
-            (source / "version.txt").write_text("locked\n")
-            self.git("add", "version.txt", cwd=source)
-            self.git("commit", "-m", "locked", cwd=source)
-            locked_commit = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=source,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-            self.git("remote", "add", "origin", str(remote), cwd=source)
-            self.git("push", "-u", "origin", "main", cwd=source)
-
-            (source / "version.txt").write_text("newer\n")
-            self.git("commit", "-am", "newer", cwd=source)
-            self.git("push", cwd=source)
-            lock_path.write_text(json.dumps({
-                "version": 1,
-                "components": {
-                    "test": {
-                        "repository": str(remote),
-                        "commit": locked_commit,
-                    }
-                },
-            }))
-
-            with mock.patch.object(installer, "COMPONENT_LOCK_PATH", lock_path):
-                installer.install_repo("test", str(remote), "main", str(target))
-
-            self.assertEqual((target / "version.txt").read_text(), "locked\n")
-            branch = subprocess.run(
-                ["git", "branch", "--show-current"],
-                cwd=target,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-            self.assertEqual(branch, "")
-
-    def test_component_lock_branch_overrides_configured_clone_branch(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            remote = root / "remote.git"
-            source = root / "source"
-            target = root / "target"
-            lock_path = root / "components.lock.json"
 
             self.git("init", "--bare", str(remote))
             self.git("init", "-b", "main", str(source))
@@ -761,40 +723,21 @@ class GitInstallerTests(unittest.TestCase):
             self.git("push", "-u", "origin", "main", cwd=source)
 
             self.git("switch", "-c", "release-candidate", cwd=source)
-            (source / "version.txt").write_text("locked branch\n")
-            self.git("commit", "-am", "locked branch", cwd=source)
-            locked_commit = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=source,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
+            (source / "version.txt").write_text("release branch\n")
+            self.git("commit", "-am", "release branch", cwd=source)
             self.git("push", "-u", "origin", "release-candidate", cwd=source)
 
-            lock_path.write_text(json.dumps({
-                "version": 1,
-                "components": {
-                    "test": {
-                        "repository": str(remote),
-                        "commit": locked_commit,
-                        "branch": "release-candidate",
-                    }
-                },
-            }))
+            installer.install_repo("test", str(remote), "release-candidate", str(target))
 
-            with mock.patch.object(installer, "COMPONENT_LOCK_PATH", lock_path):
-                installer.install_repo("test", str(remote), "main", str(target))
-
-            self.assertEqual((target / "version.txt").read_text(), "locked branch\n")
-            installed_commit = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
+            self.assertEqual((target / "version.txt").read_text(), "release branch\n")
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
                 cwd=target,
                 check=True,
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            self.assertEqual(installed_commit, locked_commit)
+            self.assertEqual(branch, "release-candidate")
 
 
 if __name__ == "__main__":

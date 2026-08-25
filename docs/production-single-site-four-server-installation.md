@@ -3,10 +3,11 @@
 > **Current workflow:** use the canonical inventory and rendered host bundles
 > described in [Production deployment bundles](production-deployment-bundles.md).
 > The manual `.env` examples below remain useful as a network worksheet, but
-> Production validation now requires `SIGNER_MODE=shared`, `DEPLOYER_COMMIT`,
-> and a complete `components.lock.json`.
+> Production validation now requires `SIGNER_MODE=shared` and
+> `DEPLOYER_BRANCH` matching the current checkout. Component versions follow
+> the `*_REPOSITORY_BRANCH` values in `.env`.
 
-This runbook installs one immutable release on four
+This runbook installs one branch-configured deployment on four
 physical or virtual servers in one private local network:
 
 - one blockchain server;
@@ -237,9 +238,9 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-The expected branch is `main`. Before a formal production
-rollout, prefer a reviewed release tag or an immutable commit instead of a
-floating feature branch. Keep the same deployer revision on all four servers.
+Set `DEPLOYER_BRANCH` to the branch selected for the rollout and check out that
+same branch on all four servers. Keep the component branch assignments in
+`.env` identical for hosts that install the same role.
 
 ## 7. Create the shared storage topology
 
@@ -829,18 +830,19 @@ Cluster volumes, including node identity and local content.
 
 ## 17. Operations and backups
 
-### 17.1 Record immutable component revisions
+### 17.1 Record component branches
 
 After each host is accepted:
 
 ```bash
 cd /opt/dark-deployer
-python3.12 install.py lock
-cp components.lock.json "/approved/inventory/$(hostname)-components.lock.json"
+rg '_REPOSITORY_BRANCH=' .env \
+  > "/approved/inventory/$(hostname)-component-branches.txt"
 ```
 
-Store the inventory outside the checkout. Each role installs a different subset
-of components, so lock files naturally differ by host.
+Store this branch inventory outside the checkout. Each role installs a
+different subset of components, so the recorded branch lists naturally differ
+by host.
 
 ### 17.2 Minimum backups
 

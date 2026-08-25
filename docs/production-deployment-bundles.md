@@ -5,20 +5,20 @@ Blockchain host, one Apps host, and two independent IPFS hosts. The VPN is the
 application trust boundary. IPFS tolerates one server failure; Blockchain,
 Apps, and the entire site remain explicit single points of failure.
 
-## 1. Prepare the immutable release
+## 1. Prepare the branch configuration
 
-Use a tested deployer commit and exact component commits. Production validation
-rejects a branch-only release, a missing lock, or an incomplete lock.
+Configure the deployer and component branches in `.env`. Production validation
+requires the current deployer checkout to match `DEPLOYER_BRANCH`; components
+are cloned or updated from their corresponding `*_REPOSITORY_BRANCH` values.
 
-```bash
-git rev-parse HEAD
-python3.12 install.py lock
-python3.12 install.py lock --check
+```ini
+DEPLOYER_BRANCH=codex/production-deployment-readiness
+PRODUCTION_MINTER_REPOSITORY_BRANCH=codex/production-deployment-readiness
+PRODUCTION_IPFS_REPOSITORY_BRANCH=codex/global-ipfs-cluster
 ```
 
-`components.lock.json` must include every component used by all four roles.
-Commit component changes first, then regenerate the lock so it never references
-an uncommitted worktree.
+There is no component commit lock. Moving a configured branch changes the code
+that a later installation or `rebuild --pull` receives.
 
 ## 2. Create the inventory
 
@@ -28,8 +28,6 @@ cp deployment-inventory.example.json deployment-inventory.json
 
 Edit the copied file in one administrative checkout. Configure:
 
-- `release.deployer_commit`: the exact 40-character commit printed above;
-- `release.components_lock`: the reviewed lock file;
 - `network.vpn_cidr`: the private network containing all service addresses;
 - `network.trusted_minter_clients`: exactly one client address or CIDR;
 - `signing.platform_key_target`: the absolute path used on Blockchain and Apps;
@@ -64,7 +62,6 @@ The output is deterministic and contains:
 
 ```text
 manifest.json
-components.lock.json
 shared/storage-topology.json
 shared/deployment-endpoints.json
 shared/firewall-policy.json
@@ -73,9 +70,9 @@ hosts/<host-id>/.env.public
 CHECKLIST.md
 ```
 
-Every host configuration records the deployment, inventory, topology, lock and
-deployer hashes. Rendering refuses a non-empty output directory. This prevents
-silently mixing two releases.
+Every host configuration records the deployment, inventory, topology,
+environment hash and deployer branch. Rendering refuses a non-empty output
+directory. This prevents silently mixing two bundles.
 
 The bundle is public configuration. It contains target paths for secrets, but
 not key contents, passwords, private swarm material, or signer material.
@@ -114,15 +111,15 @@ python3.12 install.py host plan --config /approved/release/hosts/<host-id>/host.
 `host validate` verifies public file hashes and secret file permissions. `host
 plan` is read-only and prints no secret values.
 
-Apply the generated configuration only from a checkout at the exact recorded
-commit:
+Apply the generated configuration only from a checkout on the recorded branch:
 
 ```bash
 python3.12 install.py host apply --config /approved/release/hosts/<host-id>/host.json
 ```
 
-The command materializes `.env`, `storage-topology.json`, and
-`components.lock.json`, then runs the non-interactive role installation.
+The command materializes `.env` and `storage-topology.json`, then runs the
+non-interactive role installation. Every component follows the branch recorded
+in the generated `.env`.
 
 ## 6. Deployment order
 
@@ -159,8 +156,8 @@ the authentication boundary.
 
 Production is ready only when all of the following pass:
 
-- every host reports the same inventory, topology and lock hashes;
-- installed component commits match `components.lock.json`;
+- every host reports the same inventory and topology hashes;
+- every installed component is on the branch configured in `.env`;
 - no public artifact or log contains a private key;
 - Apps and Blockchain ports listen only on their VPN address;
 - PostgreSQL, MySQL and Redis are not reachable from the VPN;

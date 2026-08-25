@@ -1,11 +1,10 @@
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from dark_deployer.deployment import (
-    COMPONENTS_BY_ROLE,
     DeploymentError,
     load_deployment_inventory,
     render_deployment,
@@ -20,35 +19,11 @@ class DeploymentInventoryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=PROJECT_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        components = set().union(*COMPONENTS_BY_ROLE.values())
-        lock = {
-            "version": 1,
-            "components": {
-                name: {
-                    "repository": f"https://example.invalid/{name}.git",
-                    "commit": "a" * 40,
-                    "branch": "main",
-                }
-                for name in components
-            },
-        }
-        (self.root / "components.lock.json").write_text(json.dumps(lock))
         self.inventory = {
             "version": 1,
             "environment": "production",
             "deployment_id": "dark-site-a-1",
             "chain_id": 2025,
-            "release": {
-                "deployer_commit": self.commit,
-                "components_lock": "components.lock.json",
-            },
             "network": {
                 "trust_boundary": "vpn",
                 "vpn_cidr": "10.20.30.0/24",
@@ -99,7 +74,7 @@ class DeploymentInventoryTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def test_validates_exact_four_host_shape_and_complete_lock(self):
+    def test_validates_exact_four_host_shape(self):
         loaded = load_deployment_inventory(self.inventory_path, PROJECT_ROOT)
         self.assertEqual(loaded["deployment_id"], "dark-site-a-1")
 
@@ -108,13 +83,13 @@ class DeploymentInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(DeploymentError, "exactly four hosts"):
             load_deployment_inventory(self.inventory_path, PROJECT_ROOT)
 
-    def test_rejects_incomplete_component_lock(self):
-        lock_path = self.root / "components.lock.json"
-        lock = json.loads(lock_path.read_text())
-        del lock["components"]["dark-ipfs"]
-        lock_path.write_text(json.dumps(lock))
-        with self.assertRaisesRegex(DeploymentError, "missing: dark-ipfs"):
-            load_deployment_inventory(self.inventory_path, PROJECT_ROOT)
+    def test_rejects_deployer_branch_mismatch(self):
+        with mock.patch(
+            "dark_deployer.deployment.current_deployer_branch",
+            return_value="other-branch",
+        ):
+            with self.assertRaisesRegex(DeploymentError, "does not match checkout"):
+                load_deployment_inventory(self.inventory_path, PROJECT_ROOT)
 
     def test_accepts_legacy_available_policy_but_rejects_strict_policy(self):
         self.inventory["storage"]["strict_single_site"] = False
@@ -134,6 +109,8 @@ class DeploymentInventoryTests(unittest.TestCase):
         validated = validate_host_bundle(host_config, require_secrets=False)
 
         self.assertEqual(validated["config"]["host"]["role"], "storage-node")
+        self.assertIn("PRODUCTION_IPFS_REPOSITORY_BRANCH", validated["env"])
+        self.assertNotIn("components_lock", validated["config"]["files"])
         rendered_text = "\n".join(
             path.read_text()
             for path in bundle.rglob("*")

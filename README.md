@@ -119,13 +119,13 @@ server, one apps server and two IPFS servers on one LAN, see
 [Production four-server installation](docs/production-single-site-four-server-installation.md).
 
 Production now uses a canonical inventory instead of four independently edited
-`.env` files. Start from `deployment-inventory.example.json`, lock every
-component revision, and render the public host bundles:
+`.env` files. Component versions follow the repository branches configured in
+`.env`. Start from `deployment-inventory.example.json` and render the public
+host bundles:
 
 ```bash
 cp deployment-inventory.example.json deployment-inventory.json
-python3 install.py lock
-# Set the exact deployer commit, addresses and secret target paths in the inventory.
+# Set addresses and secret target paths in the inventory.
 python3 install.py deployment validate --inventory deployment-inventory.json
 python3 install.py deployment render \
   --inventory deployment-inventory.json \
@@ -240,10 +240,6 @@ python3 stop.py
 
 # Rebuild one application component
 python3 install.py rebuild store-api
-
-# Record or verify exact component commits
-python3 install.py lock
-python3 install.py lock --check
 
 # Inspect one rendered production host bundle
 python3 install.py host validate --config dist/dark-site-a-1/hosts/site-a-apps-1/host.json

@@ -21,20 +21,16 @@ sandbox e production.
 2. Clone do dark-core-lib
 -------------------------
 
-O instalador clonava a branch indicada no arquivo .env e depois tentava
-obter o commit fixado em components.lock.json. Quando a branch configurada
-não continha esse commit, o segundo fetch por SSH podia falhar e interromper a
-instalação.
-
-O components.lock.json passou a ser a fonte autoritativa para a branch de um
-componente bloqueado. Assim, o clone já usa a branch associada ao commit
-fixado e evita o fetch adicional do SHA por SSH.
+O instalador usa exclusivamente a URL e a branch indicadas no arquivo .env.
+O repositório é clonado diretamente nessa branch; em instalações existentes,
+o checkout muda para a branch configurada e avança somente por fast-forward.
+Não há fetch adicional de SHA nem checkout em detached HEAD.
 
 3. Validações realizadas
 -------------------------
 
 - a instalação local foi retomada e concluída;
-- todos os commits instalados correspondem ao components.lock.json;
+- todos os componentes instalados usam as branches configuradas no .env;
 - os containers de blockchain, IPFS, Store API, Admin, Minter e Resolver
   ficaram ativos;
 - os testes do deployer para instalação, topologia e deployment passaram.

@@ -13,12 +13,11 @@ servidor de aplicaciones. No exponen una ruta HTTP nueva.
 
 ## 1. Disponibilidad en una instalación del deployer
 
-Los comandos se añadieron al componente Minter en el commit `0ed5b73` de la
-rama `codex/production-deployment-readiness`. El
-[`components.lock.json`](../components.lock.json) de este repositorio fija
-actualmente una revisión anterior del Minter. Antes de usar estos procedimientos
-en una instalación gestionada por el deployer, hay que actualizar el lock a una
-revisión que contenga ese commit y reconstruir el componente:
+Los comandos están disponibles en la rama
+`codex/production-deployment-readiness` del Minter. Antes de usar estos
+procedimientos en una instalación gestionada por el deployer, configure esa
+rama en `*_MINTER_REPOSITORY_BRANCH` dentro de `.env` y reconstruya el
+componente:
 
 ```bash
 python3 install.py rebuild minter --pull
