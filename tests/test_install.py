@@ -253,6 +253,35 @@ class IntegrationTests(unittest.TestCase):
         self.assertRegex(public["DARK_PLATFORM_ADDRESS"], r"^0x[0-9A-Fa-f]{40}$")
         self.assertFalse(self.secret_path.exists())
 
+    def test_profile_minter_shoulder_is_written_to_minter_integration_env(self):
+        minter_path = Path(self.temporary.name) / "minter"
+        minter_path.mkdir()
+        (minter_path / ".env.example").write_text(
+            "MINTER_SHOULDER=200\nMETADATA_STORAGE_TYPE=store_api\n"
+        )
+        env = {
+            "TYPE": "production",
+            "PRODUCTION_MINTER_SHOULDER": "201",
+            "CHAIN_ID": "2025",
+            "RPC_URL": "http://localhost:8545",
+        }
+
+        with mock.patch.object(
+            installer,
+            "resolve_contract_addresses",
+            return_value=("0xdark", "0xauthority"),
+        ):
+            installer.generate_minter_env_integration(minter_path, env)
+
+        generated = installer.load_optional_env(minter_path / ".env.integration")
+        self.assertEqual(generated["MINTER_SHOULDER"], "201")
+
+    def test_invalid_profile_minter_shoulder_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            installer.resolve_minter_shoulder(
+                "PRODUCTION", {"PRODUCTION_MINTER_SHOULDER": "001"}
+            )
+
     def test_secure_writer_replaces_permissive_mode(self):
         target = Path(self.temporary.name) / "service.env"
         target.write_text("OLD=value\n")

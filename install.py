@@ -1711,6 +1711,19 @@ def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     print(f"[OK] Generated '{env_path}'.")
 
 
+def resolve_minter_shoulder(prefix: str, env: dict) -> str:
+    """Return the profile-specific DARK 2 minter shoulder or abort clearly."""
+    key = f"{prefix}_MINTER_SHOULDER"
+    shoulder = env.get(key, "200").strip()
+    if not re.fullmatch(r"2[0-9]{2}", shoulder):
+        print(
+            f"[ERROR] {key} must be exactly three digits in the format 2MM "
+            "(2 = DARK version; MM = minter code)."
+        )
+        sys.exit(1)
+    return shoulder
+
+
 def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     """Generate .env.integration for minter from installed blockchain state.
 
@@ -1725,6 +1738,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     """
     _prefixes = {"developer": "DEVELOPER", "sandbox": "SANDBOX", "production": "PRODUCTION"}
     prefix = _prefixes.get(env.get("TYPE", "developer").lower(), "DEVELOPER")
+    minter_shoulder = resolve_minter_shoulder(prefix, env)
 
     dark_contract, authority_contract = resolve_contract_addresses(env)
 
@@ -1838,6 +1852,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     integration_env = {
         **template_env,
         **split_worker_env,
+        "MINTER_SHOULDER": minter_shoulder,
         "MINTER_API_WORKERS": env.get(
             "MINTER_API_WORKERS",
             template_env.get("MINTER_API_WORKERS", "2"),
@@ -3084,6 +3099,9 @@ def validate_shared_platform_signer(env: dict, profile: str) -> None:
 def validate_install_configuration(prefix: str, env: dict) -> None:
     """Validate topology-sensitive settings before mutating the installation."""
     install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
+    minter_selected = install_apps and bool(
+        get_url(env, f"{prefix}_MINTER_REPOSITORY_URL")
+    )
     blockchain_remote = bool(env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip())
 
     chain_id = env.get("CHAIN_ID", "").strip()
@@ -3096,6 +3114,8 @@ def validate_install_configuration(prefix: str, env: dict) -> None:
         f"{prefix}_STORE_API_URL",
         env.get(f"{prefix}_STORE_API_URL", "").strip(),
     )
+    if minter_selected:
+        resolve_minter_shoulder(prefix, env)
     for key in (
         f"{prefix}_DARK_CONTRACT_ADDRESS",
         f"{prefix}_AUTHORITY_CONTRACT_ADDRESS",

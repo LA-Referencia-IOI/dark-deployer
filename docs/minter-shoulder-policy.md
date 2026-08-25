@@ -33,6 +33,23 @@ ark:41046/2010000000<dígito-de-control>
 El prefijo inicial `2` separa de forma inequívoca los nombres emitidos por
 DARK 2 del espacio `00*` reservado para DARK 1.
 
+## Configuración mediante el Deployer
+
+El valor se declara en el `.env` raíz del Deployer, de acuerdo con el perfil
+de instalación:
+
+```dotenv
+DEVELOPER_MINTER_SHOULDER=200
+SANDBOX_MINTER_SHOULDER=200
+PRODUCTION_MINTER_SHOULDER=201
+```
+
+Durante la instalación, el Deployer valida el formato `2MM` y escribe el valor
+seleccionado como `MINTER_SHOULDER` en
+`components/services/dark-core-minter-api/.env.integration`. No es necesario
+editar manualmente el `.env.integration` del minter; este archivo se regenera
+en cada instalación.
+
 ## Asignación y operación
 
 - El código `MM` debe ser único entre los minters que puedan emitir bajo un
