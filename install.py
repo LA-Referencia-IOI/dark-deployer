@@ -926,6 +926,18 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
         )
         return "main"
 
+    def fetch_branch(remote_name: str, selected_branch: str, cwd: str) -> None:
+        """Fetch a branch and ensure its origin/<branch> tracking ref exists."""
+        run_command(
+            [
+                "git",
+                "fetch",
+                remote_name,
+                f"{selected_branch}:refs/remotes/{remote_name}/{selected_branch}",
+            ],
+            cwd=cwd,
+        )
+
     target = Path(target_dir)
     repo_candidates = build_repo_url_candidates(repo_url)
 
@@ -978,7 +990,7 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
                 current_origin_url = candidate_url
 
             try:
-                run_command(["git", "fetch", "origin", branch], cwd=str(target))
+                fetch_branch("origin", branch, str(target))
                 fetch_success = True
                 break
             except SystemExit as exc:
@@ -1001,7 +1013,7 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
                     )
                     current_origin_url = candidate_url
                 try:
-                    run_command(["git", "fetch", "origin", branch], cwd=str(target))
+                    fetch_branch("origin", branch, str(target))
                     fetch_success = True
                     break
                 except SystemExit as exc:
@@ -1018,7 +1030,13 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
             run_command(["git", "switch", branch], cwd=str(target))
         else:
             run_command(
-                ["git", "switch", "--create", branch, "--track", f"origin/{branch}"],
+                [
+                    "git",
+                    "switch",
+                    "--create",
+                    branch,
+                    f"refs/remotes/origin/{branch}",
+                ],
                 cwd=str(target),
             )
         run_command(

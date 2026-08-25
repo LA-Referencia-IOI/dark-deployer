@@ -705,6 +705,41 @@ class GitInstallerTests(unittest.TestCase):
             self.assertEqual(branch, "main")
             self.assertEqual((target / "version.txt").read_text(), "two\n")
 
+    def test_existing_checkout_switches_to_a_branch_not_previously_tracked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            remote = root / "remote.git"
+            source = root / "source"
+            target = root / "target"
+
+            self.git("init", "--bare", str(remote))
+            self.git("init", "-b", "main", str(source))
+            self.git("config", "user.email", "tests@example.invalid", cwd=source)
+            self.git("config", "user.name", "Installer Tests", cwd=source)
+            (source / "version.txt").write_text("main\n")
+            self.git("add", "version.txt", cwd=source)
+            self.git("commit", "-m", "main", cwd=source)
+            self.git("remote", "add", "origin", str(remote), cwd=source)
+            self.git("push", "-u", "origin", "main", cwd=source)
+
+            self.git("switch", "-c", "release-candidate", cwd=source)
+            (source / "version.txt").write_text("release branch\n")
+            self.git("commit", "-am", "release branch", cwd=source)
+            self.git("push", "-u", "origin", "release-candidate", cwd=source)
+
+            installer.install_repo("test", str(remote), "main", str(target))
+            installer.install_repo("test", str(remote), "release-candidate", str(target))
+
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=target,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(branch, "release-candidate")
+            self.assertEqual((target / "version.txt").read_text(), "release branch\n")
+
     def test_configured_branch_controls_new_clone(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
