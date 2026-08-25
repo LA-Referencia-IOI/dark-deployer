@@ -102,7 +102,10 @@ El deployer genera `IPFS_CLUSTER_LOCAL_SITE_ID`.
 
 Se retiraron `IPFS_ADD_MODE`, `IPFS_CLUSTER_EXPECTED_PEERS`, `IPFS_CLUSTER_WRITE_MIN_PEERS`, `IPFS_CLUSTER_WRITE_MIN_SITES`, `IPFS_REPLICATION_CONFIRM_INTERVAL_SECONDS` y `strict_single_site`.
 
-Las topologías con `strict_single_site` se rechazan. El cambio asume una base PostgreSQL nueva y no incluye backfill ni compatibilidad legacy.
+Para facilitar upgrades, una topología legacy con `strict_single_site=false` se
+acepta y el campo se ignora. `strict_single_site=true` se rechaza porque su
+garantía no puede conservarse con confirmación de un pin. El cambio asume una
+base PostgreSQL nueva y no incluye backfill de datos.
 
 ## Cierre y verificación
 
@@ -110,7 +113,10 @@ Las topologías con `strict_single_site` se rechazan. El cambio asume una base P
 
 La cobertura automática valida round-robin, cooldown, reincorporación, conteo de `PINNED`, política de purga, retención, reparación y programación ociosa.
 
-Antes de producción faltan pruebas con IPFS real: medir throughput, detener y recuperar cada nodo local y validar una purga multisede.
+El registro E2E normal ya fue validado con IPFS real en el ambiente local, sin
+interrumpir peers. Las mediciones de throughput y la validación de una purga
+multisede permanecen como actividades del rollout operativo y no forman parte
+del test simple de registro.
 
 ## Documentos relacionados
 
