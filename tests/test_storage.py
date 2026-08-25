@@ -75,10 +75,16 @@ class StorageTopologyTests(unittest.TestCase):
         with self.assertRaisesRegex(StorageTopologyError, "exactly one peer"):
             self.load(document)
 
-    def test_rejects_removed_strict_single_site_option(self):
+    def test_accepts_legacy_available_single_site_option(self):
+        document = topology_document(1)
+        document["strict_single_site"] = False
+        topology = self.load(document)
+        self.assertEqual(topology.policy.replication_min, 1)
+
+    def test_rejects_legacy_strict_single_site_option(self):
         document = topology_document(1)
         document["strict_single_site"] = True
-        with self.assertRaisesRegex(StorageTopologyError, "no longer supported"):
+        with self.assertRaisesRegex(StorageTopologyError, "true is no longer supported"):
             self.load(document)
 
     def test_node_environment_uses_all_other_peers_as_bootstraps(self):

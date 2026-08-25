@@ -215,10 +215,19 @@ def load_storage_topology(path: Path) -> StorageTopology:
                 )
             )
 
+    # Compatibility with topology files generated before the one-pin write
+    # policy.  The old availability mode (`false`) already has the same
+    # foreground-write behavior, so it is safe to ignore.  Silently accepting
+    # `true` would weaken an explicitly requested durability guarantee.
     if "strict_single_site" in document:
-        raise StorageTopologyError(
-            "strict_single_site is no longer supported; writes always confirm one pin"
-        )
+        legacy_strict = document["strict_single_site"]
+        if not isinstance(legacy_strict, bool):
+            raise StorageTopologyError("strict_single_site must be a boolean")
+        if legacy_strict:
+            raise StorageTopologyError(
+                "strict_single_site=true is no longer supported; remove the field "
+                "to use one-pin write confirmation"
+            )
     return StorageTopology(
         cluster_name,
         tuple(peers),

@@ -1009,6 +1009,21 @@ def install_repo(name: str, repo_url: str, branch: str, target_dir: str) -> None
     lock_entry = load_component_locks().get(name, {})
     locked_commit = lock_entry.get("commit", "")
     locked_repository = lock_entry.get("repository", "")
+    locked_branch = lock_entry.get("branch", "")
+    if locked_branch:
+        if not isinstance(locked_branch, str):
+            print(f"[ERROR] Invalid locked branch for component '{name}'.")
+            sys.exit(1)
+        locked_branch = locked_branch.strip()
+        if not locked_branch:
+            print(f"[ERROR] Invalid locked branch for component '{name}'.")
+            sys.exit(1)
+        if locked_branch != branch:
+            print(
+                f"[INFO] Component lock selects branch '{locked_branch}' for "
+                f"'{name}' (configured branch: '{branch}')."
+            )
+        branch = locked_branch
     if locked_repository:
         locked_slug = github_repo_slug(locked_repository)
         configured_slug = github_repo_slug(repo_url)

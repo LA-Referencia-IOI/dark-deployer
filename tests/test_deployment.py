@@ -116,6 +116,17 @@ class DeploymentInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(DeploymentError, "missing: dark-ipfs"):
             load_deployment_inventory(self.inventory_path, PROJECT_ROOT)
 
+    def test_accepts_legacy_available_policy_but_rejects_strict_policy(self):
+        self.inventory["storage"]["strict_single_site"] = False
+        self.inventory_path.write_text(json.dumps(self.inventory))
+        loaded = load_deployment_inventory(self.inventory_path, PROJECT_ROOT)
+        self.assertEqual(loaded["storage"]["strict_single_site"], False)
+
+        self.inventory["storage"]["strict_single_site"] = True
+        self.inventory_path.write_text(json.dumps(self.inventory))
+        with self.assertRaisesRegex(DeploymentError, "true is no longer supported"):
+            load_deployment_inventory(self.inventory_path, PROJECT_ROOT)
+
     def test_render_is_public_and_detects_topology_drift(self):
         output = self.root / "rendered"
         bundle = render_deployment(self.inventory_path, output, PROJECT_ROOT)

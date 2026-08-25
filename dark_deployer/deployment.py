@@ -217,6 +217,15 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
     if not isinstance(storage, dict):
         raise DeploymentError("storage must be an object")
     _identifier(storage.get("cluster_name"), "storage.cluster_name")
+    if "strict_single_site" in storage:
+        legacy_strict = storage["strict_single_site"]
+        if not isinstance(legacy_strict, bool):
+            raise DeploymentError("storage.strict_single_site must be a boolean")
+        if legacy_strict:
+            raise DeploymentError(
+                "storage.strict_single_site=true is no longer supported; remove "
+                "the field to use one-pin write confirmation"
+            )
     _absolute_path(storage.get("swarm_key_target"), "storage.swarm_key_target")
     _absolute_path(storage.get("cluster_secret_target"), "storage.cluster_secret_target")
     if storage["swarm_key_target"] == storage["cluster_secret_target"]:
