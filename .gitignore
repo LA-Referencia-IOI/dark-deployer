@@ -156,3 +156,5 @@ components/
 __pycache__/
 
 guide.txt
+
+.claude
