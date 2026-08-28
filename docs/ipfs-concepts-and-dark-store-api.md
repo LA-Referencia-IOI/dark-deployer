@@ -412,7 +412,8 @@ Symptoms:
 - direct Cluster REST may be healthy;
 - writes through `/api/v0/add` fail.
 
-If `IPFS_ADD_MODE=cluster_proxy`, Store API should consider this not ready for writes. Liveness can still be healthy, but readiness should be unhealthy.
+Store API always writes through Cluster Proxy and should consider this not
+ready for writes. Liveness can still be healthy, but readiness should be unhealthy.
 
 ### Not enough Cluster peers
 

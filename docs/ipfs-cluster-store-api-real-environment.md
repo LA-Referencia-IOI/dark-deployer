@@ -119,17 +119,8 @@ Minter
   -> Store API returns CID
 ```
 
-The Store API does not call `/pins/{cid}` after a proxy add. The proxy add is the pinning operation.
-
-If `IPFS_ADD_MODE=ipfs_then_cluster` is explicitly configured, the legacy path is:
-
-```text
-Store API
-  -> IPFS /api/v0/add?pin=false
-  -> Cluster REST /pins/{cid}
-```
-
-There is no automatic fallback between modes. If the configured write path fails, the store operation fails clearly.
+After the proxy add, Store API polls `/pins/{cid}` progressively until one peer
+reports `PINNED`. There is no alternate add mode.
 
 ## Read path
 
@@ -210,10 +201,11 @@ The root installer installs components in that order. `dark-env` creates `dark-n
 The root installer should generate the Store API integration env with:
 
 ```text
-IPFS_API_URL=http://ipfs0:5001
-IPFS_CLUSTER_API_URL=http://cluster0:9094
-IPFS_CLUSTER_PROXY_API_URL=http://cluster0:9095
-IPFS_ADD_MODE=cluster_proxy
+IPFS_API_URLS_JSON=["http://ipfs0:5001"]
+IPFS_CLUSTER_API_URLS_JSON=["http://cluster0:9094"]
+IPFS_CLUSTER_PROXY_API_URLS_JSON=["http://cluster0:9095"]
+IPFS_CLUSTER_PEER_SITES_JSON={"site-a-storage-1":"site-a"}
+IPFS_CLUSTER_LOCAL_SITE_ID=site-a
 IPFS_HEALTH_CACHE_TTL_SECONDS=10
 ```
 

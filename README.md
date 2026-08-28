@@ -56,8 +56,7 @@ overwritten, and all generated paths are excluded from Git. HA simulation uses
 separate containers, identities, networks and volumes, but both peers still
 share the same physical Docker host.
 
-For sandbox and production infrastructure, configure the topology and secrets
-explicitly:
+For sandbox infrastructure, configure the topology and secrets explicitly:
 
 ```bash
 cp .env.example .env
@@ -71,7 +70,6 @@ contain exactly two peers:
 {
   "version": 1,
   "cluster_name": "dark-global",
-  "strict_single_site": false,
   "sites": [
     {
       "id": "site-a",
@@ -119,6 +117,24 @@ installer can generate both local endpoint lists.
 For a complete, address-by-address production runbook covering one blockchain
 server, one apps server and two IPFS servers on one LAN, see
 [Production four-server installation](docs/production-single-site-four-server-installation.md).
+
+Production now uses a canonical inventory instead of four independently edited
+`.env` files. Component versions follow the repository branches configured in
+`.env`. Start from `deployment-inventory.example.json` and render the public
+host bundles:
+
+```bash
+cp deployment-inventory.example.json deployment-inventory.json
+# Set addresses and secret target paths in the inventory.
+python3 install.py deployment validate --inventory deployment-inventory.json
+python3 install.py deployment render \
+  --inventory deployment-inventory.json \
+  --output dist/dark-site-a-1
+```
+
+The renderer creates one shared topology, endpoint and firewall policy plus one
+host configuration per server. The bundle contains secret paths but never
+secret contents. See [Production deployment bundles](docs/production-deployment-bundles.md).
 
 ## Roles
 
@@ -177,11 +193,13 @@ volumes. Do not copy one node's identity volume to another node.
 A blockchain-only installation generates:
 
 - `.env.integration`: RPC URL, chain ID, contract addresses and ABIs;
-- `.env.integration.secrets`: Admin and Minter signer material, mode `0600`.
+- `DARK_PLATFORM_ADDRESS`, when `SIGNER_MODE=shared` is active.
 
-Copy both directly to each apps server through protected channels. Storage
-nodes do not need blockchain handoff files or signer keys. Production requires
-distinct Admin and Minter signers.
+Production V1 uses one externally provisioned `PLATFORM_PRIVATE_KEY_FILE` on
+Blockchain and Apps. The private key is not placed in either handoff file.
+Copy only the public `.env.integration` from Blockchain to Apps. Legacy profiles
+may still use `.env.integration.secrets` for backward compatibility. Storage
+nodes need neither blockchain handoff nor the platform signer.
 
 ## Store API durability
 
@@ -189,11 +207,11 @@ The deployer calculates policy from topology size:
 
 | Topology | Cluster min/max | Successful Store API write |
 | --- | --- | --- |
-| one site | `1/2` | at least 1 pinned peer in 1 site |
-| one strict site | `2/2` | 2 pinned peers in 1 site |
-| two or more sites | `3/(2 × sites)` | at least 3 pinned peers in 2 sites |
+| developer single node | `1/1` | 1 pinned peer |
+| one site | `1/2` | 1 pinned peer; purge after 2 local copies |
+| two or more sites | `3/(2 × sites)` | 1 pinned peer; purge after 2 local and 1 remote copies |
 
-Store API returns `503` when it creates a CID but cannot observe this quorum
+Store API returns `503` when it creates a CID but cannot observe one pinned peer
 before timeout. Minter must not publish that CID on-chain until a retry succeeds.
 
 Health endpoints:
@@ -223,9 +241,10 @@ python3 stop.py
 # Rebuild one application component
 python3 install.py rebuild store-api
 
-# Record or verify exact component commits
-python3 install.py lock
-python3 install.py lock --check
+# Inspect one rendered production host bundle
+python3 install.py host validate --config dist/dark-site-a-1/hosts/site-a-apps-1/host.json
+python3 install.py host plan --config dist/dark-site-a-1/hosts/site-a-apps-1/host.json
+python3 install.py host status --config dist/dark-site-a-1/hosts/site-a-apps-1/host.json --json
 ```
 
 `clean.py` preserves the named Kubo and Cluster volumes even when cleaning the

@@ -1,6 +1,13 @@
 # Production installation: one blockchain, one apps, and two IPFS servers
 
-This runbook installs the current `main` version on four
+> **Current workflow:** use the canonical inventory and rendered host bundles
+> described in [Production deployment bundles](production-deployment-bundles.md).
+> The manual `.env` examples below remain useful as a network worksheet, but
+> Production validation now requires `SIGNER_MODE=shared` and
+> `DEPLOYER_BRANCH` matching the current checkout. Component versions follow
+> the `*_REPOSITORY_BRANCH` values in `.env`.
+
+This runbook installs one branch-configured deployment on four
 physical or virtual servers in one private local network:
 
 - one blockchain server;
@@ -231,9 +238,9 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-The expected branch is `main`. Before a formal production
-rollout, prefer a reviewed release tag or an immutable commit instead of a
-floating feature branch. Keep the same deployer revision on all four servers.
+Set `DEPLOYER_BRANCH` to the branch selected for the rollout and check out that
+same branch on all four servers. Keep the component branch assignments in
+`.env` identical for hosts that install the same role.
 
 ## 7. Create the shared storage topology
 
@@ -245,7 +252,6 @@ does not consume this file.
 {
   "version": 1,
   "cluster_name": "dark-production",
-  "strict_single_site": false,
   "sites": [
     {
       "id": "site-a",
@@ -270,10 +276,9 @@ does not consume this file.
 }
 ```
 
-Do not set `development_single_node` in production. Do not use
-`strict_single_site: true` for the requested availability behavior: strict mode
-would require both peers before accepting a write and would therefore stop
-minting when either IPFS server fails.
+Do not set `development_single_node` in production. Store API always confirms
+one pin for the foreground write; the reconciler retains PostgreSQL payloads
+until both local peers hold L1 and L2.
 
 Validate the copied files without printing secrets:
 
@@ -695,66 +700,26 @@ Confirm:     Y
 The installer reads both handoff files, generates a local Store API configured
 with `10.20.30.31` and `10.20.30.32`, and starts each selected application.
 
-## 14. Current signer compatibility requirement
+## 14. Shared platform signer
 
-Do not skip this section for the current branch.
+Production V1 explicitly uses one platform signer because the current Authority
+contract and authority-wallet encryption flow require Admin capability during
+minting. Configure only an external key file:
 
-The production validator requires distinct `ADMIN_PRIVATE_KEY` and
-`MINTER_PRIVATE_KEY` values. However, the current `Authority` contract restricts
-`get_authority_key()` to the contract Admin, and Core Library encrypts authority
-wallet keys with the Admin key. Consequently, a truly separate Minter key
-cannot yet retrieve or decrypt those authority wallets.
-
-For end-to-end minting on this version, the Minter component must temporarily
-use the Admin signer after installation. This weakens role separation: a
-compromised Minter then has Admin capability. Restrict apps-server access and
-plan a code migration to delegated contract access plus a separate encryption
-key before treating signer separation as complete.
-
-Apply the compatibility override on the apps server without printing the key:
-
-```bash
-cd /opt/dark-deployer
-python3.12 - <<'PY'
-from pathlib import Path
-
-def read_env(path):
-    values = {}
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, value = line.split('=', 1)
-        values[key] = value
-    return values
-
-secrets = read_env(Path('.env.integration.secrets'))
-admin = secrets['DARK_ADMIN_PRIVATE_KEY']
-target = Path('components/services/dark-core-minter-api/.env.integration')
-lines = target.read_text().splitlines()
-updated = []
-found = False
-for line in lines:
-    if line.startswith('DARK_ADMIN_PRIVATE_KEY='):
-        updated.append(f'DARK_ADMIN_PRIVATE_KEY={admin}')
-        found = True
-    else:
-        updated.append(line)
-if not found:
-    updated.append(f'DARK_ADMIN_PRIVATE_KEY={admin}')
-target.write_text('\n'.join(updated) + '\n')
-target.chmod(0o600)
-print('Minter compatibility signer applied without displaying secret material.')
-PY
-
-docker compose \
-  -f components/services/dark-core-minter-api/docker-compose.yml \
-  --project-directory components/services/dark-core-minter-api \
-  up -d --force-recreate
+```ini
+SIGNER_MODE=shared
+PLATFORM_PRIVATE_KEY_FILE=/opt/dark-deployer/secrets/platform.key
 ```
 
-Reapply and retest this override after any Minter rebuild. Do not copy the
-modified component `.env.integration` off the apps server.
+The installer maps that key to deployment, Admin and Minter without writing it
+to `.env` or a handoff. Blockchain publishes only `DARK_PLATFORM_ADDRESS`, and
+Apps rejects a platform key that derives a different address. The former manual
+Minter compatibility override is no longer required.
+
+This is a deliberate V1 trust model, not signer isolation. Compromise of the
+Apps signer grants Admin capability. Keep the file at mode `0600`, restrict
+Apps access to the VPN, and treat separate signers as a later contract and key
+management redesign.
 
 ## 15. Acceptance tests
 
@@ -865,18 +830,19 @@ Cluster volumes, including node identity and local content.
 
 ## 17. Operations and backups
 
-### 17.1 Record immutable component revisions
+### 17.1 Record component branches
 
 After each host is accepted:
 
 ```bash
 cd /opt/dark-deployer
-python3.12 install.py lock
-cp components.lock.json "/approved/inventory/$(hostname)-components.lock.json"
+rg '_REPOSITORY_BRANCH=' .env \
+  > "/approved/inventory/$(hostname)-component-branches.txt"
 ```
 
-Store the inventory outside the checkout. Each role installs a different subset
-of components, so lock files naturally differ by host.
+Store this branch inventory outside the checkout. Each role installs a
+different subset of components, so the recorded branch lists naturally differ
+by host.
 
 ### 17.2 Minimum backups
 
@@ -955,9 +921,9 @@ version limitation, not an IPFS failure.
 
 ### Store API write health fails with one IPFS node running
 
-Confirm `strict_single_site` is `false`, both topology peers belong to `site-a`,
-and the generated Store API environment contains write minimums of one peer and
-one site.
+Confirm both topology peers belong to `site-a` and the generated Store API
+environment contains `IPFS_CLUSTER_LOCAL_SITE_ID=site-a`. Check that at least
+one local Kubo, Cluster REST and Cluster Proxy endpoint is reachable.
 
 ### Safe restart
 

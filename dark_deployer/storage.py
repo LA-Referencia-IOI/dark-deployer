@@ -32,12 +32,10 @@ class StoragePeer:
 
 @dataclass(frozen=True)
 class ReplicationPolicy:
-    """Cluster allocation and Store API durability thresholds."""
+    """Cluster allocation thresholds."""
 
     replication_min: int
     replication_max: int
-    write_min_peers: int
-    write_min_sites: int
 
 
 @dataclass(frozen=True)
@@ -46,7 +44,6 @@ class StorageTopology:
 
     cluster_name: str
     peers: tuple[StoragePeer, ...]
-    strict_single_site: bool = False
     development_single_node: bool = False
 
     @property
@@ -57,11 +54,10 @@ class StorageTopology:
     def policy(self) -> ReplicationPolicy:
         expected = len(self.peers)
         if self.development_single_node:
-            return ReplicationPolicy(1, 1, 1, 1)
+            return ReplicationPolicy(1, 1)
         if len(self.sites) == 1:
-            minimum = 2 if self.strict_single_site else 1
-            return ReplicationPolicy(minimum, expected, minimum, 1)
-        return ReplicationPolicy(3, expected, 3, 2)
+            return ReplicationPolicy(1, expected)
+        return ReplicationPolicy(3, expected)
 
     def peer(self, peer_id: str) -> StoragePeer:
         for peer in self.peers:
@@ -219,17 +215,22 @@ def load_storage_topology(path: Path) -> StorageTopology:
                 )
             )
 
-    strict = document.get("strict_single_site", False)
-    if not isinstance(strict, bool):
-        raise StorageTopologyError("strict_single_site must be a boolean")
-    if development_single_node and strict:
-        raise StorageTopologyError(
-            "development_single_node cannot require strict_single_site replication"
-        )
+    # Compatibility with topology files generated before the one-pin write
+    # policy.  The old availability mode (`false`) already has the same
+    # foreground-write behavior, so it is safe to ignore.  Silently accepting
+    # `true` would weaken an explicitly requested durability guarantee.
+    if "strict_single_site" in document:
+        legacy_strict = document["strict_single_site"]
+        if not isinstance(legacy_strict, bool):
+            raise StorageTopologyError("strict_single_site must be a boolean")
+        if legacy_strict:
+            raise StorageTopologyError(
+                "strict_single_site=true is no longer supported; remove the field "
+                "to use one-pin write confirmation"
+            )
     return StorageTopology(
         cluster_name,
         tuple(peers),
-        strict,
         development_single_node,
     )
 
@@ -273,17 +274,14 @@ def node_environment(
 
 
 def store_api_environment(topology: StorageTopology, site_id: str) -> dict[str, str]:
-    """Generate local endpoint failover and global write quorum settings."""
+    """Generate local endpoint pools and the site used for derived purge policy."""
     endpoints = topology.local_endpoints(site_id)
-    policy = topology.policy
     return {
         "IPFS_API_URLS_JSON": json.dumps(endpoints["ipfs"], separators=(",", ":")),
         "IPFS_CLUSTER_API_URLS_JSON": json.dumps(endpoints["cluster"], separators=(",", ":")),
         "IPFS_CLUSTER_PROXY_API_URLS_JSON": json.dumps(endpoints["proxy"], separators=(",", ":")),
         "IPFS_CLUSTER_PEER_SITES_JSON": json.dumps(topology.peer_sites(), separators=(",", ":")),
-        "IPFS_CLUSTER_EXPECTED_PEERS": str(len(topology.peers)),
-        "IPFS_CLUSTER_WRITE_MIN_PEERS": str(policy.write_min_peers),
-        "IPFS_CLUSTER_WRITE_MIN_SITES": str(policy.write_min_sites),
+        "IPFS_CLUSTER_LOCAL_SITE_ID": site_id,
     }
 
 

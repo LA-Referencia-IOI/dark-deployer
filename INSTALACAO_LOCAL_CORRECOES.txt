@@ -1,0 +1,39 @@
+CORREÇÕES NECESSÁRIAS PARA A INSTALAÇÃO LOCAL
+=============================================
+
+1. Compatibilidade da topologia IPFS
+-------------------------------------
+
+A metodologia nova sempre confirma a escrita depois do primeiro peer em
+estado PINNED. Por isso, strict_single_site deixou de ser uma opção válida de
+garantia.
+
+Para manter compatibilidade com arquivos de configuração antigos:
+
+- strict_single_site: false é aceito e ignorado;
+- strict_single_site: true continua sendo rejeitado;
+- configurações novas devem omitir o campo.
+
+Esse comportamento foi aplicado tanto à leitura da topologia quanto à
+validação dos inventários de deployment, portanto vale para developer/local,
+sandbox e production.
+
+2. Clone do dark-core-lib
+-------------------------
+
+O instalador usa exclusivamente a URL e a branch indicadas no arquivo .env.
+O repositório é clonado diretamente nessa branch; em instalações existentes,
+o checkout muda para a branch configurada e avança somente por fast-forward.
+Não há fetch adicional de SHA nem checkout em detached HEAD.
+
+3. Validações realizadas
+-------------------------
+
+- a instalação local foi retomada e concluída;
+- todos os componentes instalados usam as branches configuradas no .env;
+- os containers de blockchain, IPFS, Store API, Admin, Minter e Resolver
+  ficaram ativos;
+- os testes do deployer para instalação, topologia e deployment passaram.
+
+Essas mudanças não exigiram contrato blockchain novo. Elas alteram o
+deployer, a configuração e o fluxo de persistência/reconciliação IPFS.

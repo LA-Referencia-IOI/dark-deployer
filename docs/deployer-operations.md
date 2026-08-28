@@ -64,7 +64,8 @@ The installer keeps operator configuration separate from deployment state:
 | --- | --- | --- |
 | `.env` | Profile, topology, repository URLs, setup options | Normal source |
 | `.env.integration` | Public deployed state: RPC, chain, contracts, ABI and Store API | Authoritative for apps-only and remote handoffs |
-| `.env.integration.secrets` | Admin and minter signer handoff | Authoritative for apps-only and remote handoffs |
+| `PLATFORM_PRIVATE_KEY_FILE` | Shared Production V1 signer, provisioned outside the deployer | Authoritative in `SIGNER_MODE=shared` |
+| `.env.integration.secrets` | Legacy Admin and Minter signer handoff | Backward compatibility only |
 | `*_PRIVATE_KEY_FILE` | Raw secret mounted by an external secret manager | Preferred over legacy master fallback |
 
 Blank values from `.env.example` never shadow a populated handoff. When an
@@ -77,7 +78,7 @@ for compatibility and produce a warning. Regenerate them as soon as possible.
 
 ## 3. Signer roles
 
-The installer recognizes three roles:
+Legacy profiles recognize three separate role variables:
 
 | Role | Direct variable | File variable | Used by |
 | --- | --- | --- | --- |
@@ -88,12 +89,14 @@ The installer recognizes three roles:
 Secret files contain the raw hexadecimal key, optionally prefixed with `0x`.
 Relative paths are resolved from the deployer repository root.
 
-`MASTER_PRIVATE_KEY` remains a compatibility fallback and is populated by a
-local `dark-env` installation. Production requires explicit, distinct admin
-and minter keys. Those accounts must also be authorized on-chain; validation
-can verify key shape and separation, but cannot infer contract permissions.
+`MASTER_PRIVATE_KEY` remains a compatibility fallback. Production V1 instead
+requires `SIGNER_MODE=shared` and one absolute `PLATFORM_PRIVATE_KEY_FILE` with
+mode `0600`. The installer derives the public platform address and resolves the
+deployer, Admin and Minter roles from that one file.
 
-The public handoff never contains a private key. The secret handoff contains:
+The Production public handoff never contains a private key. It contains the
+derived `DARK_PLATFORM_ADDRESS`; Apps checks this against its independently
+provisioned key file. The legacy secret handoff may contain:
 
 ```ini
 DARK_ADMIN_PRIVATE_KEY=0x...
@@ -103,37 +106,35 @@ DARK_MINTER_PRIVATE_KEY=0x...
 Both handoff files are ignored by Git. Sensitive files and generated service
 environment files are written atomically with mode `0600`.
 
-## 4. Reproducible component versions
+## 4. Component branches
 
-Without a lock, existing repositories are fetched, switched to their configured
-branch and advanced only with a fast-forward merge. Wrong origins, non-Git
-target directories, divergent branches and conflicting local changes fail
-instead of being overwritten.
+Component versions are selected only by the `*_REPOSITORY_BRANCH` values in
+`.env`. Existing repositories are fetched, switched to the configured branch
+and advanced only with a fast-forward merge. Wrong origins, non-Git target
+directories, divergent branches and conflicting local changes fail instead of
+being overwritten.
 
-After testing a complete stack, record every installed component commit:
+If a configured component branch is not published by a reachable remote, the
+installer prints a warning and uses `main`. Connection, authentication and
+other repository failures are not silently replaced by this fallback.
 
-```bash
-python3 install.py lock
-git add components.lock.json
-git commit -m "Lock tested dARK component versions"
+For example:
+
+```ini
+PRODUCTION_MINTER_REPOSITORY_BRANCH=codex/production-deployment-readiness
+PRODUCTION_IPFS_REPOSITORY_BRANCH=codex/global-ipfs-cluster
 ```
 
-When `components.lock.json` exists, installation checks out the exact recorded
-commit in detached-HEAD mode. Verify an installed server against the lock with:
+Production also requires `DEPLOYER_BRANCH` to match the current deployer
+checkout. No component commit lock or detached-HEAD checkout is used.
 
-```bash
-python3 install.py lock --check
-```
+To change or upgrade a component:
 
-To upgrade intentionally:
+1. Change its `*_REPOSITORY_BRANCH` value in `.env`.
+2. Run the desired install or rebuild with `--pull`.
+3. Execute the integration tests.
 
-1. Move or temporarily remove the existing lock.
-2. Run the desired installs/rebuilds with `--pull`.
-3. Execute integration tests.
-4. Regenerate and commit `components.lock.json`.
-
-Repository URLs containing credentials are redacted from logs and stored in
-the lock without HTTP user-info.
+Repository URLs containing credentials are redacted from logs.
 
 ## 5. Component setup commands
 
@@ -161,11 +162,19 @@ Useful flags:
 
 | Flag | Effect |
 | --- | --- |
-| `--pull` | Update or clone before rebuilding; respects `components.lock.json` |
+| `--pull` | Update or clone from the repository branch configured in `.env` |
 | `--no-cache` | Disable Docker build cache |
 | `--no-start` | Build and generate artifacts without starting containers |
 | `--skip-migrate` | Skip the normally automatic minter migration |
 | `--with-dependents` | Rebuild admin, resolver and minter after core-lib |
+
+For direct ARK imports without metadata and NAAN authorization audits, see
+[Direct ARK Import and NAAN Audit](minter-direct-ark-import.md). Those commands
+require a Minter revision that includes their CLI modules; update
+the Minter branch in `.env` intentionally before rebuilding the component.
+
+For the required DARK 2 `2MM` shoulder format and its minter-code assignment
+rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).
 
 ## 7. Runtime lifecycle
 
@@ -212,6 +221,6 @@ python3 -m unittest discover -s tests -v
 ```
 
 Unit tests do not replace a real Docker deployment test. Before promotion,
-exercise developer, sandbox and production topologies with the actual component
-repositories and retain the generated component lock as the tested bill of
-materials.
+exercise developer, sandbox and production topologies with the component
+branches configured in `.env` and retain those branch assignments with the
+deployment record.

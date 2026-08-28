@@ -224,6 +224,64 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(secrets["DARK_MINTER_PRIVATE_KEY"], "0xprivate")
         self.assertEqual(self.secret_path.stat().st_mode & 0o777, 0o600)
 
+    def test_shared_signer_handoff_contains_only_platform_address(self):
+        key_path = Path(self.temporary.name) / "platform.key"
+        key_path.write_text("33" * 32 + "\n")
+        key_path.chmod(0o600)
+        env = {
+            "TYPE": "production",
+            "SIGNER_MODE": "shared",
+            "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            "RPC_URL": "http://localhost:8545",
+            "CHAIN_ID": "2025",
+        }
+        with (
+            mock.patch.object(
+                installer,
+                "resolve_contract_addresses",
+                return_value=("0xdark", "0xauthority"),
+            ),
+            mock.patch.object(
+                installer,
+                "read_deployed_contract_abis",
+                return_value=("[]", "[]"),
+            ),
+        ):
+            installer._generate_root_env_integration_blockchain(env)
+
+        public = installer.load_optional_env(self.public_path)
+        self.assertRegex(public["DARK_PLATFORM_ADDRESS"], r"^0x[0-9A-Fa-f]{40}$")
+        self.assertFalse(self.secret_path.exists())
+
+    def test_profile_minter_shoulder_is_written_to_minter_integration_env(self):
+        minter_path = Path(self.temporary.name) / "minter"
+        minter_path.mkdir()
+        (minter_path / ".env.example").write_text(
+            "MINTER_SHOULDER=200\nMETADATA_STORAGE_TYPE=store_api\n"
+        )
+        env = {
+            "TYPE": "production",
+            "PRODUCTION_MINTER_SHOULDER": "201",
+            "CHAIN_ID": "2025",
+            "RPC_URL": "http://localhost:8545",
+        }
+
+        with mock.patch.object(
+            installer,
+            "resolve_contract_addresses",
+            return_value=("0xdark", "0xauthority"),
+        ):
+            installer.generate_minter_env_integration(minter_path, env)
+
+        generated = installer.load_optional_env(minter_path / ".env.integration")
+        self.assertEqual(generated["MINTER_SHOULDER"], "201")
+
+    def test_invalid_profile_minter_shoulder_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            installer.resolve_minter_shoulder(
+                "PRODUCTION", {"PRODUCTION_MINTER_SHOULDER": "001"}
+            )
+
     def test_secure_writer_replaces_permissive_mode(self):
         target = Path(self.temporary.name) / "service.env"
         target.write_text("OLD=value\n")
@@ -270,9 +328,10 @@ class IntegrationTests(unittest.TestCase):
 
         generated = installer.load_optional_env(store_path / ".env.integration")
         self.assertEqual(len(json.loads(generated["IPFS_API_URLS_JSON"])), 2)
-        self.assertEqual(generated["IPFS_CLUSTER_EXPECTED_PEERS"], "4")
-        self.assertEqual(generated["IPFS_CLUSTER_WRITE_MIN_PEERS"], "3")
-        self.assertEqual(generated["IPFS_CLUSTER_WRITE_MIN_SITES"], "2")
+        self.assertEqual(generated["IPFS_CLUSTER_LOCAL_SITE_ID"], "site-a")
+        self.assertNotIn("IPFS_CLUSTER_EXPECTED_PEERS", generated)
+        self.assertNotIn("IPFS_CLUSTER_WRITE_MIN_PEERS", generated)
+        self.assertNotIn("IPFS_CLUSTER_WRITE_MIN_SITES", generated)
 
 
 class ValidationTests(unittest.TestCase):
@@ -566,26 +625,73 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             installer.validate_install_configuration("SANDBOX", env)
 
-    def test_production_requires_distinct_application_signers(self):
-        shared_key = "22" * 32
-        env = {
-            "TYPE": "production",
-            "PRODUCTION_INSTALL_COMPONENTS": "apps",
-            "RPC_URL": "https://rpc.example",
-            "CHAIN_ID": "2025",
-            "PRODUCTION_DARK_CONTRACT_ADDRESS": "0x" + "1" * 40,
-            "PRODUCTION_AUTHORITY_CONTRACT_ADDRESS": "0x" + "2" * 40,
-            "PRODUCTION_STORE_API_URL": "https://store.example",
-            "PRODUCTION_STORAGE_SITE_ID": "site-a",
-            "ADMIN_PRIVATE_KEY": shared_key,
-            "MINTER_PRIVATE_KEY": shared_key,
-        }
-        topology = installer.load_storage_topology(PROJECT_ROOT / "storage-topology.example.json")
-        with (
-            mock.patch.object(installer, "configured_storage_topology", return_value=topology),
-            self.assertRaises(SystemExit),
-        ):
-            installer.validate_install_configuration("PRODUCTION", env)
+    def test_production_accepts_explicit_shared_platform_signer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            key_path = Path(temporary) / "platform.key"
+            key_path.write_text("22" * 32 + "\n")
+            key_path.chmod(0o600)
+            env = {
+                "TYPE": "production",
+                "PRODUCTION_INSTALL_COMPONENTS": "apps",
+                "RPC_URL": "https://rpc.example",
+                "CHAIN_ID": "2025",
+                "PRODUCTION_DARK_CONTRACT_ADDRESS": "0x" + "1" * 40,
+                "PRODUCTION_AUTHORITY_CONTRACT_ADDRESS": "0x" + "2" * 40,
+                "PRODUCTION_STORE_API_URL": "https://store.example",
+                "PRODUCTION_STORAGE_SITE_ID": "site-a",
+                "SIGNER_MODE": "shared",
+                "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            }
+            topology = installer.load_storage_topology(
+                PROJECT_ROOT / "storage-topology.example.json"
+            )
+            with (
+                mock.patch.object(
+                    installer, "configured_storage_topology", return_value=topology
+                ),
+                mock.patch.object(installer, "validate_production_release"),
+            ):
+                installer.validate_install_configuration("PRODUCTION", env)
+
+        self.assertRegex(env["PLATFORM_ADDRESS"], r"^0x[0-9A-Fa-f]{40}$")
+
+    def test_production_release_requires_matching_deployer_branch(self):
+        result = mock.Mock(returncode=0, stdout="release-branch\n")
+        with mock.patch.object(installer.subprocess, "run", return_value=result):
+            installer.validate_production_release(
+                "PRODUCTION", {"DEPLOYER_BRANCH": "release-branch"}
+            )
+            with self.assertRaises(SystemExit):
+                installer.validate_production_release(
+                    "PRODUCTION", {"DEPLOYER_BRANCH": "other-branch"}
+                )
+
+        with self.assertRaises(SystemExit):
+            installer.validate_production_release("PRODUCTION", {})
+
+    def test_shared_signer_preseeds_genesis_and_rejects_existing_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            key_path = root / "platform.key"
+            key_path.write_text("44" * 32 + "\n")
+            key_path.chmod(0o600)
+            target = root / "dark-env"
+            env = {
+                "TYPE": "production",
+                "SIGNER_MODE": "shared",
+                "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            }
+
+            installer.prepare_dark_env_platform_wallet(str(target), env)
+            address_file = target / "config" / "master-wallet"
+            self.assertEqual(address_file.read_text().strip(), env["PLATFORM_ADDRESS"])
+            self.assertEqual(address_file.stat().st_mode & 0o777, 0o600)
+
+            (target / "config" / "genesis.json").write_text(json.dumps({
+                "alloc": {"0x" + "0" * 40: {"balance": "1"}}
+            }))
+            with self.assertRaises(SystemExit):
+                installer.prepare_dark_env_platform_wallet(str(target), env)
 
 
 class GitInstallerTests(unittest.TestCase):
@@ -628,48 +734,31 @@ class GitInstallerTests(unittest.TestCase):
             self.assertEqual(branch, "main")
             self.assertEqual((target / "version.txt").read_text(), "two\n")
 
-    def test_component_lock_checks_out_exact_commit(self):
+    def test_existing_checkout_switches_to_a_branch_not_previously_tracked(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             remote = root / "remote.git"
             source = root / "source"
             target = root / "target"
-            lock_path = root / "components.lock.json"
 
             self.git("init", "--bare", str(remote))
             self.git("init", "-b", "main", str(source))
             self.git("config", "user.email", "tests@example.invalid", cwd=source)
             self.git("config", "user.name", "Installer Tests", cwd=source)
-            (source / "version.txt").write_text("locked\n")
+            (source / "version.txt").write_text("main\n")
             self.git("add", "version.txt", cwd=source)
-            self.git("commit", "-m", "locked", cwd=source)
-            locked_commit = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=source,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
+            self.git("commit", "-m", "main", cwd=source)
             self.git("remote", "add", "origin", str(remote), cwd=source)
             self.git("push", "-u", "origin", "main", cwd=source)
 
-            (source / "version.txt").write_text("newer\n")
-            self.git("commit", "-am", "newer", cwd=source)
-            self.git("push", cwd=source)
-            lock_path.write_text(json.dumps({
-                "version": 1,
-                "components": {
-                    "test": {
-                        "repository": str(remote),
-                        "commit": locked_commit,
-                    }
-                },
-            }))
+            self.git("switch", "-c", "release-candidate", cwd=source)
+            (source / "version.txt").write_text("release branch\n")
+            self.git("commit", "-am", "release branch", cwd=source)
+            self.git("push", "-u", "origin", "release-candidate", cwd=source)
 
-            with mock.patch.object(installer, "COMPONENT_LOCK_PATH", lock_path):
-                installer.install_repo("test", str(remote), "main", str(target))
+            installer.install_repo("test", str(remote), "main", str(target))
+            installer.install_repo("test", str(remote), "release-candidate", str(target))
 
-            self.assertEqual((target / "version.txt").read_text(), "locked\n")
             branch = subprocess.run(
                 ["git", "branch", "--show-current"],
                 cwd=target,
@@ -677,7 +766,71 @@ class GitInstallerTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            self.assertEqual(branch, "")
+            self.assertEqual(branch, "release-candidate")
+            self.assertEqual((target / "version.txt").read_text(), "release branch\n")
+
+    def test_configured_branch_controls_new_clone(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            remote = root / "remote.git"
+            source = root / "source"
+            target = root / "target"
+
+            self.git("init", "--bare", str(remote))
+            self.git("init", "-b", "main", str(source))
+            self.git("config", "user.email", "tests@example.invalid", cwd=source)
+            self.git("config", "user.name", "Installer Tests", cwd=source)
+            (source / "version.txt").write_text("main\n")
+            self.git("add", "version.txt", cwd=source)
+            self.git("commit", "-m", "main", cwd=source)
+            self.git("remote", "add", "origin", str(remote), cwd=source)
+            self.git("push", "-u", "origin", "main", cwd=source)
+
+            self.git("switch", "-c", "release-candidate", cwd=source)
+            (source / "version.txt").write_text("release branch\n")
+            self.git("commit", "-am", "release branch", cwd=source)
+            self.git("push", "-u", "origin", "release-candidate", cwd=source)
+
+            installer.install_repo("test", str(remote), "release-candidate", str(target))
+
+            self.assertEqual((target / "version.txt").read_text(), "release branch\n")
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=target,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(branch, "release-candidate")
+
+    def test_missing_configured_branch_falls_back_to_main(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            remote = root / "remote.git"
+            source = root / "source"
+            target = root / "target"
+
+            self.git("init", "--bare", str(remote))
+            self.git("init", "-b", "main", str(source))
+            self.git("config", "user.email", "tests@example.invalid", cwd=source)
+            self.git("config", "user.name", "Installer Tests", cwd=source)
+            (source / "version.txt").write_text("main\n")
+            self.git("add", "version.txt", cwd=source)
+            self.git("commit", "-m", "main", cwd=source)
+            self.git("remote", "add", "origin", str(remote), cwd=source)
+            self.git("push", "-u", "origin", "main", cwd=source)
+
+            installer.install_repo("test", str(remote), "missing-branch", str(target))
+
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=target,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(branch, "main")
+            self.assertEqual((target / "version.txt").read_text(), "main\n")
 
 
 if __name__ == "__main__":
