@@ -19,6 +19,10 @@ and Cluster traffic travels over the VPN; Store APIs do not replicate to or
 control one another. See [IPFS architecture](docs/ipfs-architecture.md) for the
 failure model and design rationale.
 
+For a single technical entry point covering the complete system, APIs, site
+layout, deployment and operations, see the
+[dARK technical reference](docs/dark-technical-reference.md).
+
 The `developer` profile has local-only modes: one lightweight peer or two
 independent peers simulating site HA on the same machine as Store API. The
 single-peer topology is not accepted by `sandbox` or `production`.
