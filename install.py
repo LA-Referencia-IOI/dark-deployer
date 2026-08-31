@@ -2845,7 +2845,13 @@ def install_dashboard(prefix: str, env: dict) -> None:
 
     branch   = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
-    commands = get_commands(env, commands_key, ["python3 install.py"])
+    default_commands = ["python3 install.py"]
+    commands = get_commands(env, commands_key, default_commands)
+    # get_commands only reaches its default when the env var is unset; an
+    # explicit empty ``..._DASHBOARD_COMMANDS_JSON=[]`` (shipped by older
+    # .env.example files) would otherwise silently skip the dashboard setup.
+    if not commands:
+        commands = list(default_commands)
     target   = "components/frontend/dashboard-web"
 
     install_repo(name="dashboard-web", repo_url=repo_url, branch=branch, target_dir=target)
