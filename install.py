@@ -406,6 +406,24 @@ def ensure_dark_net() -> None:
     print("[OK] Docker network 'dark-net' created.")
 
 
+def apps_probe_host() -> str:
+    """Host the deployer uses to reach apps-tier services for health checks.
+
+    Compose publishes apps ports on ``APPS_BIND_ADDRESS`` when the production
+    bundle sets it (a private VPN interface); an unset value or ``0.0.0.0``
+    both mean the service is reachable on loopback.
+    """
+    value = os.environ.get("APPS_BIND_ADDRESS", "").strip()
+    if not value or value == "0.0.0.0":
+        return "127.0.0.1"
+    return value
+
+
+def apps_health_url(port: int) -> str:
+    """Health endpoint URL for an apps-tier service on the probe host."""
+    return f"http://{apps_probe_host()}:{port}/health"
+
+
 def compose_up_stack(
     compose_dir: Path,
     stack_name: str,
@@ -440,11 +458,11 @@ def print_install_summary(prefix: str, env: dict) -> None:
     rpc_public_url = env.get("RPC_PUBLIC_URL", rpc_url).strip() or rpc_url
     explorer_port = env.get("EXPLORER_PORT", "25000").strip() or "25000"
     explorer_url = f"http://localhost:{explorer_port}"
-    apps_probe_host = env.get("APPS_BIND_ADDRESS", "127.0.0.1").strip() or "127.0.0.1"
-    admin_url = f"http://{apps_probe_host}:8000"
-    resolver_url = f"http://{apps_probe_host}:8002"
-    store_api_url = f"http://{apps_probe_host}:8003"
-    minter_url = f"http://{apps_probe_host}:8001"
+    probe_host = apps_probe_host()
+    admin_url = f"http://{probe_host}:8000"
+    resolver_url = f"http://{probe_host}:8002"
+    store_api_url = f"http://{probe_host}:8003"
+    minter_url = f"http://{probe_host}:8001"
 
     def advertised(name: str, local_url: str) -> str:
         return env.get(f"{prefix}_{name}_PUBLIC_URL", local_url).strip() or local_url
@@ -2076,7 +2094,7 @@ def start_minter_stack(minter_path: Path) -> None:
     print("[INFO] Starting minter Docker stack...")
     run_compose_up_detached("docker compose up -d", cwd=str(minter_path))
     wait_for_http_ready(
-        "http://localhost:8001/health",
+        apps_health_url(8001),
         service_name="minter",
     )
 
@@ -2086,7 +2104,7 @@ def start_admin_api_stack(admin_api_path: Path) -> None:
     compose_up_stack(
         compose_dir=admin_api_path,
         stack_name="admin API",
-        health_url="http://localhost:8000/health",
+        health_url=apps_health_url(8000),
     )
 
 
@@ -2095,7 +2113,7 @@ def start_resolver_api_stack(resolver_api_path: Path) -> None:
     compose_up_stack(
         compose_dir=resolver_api_path,
         stack_name="resolver API",
-        health_url="http://localhost:8002/health",
+        health_url=apps_health_url(8002),
     )
 
 
@@ -2104,7 +2122,7 @@ def start_store_api_stack(store_api_path: Path) -> None:
     compose_up_stack(
         compose_dir=store_api_path,
         stack_name="store API",
-        health_url="http://localhost:8003/health",
+        health_url=apps_health_url(8003),
     )
 
 
@@ -2135,7 +2153,7 @@ SERVICE_REBUILD_COMPONENTS = {
         "display": "admin API",
         "path": Path("components/services/dark-core-admin-api"),
         "services": ["admin-api"],
-        "health_url": "http://localhost:8000/health",
+        "health_port": 8000,
         "repo_suffix": "CORE_ADMIN_API",
         "env_generator": generate_admin_api_env_integration,
     },
@@ -2143,7 +2161,7 @@ SERVICE_REBUILD_COMPONENTS = {
         "display": "resolver API",
         "path": Path("components/services/dark-core-resolver-api"),
         "services": ["resolver-api"],
-        "health_url": "http://localhost:8002/health",
+        "health_port": 8002,
         "repo_suffix": "RESOLVER",
         "env_generator": generate_resolver_api_env_integration,
     },
@@ -2151,7 +2169,7 @@ SERVICE_REBUILD_COMPONENTS = {
         "display": "store API",
         "path": Path("components/services/dark-store-api"),
         "services": ["store-api"],
-        "health_url": "http://localhost:8003/health",
+        "health_port": 8003,
         "repo_suffix": "STORE_API",
         "env_generator": generate_store_api_env_integration,
     },
@@ -2159,7 +2177,7 @@ SERVICE_REBUILD_COMPONENTS = {
         "display": "minter",
         "path": Path("components/services/dark-core-minter-api"),
         "services": [],
-        "health_url": "http://localhost:8001/health",
+        "health_port": 8001,
         "repo_suffix": "MINTER",
         "env_generator": generate_minter_env_integration,
     },
@@ -2290,7 +2308,7 @@ def rebuild_service_component(
         print(f"[INFO] Starting {display}...")
         run_compose_up_detached(f"docker compose up -d {service_names}", cwd=str(component_path))
 
-    wait_for_http_ready(str(spec["health_url"]), service_name=display)
+    wait_for_http_ready(apps_health_url(int(spec["health_port"])), service_name=display)
     print(f"[OK] Rebuild complete for {display}.")
 
 
