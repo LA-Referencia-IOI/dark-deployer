@@ -62,6 +62,20 @@ class CommandParsingTests(unittest.TestCase):
         }
         self.assertEqual(installer.get_commands(env, "TEST_COMMANDS"), ["new | pipeline"])
 
+    def test_dashboard_setup_falls_back_when_commands_json_is_empty(self):
+        env = {
+            "SANDBOX_DASHBOARD_REPOSITORY_URL": "git@github.com:example/dashboard-web.git",
+            "SANDBOX_DASHBOARD_COMMANDS_JSON": "[]",
+        }
+        with (
+            mock.patch.object(installer, "install_repo"),
+            mock.patch.object(installer, "run_commands") as run_commands,
+        ):
+            installer.install_dashboard("SANDBOX", env)
+
+        run_commands.assert_called_once()
+        self.assertEqual(run_commands.call_args.args[0], ["python3 install.py"])
+
     def test_all_example_json_commands_are_valid(self):
         env = installer.parse_env_file(PROJECT_ROOT / ".env.example")
         for key, value in env.items():
