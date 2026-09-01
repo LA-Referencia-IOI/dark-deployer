@@ -346,7 +346,7 @@ Run on `10.20.30.10` as `dark`:
 
 ```bash
 cd /opt/dark-deployer
-git clone --branch master \
+git clone --branch main \
   https://github.com/LA-Referencia-IOI/dark-env \
   components/blockchain/dark-env
 cd components/blockchain/dark-env
@@ -420,7 +420,7 @@ MINTER_PRIVATE_KEY_FILE=/opt/dark-secrets/minter.key
 PRODUCTION_INSTALL_COMPONENTS=blockchain
 
 PRODUCTION_BLOCKCHAIN_DARK_ENV_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-env
-PRODUCTION_BLOCKCHAIN_DARK_ENV_REPOSITORY_BRANCH=master
+PRODUCTION_BLOCKCHAIN_DARK_ENV_REPOSITORY_BRANCH=main
 PRODUCTION_BLOCKCHAIN_DARK_ENV_SETUP=True
 PRODUCTION_BLOCKCHAIN_DARK_ENV_COMMANDS_JSON=["chmod +x setup.sh","chmod +x scripts/*.sh","./setup.sh","docker compose up -d"]
 
@@ -429,7 +429,7 @@ PRODUCTION_BLOCKCHAIN_DARK_DAPP_REPOSITORY_BRANCH=main
 PRODUCTION_BLOCKCHAIN_DARK_DAPP_SETUP=True
 
 PRODUCTION_BLOCKCHAIN_DARK_EXPLORADOR_REPOSITORY_URL=https://github.com/LA-Referencia-IOI/dark-explorer.git
-PRODUCTION_BLOCKCHAIN_DARK_EXPLORADOR_REPOSITORY_BRANCH=master
+PRODUCTION_BLOCKCHAIN_DARK_EXPLORADOR_REPOSITORY_BRANCH=main
 PRODUCTION_BLOCKCHAIN_DARK_EXPLORADOR_SETUP=True
 PRODUCTION_BLOCKCHAIN_DARK_EXPLORADOR_COMMANDS_JSON=["docker compose up -d --build","docker compose up -d"]
 

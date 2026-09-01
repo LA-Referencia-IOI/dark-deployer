@@ -1302,7 +1302,8 @@ def install_blockchain(prefix: str, env: dict) -> None:
             print(f"[SKIP] '{url_key}' is not set — skipping '{folder}'.")
             continue
 
-        branch   = env.get(branch_key, "master").strip()
+        default_branch = "main" if folder == "dark-env" else "master"
+        branch   = env.get(branch_key, default_branch).strip()
         do_setup = env.get(setup_key, "True").strip().lower() != "false"
         commands = get_commands(env, commands_key, DEFAULT_COMMANDS)
         target   = f"components/blockchain/{folder}"
@@ -1804,6 +1805,34 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         "METADATA_WORKER_RUNTIME_NAME": env.get(
             "METADATA_WORKER_RUNTIME_NAME",
             template_env.get("METADATA_WORKER_RUNTIME_NAME", "metadata-publisher"),
+        ).strip(),
+        "REPLICATION_WORKER_ENABLED": env.get(
+            "REPLICATION_WORKER_ENABLED",
+            template_env.get("REPLICATION_WORKER_ENABLED", "true"),
+        ).strip(),
+        "REPLICATION_WORKER_PAGE_SIZE": env.get(
+            "REPLICATION_WORKER_PAGE_SIZE",
+            template_env.get("REPLICATION_WORKER_PAGE_SIZE", "50"),
+        ).strip(),
+        "REPLICATION_WORKER_CONCURRENCY": env.get(
+            "REPLICATION_WORKER_CONCURRENCY",
+            template_env.get("REPLICATION_WORKER_CONCURRENCY", "2"),
+        ).strip(),
+        "REPLICATION_WORKER_SLEEP_SECONDS": env.get(
+            "REPLICATION_WORKER_SLEEP_SECONDS",
+            template_env.get("REPLICATION_WORKER_SLEEP_SECONDS", "30"),
+        ).strip(),
+        "REPLICATION_WORKER_RECHECK_SECONDS": env.get(
+            "REPLICATION_WORKER_RECHECK_SECONDS",
+            template_env.get("REPLICATION_WORKER_RECHECK_SECONDS", "300"),
+        ).strip(),
+        "REPLICATION_WORKER_STORAGE_RETRY_SECONDS": env.get(
+            "REPLICATION_WORKER_STORAGE_RETRY_SECONDS",
+            template_env.get("REPLICATION_WORKER_STORAGE_RETRY_SECONDS", "10"),
+        ).strip(),
+        "REPLICATION_WORKER_RUNTIME_NAME": env.get(
+            "REPLICATION_WORKER_RUNTIME_NAME",
+            template_env.get("REPLICATION_WORKER_RUNTIME_NAME", "replication-reconciler"),
         ).strip(),
         "CHAIN_WORKER_ENABLED": env.get(
             "CHAIN_WORKER_ENABLED",

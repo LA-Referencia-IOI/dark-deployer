@@ -176,6 +176,15 @@ the Minter branch in `.env` intentionally before rebuilding the component.
 For the required DARK 2 `2MM` shoulder format and its minter-code assignment
 rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).
 
+The Minter runs API, metadata persistence, IPFS replication reconciliation,
+and chain publication as four separate processes. The root `.env` controls the
+reconciler through `REPLICATION_WORKER_ENABLED`, `REPLICATION_WORKER_PAGE_SIZE`,
+`REPLICATION_WORKER_CONCURRENCY`, `REPLICATION_WORKER_SLEEP_SECONDS`,
+`REPLICATION_WORKER_RECHECK_SECONDS`, `REPLICATION_WORKER_STORAGE_RETRY_SECONDS`,
+and `REPLICATION_WORKER_RUNTIME_NAME`. During installation and rebuild these
+values are copied into the Minter `.env.integration`; omitted values use the
+defaults from the Minter `.env.example`.
+
 ## 7. Runtime lifecycle
 
 All lifecycle scripts resolve paths from their own repository location, so they

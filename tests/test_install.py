@@ -271,13 +271,17 @@ class IntegrationTests(unittest.TestCase):
         minter_path = Path(self.temporary.name) / "minter"
         minter_path.mkdir()
         (minter_path / ".env.example").write_text(
-            "MINTER_SHOULDER=200\nMETADATA_STORAGE_TYPE=store_api\n"
+            "MINTER_SHOULDER=200\n"
+            "METADATA_STORAGE_TYPE=store_api\n"
+            "REPLICATION_WORKER_CONCURRENCY=2\n"
+            "REPLICATION_WORKER_RUNTIME_NAME=replication-reconciler\n"
         )
         env = {
             "TYPE": "production",
             "PRODUCTION_MINTER_SHOULDER": "201",
             "CHAIN_ID": "2025",
             "RPC_URL": "http://localhost:8545",
+            "REPLICATION_WORKER_CONCURRENCY": "3",
         }
 
         with mock.patch.object(
@@ -289,6 +293,16 @@ class IntegrationTests(unittest.TestCase):
 
         generated = installer.load_optional_env(minter_path / ".env.integration")
         self.assertEqual(generated["MINTER_SHOULDER"], "201")
+        self.assertEqual(generated["REPLICATION_WORKER_ENABLED"], "true")
+        self.assertEqual(generated["REPLICATION_WORKER_PAGE_SIZE"], "50")
+        self.assertEqual(generated["REPLICATION_WORKER_CONCURRENCY"], "3")
+        self.assertEqual(generated["REPLICATION_WORKER_SLEEP_SECONDS"], "30")
+        self.assertEqual(generated["REPLICATION_WORKER_RECHECK_SECONDS"], "300")
+        self.assertEqual(generated["REPLICATION_WORKER_STORAGE_RETRY_SECONDS"], "10")
+        self.assertEqual(
+            generated["REPLICATION_WORKER_RUNTIME_NAME"],
+            "replication-reconciler",
+        )
 
     def test_invalid_profile_minter_shoulder_is_rejected(self):
         with self.assertRaises(SystemExit):
