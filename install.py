@@ -3067,6 +3067,16 @@ def _validate_storage_secret_file(name: str, path_value: str, kind: str) -> Path
     try:
         raw = path.read_text().strip()
         mode = path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        print(
+            f"[ERROR] {name}: no secret file at '{path}'.\n"
+            "        Every storage node in a cluster must hold the SAME swarm key\n"
+            "        and Cluster secret. Generate them on the first storage node\n"
+            "        (the installer does this automatically), then copy both files\n"
+            "        here unchanged — or run:\n"
+            f"            python3 install.py storage secrets --from-peer <first-node-host>"
+        )
+        sys.exit(1)
     except OSError as exc:
         print(f"[ERROR] {name} is not a readable secret file: {exc}")
         sys.exit(1)
@@ -3294,6 +3304,13 @@ def print_install_plan(prefix: str, env: dict) -> None:
             f"cluster min={policy.replication_min}, max={policy.replication_max}; "
             "store confirms one pinned peer"
         )
+        if install_storage and env.get("TYPE", "").strip().lower() != "developer":
+            swarm = (
+                env.get(f"{prefix}_IPFS_SWARM_KEY_FILE", "").strip()
+                or f"{_DEFAULT_STORAGE_SECRET_DIR}/ipfs-swarm.key"
+            )
+            state = "present" if Path(swarm).exists() else "generated on first run"
+            print(f"IPFS secrets: {Path(swarm).parent}/ ({state})")
     if env.get("SIGNER_MODE", "legacy").strip().lower() == "shared":
         signer_state = "shared platform signer (deployer + Admin + Minter)"
     else:
@@ -3425,8 +3442,14 @@ def reconcile_storage(topology: StorageTopology, site_id: str) -> dict[str, int]
     return audit_storage(topology, site_id)
 
 
-def run_storage_operation(action: str, prefix: str, env: dict) -> None:
-    """Dispatch global storage audit/reconciliation commands."""
+def run_storage_operation(
+    action: str, prefix: str, env: dict, from_peer: Optional[str] = None
+) -> None:
+    """Dispatch global storage audit/reconciliation/secret commands."""
+    if action == "secrets":
+        _run_storage_secrets(prefix, env, from_peer)
+        return
+
     topology = configured_storage_topology(prefix, env)
     site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
     if not site_id:
@@ -3491,6 +3514,217 @@ _STORAGE_REPO_DEFAULTS: dict = {
     "dark-ipfs":      ("_IPFS_REPOSITORY_URL",      "git@github.com:LA-Referencia-IOI/dark-ipfs.git"),
     "dark-store-api": ("_STORE_API_REPOSITORY_URL",  "git@github.com:LA-Referencia-IOI/dark-store-api.git"),
 }
+
+
+_DEFAULT_STORAGE_SECRET_DIR = Path("/opt/dark-deployer/secrets")
+
+#: Placeholder left in the shipped .env.example; treated as "unset".
+_PLACEHOLDER_SECRET_PREFIX = "/absolute/secret/path/"
+
+
+def _ipfs_secret_content(kind: str) -> str:
+    """Return fresh file contents for an IPFS ``swarm`` key or ``cluster`` secret."""
+    token = secrets.token_hex(32)
+    if kind == "swarm":
+        return f"/key/swarm/psk/1.0.0/\n/base16/\n{token}\n"
+    return f"{token}\n"
+
+
+def _resolve_secret_path(env: dict, key: str, default: Path) -> Path:
+    """Resolve a secret file path, treating blank/placeholder values as unset."""
+    configured = env.get(key, "").strip()
+    if configured and not configured.startswith(_PLACEHOLDER_SECRET_PREFIX):
+        path = Path(configured)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+    else:
+        path = default
+    resolved = path.resolve()
+    env[key] = str(resolved)
+    return resolved
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _prepare_cluster_storage_assets(prefix: str, env: dict) -> None:
+    """Sandbox/production counterpart of :func:`_prepare_developer_storage_assets`.
+
+    Resolves the IPFS secret paths (defaulting to ``/opt/dark-deployer/secrets``),
+    scaffolds ``storage-topology.json`` when absent, and generates the swarm key
+    and Cluster secret on the first storage node. Every storage node in a cluster
+    must hold byte-identical files, so this never overwrites an existing file and
+    prints the sha256 plus the ``scp`` commands to copy them to the other peers.
+    """
+    _, install_storage, install_apps = _selected_tiers(prefix, env)
+    if not (install_storage or install_apps):
+        return
+
+    site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip() or "site-a"
+    env[f"{prefix}_STORAGE_SITE_ID"] = site_id
+    node_id = (
+        env.get(f"{prefix}_STORAGE_NODE_ID", "").strip() or f"{site_id}-storage-1"
+    )
+    env[f"{prefix}_STORAGE_NODE_ID"] = node_id
+
+    raw_topology_path = (
+        env.get(f"{prefix}_STORAGE_TOPOLOGY_FILE", "").strip()
+        or "storage-topology.json"
+    )
+    env[f"{prefix}_STORAGE_TOPOLOGY_FILE"] = raw_topology_path
+    topology_path = Path(raw_topology_path)
+    if not topology_path.is_absolute():
+        topology_path = PROJECT_ROOT / topology_path
+
+    if not topology_path.exists():
+        topology_document = {
+            "version": 1,
+            "cluster_name": "dark-global",
+            "sites": [
+                {
+                    "id": site_id,
+                    "peers": [
+                        {"id": f"{site_id}-storage-1", "vpn_address": "127.0.0.1"},
+                        {"id": f"{site_id}-storage-2", "vpn_address": "127.0.0.2"},
+                    ],
+                }
+            ],
+        }
+        write_text_secure(
+            topology_path,
+            json.dumps(topology_document, indent=2) + "\n",
+            mode=0o644,
+        )
+        print(f"[OK] Wrote a placeholder storage topology at '{topology_path}'.")
+        print(
+            "[ACTION REQUIRED] Replace the vpn_address values with the real VPN "
+            "addresses of both peers and copy the same file to every host before "
+            "deploying a multi-host cluster."
+        )
+
+    swarm_path = _resolve_secret_path(
+        env,
+        f"{prefix}_IPFS_SWARM_KEY_FILE",
+        _DEFAULT_STORAGE_SECRET_DIR / "ipfs-swarm.key",
+    )
+    cluster_path = _resolve_secret_path(
+        env,
+        f"{prefix}_IPFS_CLUSTER_SECRET_FILE",
+        _DEFAULT_STORAGE_SECRET_DIR / "ipfs-cluster-secret",
+    )
+
+    if install_storage:
+        _generate_ipfs_secret_files(prefix, env, swarm_path, cluster_path)
+
+
+def _generate_ipfs_secret_files(
+    prefix: str, env: dict, swarm_path: Path, cluster_path: Path
+) -> None:
+    """Create the swarm key and Cluster secret when missing; print the handoff.
+
+    Never overwrites an existing file — every storage node in a cluster must hold
+    byte-identical secrets, so a later node keeps whatever the operator copied in.
+    """
+    if swarm_path == cluster_path:
+        print(
+            f"[ERROR] {prefix}_IPFS_SWARM_KEY_FILE and "
+            f"{prefix}_IPFS_CLUSTER_SECRET_FILE must be different files."
+        )
+        sys.exit(1)
+
+    generated = False
+    for kind, path in (("swarm", swarm_path), ("cluster", cluster_path)):
+        if path.exists():
+            print(
+                f"[INFO] Reusing existing {kind} secret '{path}' "
+                f"(sha256 {_sha256_file(path)})."
+            )
+            continue
+        write_text_secure(path, _ipfs_secret_content(kind), mode=0o600)
+        generated = True
+        print(
+            f"[OK] Generated {kind} secret '{path}' "
+            f"(sha256 {_sha256_file(path)})."
+        )
+
+    if not generated:
+        return
+
+    site_id = env.get(f"{prefix}_STORAGE_SITE_ID", "").strip()
+    node_id = env.get(f"{prefix}_STORAGE_NODE_ID", "").strip()
+    try:
+        topology = configured_storage_topology(prefix, env)
+        others = [
+            peer for peer in topology.site_peers(site_id) if peer.id != node_id
+        ]
+    except StorageTopologyError:
+        others = []
+    if others:
+        print(
+            "\n[HANDOFF] Copy the two files above, unchanged, to every other "
+            "storage node in this cluster:"
+        )
+        for peer in others:
+            print(
+                f"    scp '{swarm_path}' '{cluster_path}' "
+                f"{peer.vpn_address}:{_DEFAULT_STORAGE_SECRET_DIR}/"
+            )
+        print(
+            "    # then on each host: chmod 600 the two files and confirm the "
+            "sha256 matches.\n"
+        )
+
+
+def _run_storage_secrets(
+    prefix: str, env: dict, from_peer: Optional[str]
+) -> None:
+    """`install.py storage secrets` — generate the IPFS secrets or pull them."""
+    swarm_path = _resolve_secret_path(
+        env,
+        f"{prefix}_IPFS_SWARM_KEY_FILE",
+        _DEFAULT_STORAGE_SECRET_DIR / "ipfs-swarm.key",
+    )
+    cluster_path = _resolve_secret_path(
+        env,
+        f"{prefix}_IPFS_CLUSTER_SECRET_FILE",
+        _DEFAULT_STORAGE_SECRET_DIR / "ipfs-cluster-secret",
+    )
+    if swarm_path == cluster_path:
+        print("[ERROR] The swarm key and Cluster secret must be different files.")
+        sys.exit(1)
+
+    if not from_peer:
+        _generate_ipfs_secret_files(prefix, env, swarm_path, cluster_path)
+        return
+
+    for remote_name, local_path in (
+        ("ipfs-swarm.key", swarm_path),
+        ("ipfs-cluster-secret", cluster_path),
+    ):
+        remote = f"{from_peer}:{_DEFAULT_STORAGE_SECRET_DIR}/{remote_name}"
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["scp", "-p", remote, str(local_path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"[ERROR] Could not copy {remote}: {result.stderr.strip()}")
+            sys.exit(1)
+        local_path.chmod(0o600)
+        print(f"[OK] Fetched '{local_path}' (sha256 {_sha256_file(local_path)}).")
+
+    _validate_storage_secret_file(
+        f"{prefix}_IPFS_SWARM_KEY_FILE", str(swarm_path), "swarm"
+    )
+    _validate_storage_secret_file(
+        f"{prefix}_IPFS_CLUSTER_SECRET_FILE", str(cluster_path), "cluster"
+    )
+    print(
+        "[OK] Secrets match the expected format. Confirm the sha256 values above "
+        f"match {from_peer}."
+    )
 
 
 def _prepare_developer_storage_assets(env: dict) -> None:
@@ -3597,19 +3831,10 @@ def _prepare_developer_storage_assets(env: dict) -> None:
 
     secret_dir = PROJECT_ROOT / ".dark-secrets" / "developer"
     secret_specs = (
-        (
-            f"{prefix}_IPFS_SWARM_KEY_FILE",
-            secret_dir / "ipfs-swarm.key",
-            "/key/swarm/psk/1.0.0/\n/base16/\n"
-            f"{secrets.token_hex(32)}\n",
-        ),
-        (
-            f"{prefix}_IPFS_CLUSTER_SECRET_FILE",
-            secret_dir / "ipfs-cluster-secret",
-            f"{secrets.token_hex(32)}\n",
-        ),
+        (f"{prefix}_IPFS_SWARM_KEY_FILE", secret_dir / "ipfs-swarm.key", "swarm"),
+        (f"{prefix}_IPFS_CLUSTER_SECRET_FILE", secret_dir / "ipfs-cluster-secret", "cluster"),
     )
-    for key, default_path, content in secret_specs:
+    for key, default_path, kind in secret_specs:
         configured = env.get(key, "").strip()
         configured_path = Path(configured) if configured else None
         if configured_path and not configured_path.is_absolute():
@@ -3619,7 +3844,7 @@ def _prepare_developer_storage_assets(env: dict) -> None:
             continue
 
         if not default_path.exists():
-            write_text_secure(default_path, content, mode=0o600)
+            write_text_secure(default_path, _ipfs_secret_content(kind), mode=0o600)
             print(f"[OK] Generated developer secret file '{default_path}'.")
         env[key] = str(default_path.resolve())
 
@@ -3669,6 +3894,33 @@ def _wizard_blockchain_tier(prefix: str, env: dict) -> dict:
     _abort_missing_fields(missing, context="a remote BLOCKCHAIN tier")
     env[f"{prefix}_BLOCKCHAIN_HOST"] = _derive_host_from_url(env["RPC_URL"])
     return env
+
+
+def _wizard_storage_secret_paths(prefix: str, env: dict) -> None:
+    """Confirm where this storage node's IPFS secrets live.
+
+    The files are generated later by :func:`_prepare_cluster_storage_assets`
+    (which no-ops when they already exist); this only records the paths.
+    """
+    swarm_default = _DEFAULT_STORAGE_SECRET_DIR / "ipfs-swarm.key"
+    cluster_default = _DEFAULT_STORAGE_SECRET_DIR / "ipfs-cluster-secret"
+    if _ask_confirm(
+        f"Generate the IPFS cluster secrets under {_DEFAULT_STORAGE_SECRET_DIR}/ "
+        "on this node? (choose No if another node already has them)",
+        default=True,
+    ):
+        env[f"{prefix}_IPFS_SWARM_KEY_FILE"] = str(swarm_default)
+        env[f"{prefix}_IPFS_CLUSTER_SECRET_FILE"] = str(cluster_default)
+        return
+    for key, label in (
+        (f"{prefix}_IPFS_SWARM_KEY_FILE", "swarm key"),
+        (f"{prefix}_IPFS_CLUSTER_SECRET_FILE", "Cluster secret"),
+    ):
+        raw = input(f"  Absolute path to the existing IPFS {label} file: ").strip()
+        if not raw or not Path(raw).is_absolute():
+            print(f"[ERROR] {key} must be an absolute path.")
+            sys.exit(1)
+        env[key] = raw
 
 
 def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
@@ -3824,6 +4076,9 @@ def run_setup_wizard(env: dict) -> dict:
         elif selected == "storage-node":
             _apply_default_storage_repo_urls(prefix=prefix, env=env)
 
+        if selected in {"all", "storage-node"}:
+            _wizard_storage_secret_paths(prefix=prefix, env=env)
+
     _print_wizard_summary(install_type=install_type, prefix=prefix, env=env)
 
     if not _ask_confirm("Save configuration to .env and start installation?", default=True):
@@ -3832,6 +4087,8 @@ def run_setup_wizard(env: dict) -> dict:
 
     if install_type == "developer":
         _prepare_developer_storage_assets(env)
+    else:
+        _prepare_cluster_storage_assets(prefix, env)
 
     persisted_env = dict(env)
     if handoff_authoritative:
@@ -3909,12 +4166,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     storage_parser = subparsers.add_parser(
         "storage",
-        help="Audit or reconcile the global IPFS Cluster.",
+        help="Audit or reconcile the global IPFS Cluster, or manage its secrets.",
     )
     storage_parser.add_argument(
         "action",
-        choices=("audit", "reconcile"),
-        help="Audit is read-only; reconcile reapplies replication policy without unpinning.",
+        choices=("audit", "reconcile", "secrets"),
+        help=(
+            "audit is read-only; reconcile reapplies replication policy without "
+            "unpinning; secrets generates the swarm key and Cluster secret "
+            "(or fetches them from another node with --from-peer)."
+        ),
+    )
+    storage_parser.add_argument(
+        "--from-peer",
+        dest="from_peer",
+        default=None,
+        metavar="HOST",
+        help=(
+            "With 'secrets': scp the swarm key and Cluster secret from this host "
+            "instead of generating new ones."
+        ),
     )
     resume_parser = subparsers.add_parser(
         "resume",
@@ -4088,7 +4359,9 @@ def main() -> None:
             )
 
     if args.command == "storage":
-        run_storage_operation(args.action, prefix, env)
+        run_storage_operation(
+            args.action, prefix, env, from_peer=getattr(args, "from_peer", None)
+        )
         return
 
     if args.command in {"validate", "plan"}:
@@ -4140,6 +4413,11 @@ def main() -> None:
         rebuild_component(args=args, prefix=prefix, env=env)
         print("=== Rebuild complete ===")
         return
+
+    # The interactive wizard already prepared these; resume and host-bundle
+    # runs skip the wizard, so do it here before the secret files are validated.
+    if install_type != "developer" and args.command in {"resume", "host"}:
+        _prepare_cluster_storage_assets(prefix, env)
 
     validate_install_configuration(prefix, env)
     ensure_docker_running()

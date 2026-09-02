@@ -516,6 +516,67 @@ class ValidationTests(unittest.TestCase):
                 0o600,
             )
 
+    def test_cluster_storage_assets_generate_secrets_and_topology(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            secret_dir = root / "secrets"
+            env = {
+                "TYPE": "sandbox",
+                "SANDBOX_INSTALL_COMPONENTS": "storage-node",
+                "SANDBOX_STORAGE_SITE_ID": "site-a",
+                "SANDBOX_STORAGE_NODE_ID": "site-a-storage-1",
+                "SANDBOX_STORAGE_TOPOLOGY_FILE": "storage-topology.json",
+                # placeholder from a stale .env.example must be treated as unset
+                "SANDBOX_IPFS_SWARM_KEY_FILE": "/absolute/secret/path/ipfs-swarm.key",
+                "SANDBOX_IPFS_CLUSTER_SECRET_FILE": "/absolute/secret/path/ipfs-cluster-secret",
+            }
+            with (
+                mock.patch.object(installer, "PROJECT_ROOT", root),
+                mock.patch.object(
+                    installer, "_DEFAULT_STORAGE_SECRET_DIR", secret_dir
+                ),
+            ):
+                installer._prepare_cluster_storage_assets("SANDBOX", env)
+                swarm = Path(env["SANDBOX_IPFS_SWARM_KEY_FILE"])
+                cluster = Path(env["SANDBOX_IPFS_CLUSTER_SECRET_FILE"])
+                self.assertEqual(swarm, secret_dir / "ipfs-swarm.key")
+                first_swarm = swarm.read_bytes()
+                # second run is a no-op — a later node keeps the copied file
+                installer._prepare_cluster_storage_assets("SANDBOX", env)
+                self.assertEqual(swarm.read_bytes(), first_swarm)
+
+            self.assertEqual(swarm.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(cluster.stat().st_mode & 0o777, 0o600)
+            installer._validate_storage_secret_file("S", str(swarm), "swarm")
+            installer._validate_storage_secret_file("C", str(cluster), "cluster")
+            topology = installer.load_storage_topology(root / "storage-topology.json")
+            self.assertEqual(len(topology.site_peers("site-a")), 2)
+
+    def test_cluster_storage_assets_keep_existing_secret_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            secret_dir = root / "secrets"
+            secret_dir.mkdir()
+            swarm = secret_dir / "ipfs-swarm.key"
+            copied = "/key/swarm/psk/1.0.0/\n/base16/\n" + ("a" * 64) + "\n"
+            swarm.write_text(copied)
+            swarm.chmod(0o600)
+            env = {
+                "TYPE": "production",
+                "PRODUCTION_INSTALL_COMPONENTS": "storage-node",
+                "PRODUCTION_STORAGE_SITE_ID": "site-a",
+                "PRODUCTION_STORAGE_NODE_ID": "site-a-storage-2",
+                "PRODUCTION_STORAGE_TOPOLOGY_FILE": "storage-topology.json",
+            }
+            with (
+                mock.patch.object(installer, "PROJECT_ROOT", root),
+                mock.patch.object(
+                    installer, "_DEFAULT_STORAGE_SECRET_DIR", secret_dir
+                ),
+            ):
+                installer._prepare_cluster_storage_assets("PRODUCTION", env)
+            self.assertEqual(swarm.read_text(), copied)
+
     def test_resume_from_store_api_skips_completed_stages(self):
         env = {
             "TYPE": "developer",

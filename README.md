@@ -89,26 +89,34 @@ contain exactly two peers:
 The live file is excluded from Git. Copy the same topology to storage and apps
 hosts. In `.env`, select the active profile and configure its site/role fields:
 
-Generate two different secrets outside the repository. Create the directory
-first — a persistent path, not `/run` (tmpfs, cleared on reboot):
+The two IPFS secrets (one Kubo swarm key, one Cluster secret) must be
+**byte-identical on every storage node** in the cluster. On the **first** storage
+node `install.py` generates them at `/opt/dark-deployer/secrets/` automatically
+and prints their `sha256`. On the **other** nodes, copy those same two files
+before running the installer — either with your organisation's secret-transfer
+channel, or:
 
 ```bash
-sudo install -d -m 0700 -o "$USER" -g "$USER" /opt/dark-secrets
+python3 install.py storage secrets --from-peer <first-storage-node-host>
+```
+
+To pre-provision them yourself instead of letting the installer generate them:
+
+```bash
+sudo install -d -m 0700 -o "$USER" -g "$USER" /opt/dark-deployer/secrets
 
 umask 077
 {
   echo /key/swarm/psk/1.0.0/
   echo /base16/
   openssl rand -hex 32
-} > /opt/dark-secrets/ipfs-swarm.key
-openssl rand -hex 32 > /opt/dark-secrets/ipfs-cluster-secret
-chmod 600 /opt/dark-secrets/ipfs-swarm.key /opt/dark-secrets/ipfs-cluster-secret
+} > /opt/dark-deployer/secrets/ipfs-swarm.key
+openssl rand -hex 32 > /opt/dark-deployer/secrets/ipfs-cluster-secret
+chmod 600 /opt/dark-deployer/secrets/ipfs-swarm.key \
+          /opt/dark-deployer/secrets/ipfs-cluster-secret
 ```
 
-Generate them once and copy the same two files to every storage node in the
-cluster — all IPFS peers must share one swarm key and one Cluster secret.
-
-Then select the active profile and configure its site/role fields:
+The active profile's site/role fields:
 
 ```ini
 TYPE=production
@@ -116,8 +124,9 @@ PRODUCTION_INSTALL_COMPONENTS=storage-node
 PRODUCTION_STORAGE_TOPOLOGY_FILE=storage-topology.json
 PRODUCTION_STORAGE_SITE_ID=site-a
 PRODUCTION_STORAGE_NODE_ID=site-a-storage-1
-PRODUCTION_IPFS_SWARM_KEY_FILE=/opt/dark-secrets/ipfs-swarm.key
-PRODUCTION_IPFS_CLUSTER_SECRET_FILE=/opt/dark-secrets/ipfs-cluster-secret
+# Defaults below; the installer fills them in when left unset:
+PRODUCTION_IPFS_SWARM_KEY_FILE=/opt/dark-deployer/secrets/ipfs-swarm.key
+PRODUCTION_IPFS_CLUSTER_SECRET_FILE=/opt/dark-deployer/secrets/ipfs-cluster-secret
 ```
 
 For an apps host, use `PRODUCTION_INSTALL_COMPONENTS=apps` and omit the node and

@@ -296,6 +296,14 @@ Generate these secrets once, preferably on a controlled administrative host.
 Both IPFS servers must receive the same two files. The apps and blockchain
 servers do not need them.
 
+Alternatively, let the installer generate them: on IPFS 1, leave
+`PRODUCTION_IPFS_SWARM_KEY_FILE` / `PRODUCTION_IPFS_CLUSTER_SECRET_FILE` unset (or
+at the `/opt/dark-deployer/secrets/` default) and `install.py` creates both files
+and prints their `sha256`. On IPFS 2, run
+`python3 install.py storage secrets --from-peer <IPFS-1-vpn-address>` before the
+install to copy the identical files. Pre-generating by hand as below still works
+and keeps the secrets off every server until you place them.
+
 ```bash
 umask 077
 {
