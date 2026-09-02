@@ -577,6 +577,27 @@ class ValidationTests(unittest.TestCase):
                 installer._prepare_cluster_storage_assets("PRODUCTION", env)
             self.assertEqual(swarm.read_text(), copied)
 
+    def test_cluster_storage_assets_report_unwritable_secret_dir(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            readonly = root / "readonly"
+            readonly.mkdir(mode=0o500)
+            env = {
+                "TYPE": "sandbox",
+                "SANDBOX_INSTALL_COMPONENTS": "storage-node",
+                "SANDBOX_STORAGE_SITE_ID": "site-a",
+                "SANDBOX_STORAGE_NODE_ID": "site-a-storage-1",
+                "SANDBOX_STORAGE_TOPOLOGY_FILE": "storage-topology.json",
+            }
+            with (
+                mock.patch.object(installer, "PROJECT_ROOT", root),
+                mock.patch.object(
+                    installer, "_DEFAULT_STORAGE_SECRET_DIR", readonly / "secrets"
+                ),
+                self.assertRaises(SystemExit),
+            ):
+                installer._prepare_cluster_storage_assets("SANDBOX", env)
+
     def test_resume_from_store_api_skips_completed_stages(self):
         env = {
             "TYPE": "developer",

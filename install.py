@@ -3641,7 +3641,17 @@ def _generate_ipfs_secret_files(
                 f"(sha256 {_sha256_file(path)})."
             )
             continue
-        write_text_secure(path, _ipfs_secret_content(kind), mode=0o600)
+        try:
+            write_text_secure(path, _ipfs_secret_content(kind), mode=0o600)
+        except PermissionError:
+            print(
+                f"[ERROR] Cannot write the {kind} secret to '{path}'.\n"
+                f"        Create the directory once, owned by this user:\n"
+                f"            sudo install -d -m 0700 -o \"$USER\" -g \"$USER\" '{path.parent}'\n"
+                f"        or point {prefix}_IPFS_{'SWARM_KEY' if kind == 'swarm' else 'CLUSTER_SECRET'}_FILE\n"
+                f"        at a path this user can write, then re-run."
+            )
+            sys.exit(1)
         generated = True
         print(
             f"[OK] Generated {kind} secret '{path}' "
@@ -3703,7 +3713,14 @@ def _run_storage_secrets(
         ("ipfs-cluster-secret", cluster_path),
     ):
         remote = f"{from_peer}:{_DEFAULT_STORAGE_SECRET_DIR}/{remote_name}"
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            print(
+                f"[ERROR] Cannot create '{local_path.parent}'. Run once:\n"
+                f"            sudo install -d -m 0700 -o \"$USER\" -g \"$USER\" '{local_path.parent}'"
+            )
+            sys.exit(1)
         result = subprocess.run(
             ["scp", "-p", remote, str(local_path)],
             capture_output=True,
