@@ -671,6 +671,18 @@ def get_role_private_key(env: dict, role: str) -> str:
             sys.exit(1)
         try:
             return secret_path.read_text().strip()
+        except FileNotFoundError:
+            print(
+                f"[ERROR] PLATFORM_PRIVATE_KEY_FILE points at '{secret_path}', "
+                "which does not exist.\n"
+                "        SIGNER_MODE=shared means the operator provisions this "
+                "blockchain signer key;\n"
+                "        the installer never generates it. Either place the key "
+                "file there (mode 0600),\n"
+                "        or set SIGNER_MODE=legacy to let a co-located blockchain "
+                "install create the wallet."
+            )
+            sys.exit(1)
         except OSError as exc:
             print(f"[ERROR] Cannot read PLATFORM_PRIVATE_KEY_FILE: {exc}")
             sys.exit(1)
@@ -3255,14 +3267,17 @@ def validate_install_configuration(prefix: str, env: dict) -> None:
                 sys.exit(1)
 
     profile = env.get("TYPE", "developer").lower()
+    role_keys = {"deployer": "", "admin": "", "minter": ""}
     if install_apps or install_bc:
+        # Storage nodes never sign transactions, so the blockchain signer is
+        # only required for the apps and blockchain tiers.
         validate_shared_platform_signer(env, profile)
-    role_keys = {
-        role: get_role_private_key(env, role)
-        for role in ("deployer", "admin", "minter")
-    }
-    for private_key in set(role_keys.values()) - {""}:
-        validate_private_key(private_key, profile)
+        role_keys = {
+            role: get_role_private_key(env, role)
+            for role in ("deployer", "admin", "minter")
+        }
+        for private_key in set(role_keys.values()) - {""}:
+            validate_private_key(private_key, profile)
 
     if profile == "production":
         validate_production_release(prefix, env)

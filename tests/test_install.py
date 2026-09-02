@@ -765,6 +765,42 @@ class ValidationTests(unittest.TestCase):
 
         self.assertRegex(env["PLATFORM_ADDRESS"], r"^0x[0-9A-Fa-f]{40}$")
 
+    def test_storage_node_does_not_require_the_platform_signer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            secret_dir = root / "secrets"
+            secret_dir.mkdir()
+            (secret_dir / "ipfs-swarm.key").write_text(
+                "/key/swarm/psk/1.0.0/\n/base16/\n" + "a" * 64 + "\n"
+            )
+            (secret_dir / "ipfs-cluster-secret").write_text("b" * 64 + "\n")
+            for name in ("ipfs-swarm.key", "ipfs-cluster-secret"):
+                (secret_dir / name).chmod(0o600)
+            topology = installer.load_storage_topology(
+                PROJECT_ROOT / "storage-topology.example.json"
+            )
+            env = {
+                "TYPE": "production",
+                "PRODUCTION_INSTALL_COMPONENTS": "storage-node",
+                "PRODUCTION_STORAGE_SITE_ID": "site-a",
+                "PRODUCTION_STORAGE_NODE_ID": "site-a-storage-1",
+                # shared mode set, but no platform.key on disk — a storage node
+                # never signs, so this must not be required.
+                "SIGNER_MODE": "shared",
+                "PLATFORM_PRIVATE_KEY_FILE": str(root / "missing-platform.key"),
+                "PRODUCTION_IPFS_SWARM_KEY_FILE": str(secret_dir / "ipfs-swarm.key"),
+                "PRODUCTION_IPFS_CLUSTER_SECRET_FILE": str(
+                    secret_dir / "ipfs-cluster-secret"
+                ),
+            }
+            with (
+                mock.patch.object(
+                    installer, "configured_storage_topology", return_value=topology
+                ),
+                mock.patch.object(installer, "validate_production_release"),
+            ):
+                installer.validate_install_configuration("PRODUCTION", env)
+
     def test_production_release_requires_matching_deployer_branch(self):
         result = mock.Mock(returncode=0, stdout="release-branch\n")
         with mock.patch.object(installer.subprocess, "run", return_value=result):
