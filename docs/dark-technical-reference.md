@@ -112,7 +112,7 @@ signer o coordinación de nonces.
 | --- | ---: | --- | --- |
 | dark-core-admin-api | 8000 | Gestión de autoridades, wallets y NAANs. | Blockchain. |
 | dark-core-minter-api | 8001 | Reserva/actualiza ARKs y expone API. | PostgreSQL. |
-| Metadata Worker | interno | Persiste L1/L2, reconcilia y repara. | PostgreSQL. |
+| Metadata Worker | interno | Persiste L1/L2 y registra sus CIDs. | PostgreSQL. |
 | Chain Worker | interno | Publica CIDs y URL en contratos. | PostgreSQL + blockchain. |
 | dark-core-resolver-api | 8002 | Resuelve ARKs y entrega metadata. | Sin base local. |
 | dark-store-api | 8003 | Fachada HTTP frente a IPFS/Cluster. | Sin base propia. |
@@ -169,7 +169,7 @@ El orden de persistencia es L2 → L1:
 2. Construye Level 1, que contiene el CID L2, y confirma un peer PINNED.
 3. Escribe ambos CIDs en PostgreSQL y habilita al Chain Worker.
 4. El Chain Worker publica L1 en dARK.sol mediante create_ark o update_ark.
-5. El Metadata Worker reconcilia réplicas y sólo entonces purga los payloads.
+5. El Replication Reconciliation Worker verifica réplicas y sólo entonces purga los payloads.
 
 El CID de blockchain siempre apunta a L1; Resolver sigue el vínculo L1 → L2
 para devolver el registro original.
@@ -209,7 +209,7 @@ ark_metadata sólo conserva el último conteo L1/L2, fecha de comprobación y
 | error | Payload retenido y error de consulta/reparación. |
 | complete | Payloads purgados tras cumplir ambas metas. |
 
-El Metadata Worker reconcilia sin trabajo nuevo y también durante carga. Procesa
+El Replication Reconciliation Worker reconcilia sin trabajo nuevo y también durante carga. Procesa
 hasta 50 ARKs por lote y usa METADATA_WORKER_CONCURRENCY (por defecto 4). Un CID
 con cero copias se reconstruye desde PostgreSQL; si produce otro CID, se rechaza.
 
@@ -341,9 +341,9 @@ por host y checklist; nunca valores de secretos.
 La instalación actual selecciona deployer y componentes por ramas en .env:
 
 ~~~ini
-DEPLOYER_BRANCH=codex/production-deployment-readiness
-PRODUCTION_MINTER_REPOSITORY_BRANCH=codex/production-deployment-readiness
-PRODUCTION_IPFS_REPOSITORY_BRANCH=codex/global-ipfs-cluster
+DEPLOYER_BRANCH=main
+PRODUCTION_MINTER_REPOSITORY_BRANCH=main
+PRODUCTION_IPFS_REPOSITORY_BRANCH=main
 ~~~
 
 Producción exige que el checkout del deployer coincida con DEPLOYER_BRANCH. El
@@ -351,9 +351,8 @@ instalador hace fetch, cambio de rama y merge --ff-only. Si la rama no existe en
 un remoto accesible, avisa y usa main; no hace fallback ante errores de conexión
 o autenticación.
 
-No existe components.lock.json ni checkout por commits detached. Por tanto, una
-rama que avance puede cambiar el código de una instalación futura. Para rollouts
-controlados deben registrarse los hashes exactos realmente desplegados.
+Una rama que avance puede cambiar el código de una instalación futura; para
+rollouts controlados deben registrarse los hashes realmente desplegados.
 
 ## 11. Operación y validación
 
@@ -416,9 +415,8 @@ python -m app.cli.import_arks /input/registros.csv --authority-id <UUID> --execu
 | Documento | Uso |
 | --- | --- |
 | [Referencia de API](../DARK_2.0_API_REFERENCE.md) | Esquemas, códigos HTTP y ejemplos completos. |
-| [Arquitectura IPFS](ipfs-architecture.md) | CRDT, puertos, bootstrap, fallos y expansión. |
-| [Implementación de replicación](ipfs-replication-implementation.md) | Retención PostgreSQL, reconciliación y purga. |
-| [Bundles de producción](production-deployment-bundles.md) | Inventario, secretos y aceptación. |
+| [Arquitectura IPFS](ipfs-architecture.md) | Topología, CRDT, replicación, secretos y operación. |
+| [Instalación de producción](production-single-site-four-server-installation.md) | Inventario, secretos y aceptación. |
 | [Instalación de cuatro servidores](production-single-site-four-server-installation.md) | Worksheet de red y firewall. |
 | [Operación del deployer](deployer-operations.md) | Rebuild, resume y comportamiento Git. |
 | [Importación directa](minter-direct-ark-import.md) | Migraciones CSV. |
@@ -426,7 +424,5 @@ python -m app.cli.import_arks /input/registros.csv --authority-id <UUID> --execu
 
 Los documentos de despliegue remoto por SSH y de claves firmadas Ed25519 son
 propuestas de evolución, no capacidades que una instalación actual deba asumir.
-Si hay discrepancias históricas sobre persistencia de metadata, prevalece
-[Implementación de replicación](ipfs-replication-implementation.md), que
-describe el comportamiento vigente de Store API, Minter, Resolver y deployer.
-
+Si hay discrepancias históricas sobre persistencia de metadata, prevalecen el
+código actual y las referencias canónicas de cada componente.

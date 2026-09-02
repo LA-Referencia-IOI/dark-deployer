@@ -100,7 +100,7 @@ Sends ETH from the admin account to an authority wallet.
   "admin_balance_eth": 1.5,
   "blockchain_connected": true,
   "current_block": 12345,
-  "chain_id": 1337
+  "chain_id": 2025
 }
 ```
 
@@ -404,7 +404,7 @@ Returns raw bytes. Content-Type is `application/octet-stream`.
 
 **Response `200`:**
 ```json
-{"cid": "bafyrei...", "pinned": true, "replicas": 2, "status": "pinned"}
+{"cid": "bafyrei...", "status": "pinned", "replication": {"total_replicas": 2, "local_replicas": 2, "remote_replicas": 0, "sites": {"site-a": 2}, "purge_target_met": true, "checked_at": "2026-09-01T12:00:00Z"}}
 ```
 
 #### `GET /health` — Health check

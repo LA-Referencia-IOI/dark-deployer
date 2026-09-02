@@ -121,12 +121,14 @@ other repository failures are not silently replaced by this fallback.
 For example:
 
 ```ini
-PRODUCTION_MINTER_REPOSITORY_BRANCH=codex/production-deployment-readiness
-PRODUCTION_IPFS_REPOSITORY_BRANCH=codex/global-ipfs-cluster
+PRODUCTION_MINTER_REPOSITORY_BRANCH=main
+PRODUCTION_IPFS_REPOSITORY_BRANCH=main
 ```
 
 Production also requires `DEPLOYER_BRANCH` to match the current deployer
-checkout. No component commit lock or detached-HEAD checkout is used.
+checkout. Component checkouts remain on named branches; no component commit
+lock or detached-HEAD checkout is used. Record resulting commit hashes in the
+deployment report when release traceability is required.
 
 To change or upgrade a component:
 
@@ -169,9 +171,9 @@ Useful flags:
 | `--with-dependents` | Rebuild admin, resolver and minter after core-lib |
 
 For direct ARK imports without metadata and NAAN authorization audits, see
-[Direct ARK Import and NAAN Audit](minter-direct-ark-import.md). Those commands
-require a Minter revision that includes their CLI modules; update
-the Minter branch in `.env` intentionally before rebuilding the component.
+[Direct ARK Import and NAAN Audit](minter-direct-ark-import.md). The CLI modules
+are part of the current `main` branch and are installed when the Minter is
+rebuilt from that branch.
 
 For the required DARK 2 `2MM` shoulder format and its minter-code assignment
 rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).

@@ -18,7 +18,7 @@ O `install.py` atual assume que **tudo roda no mesmo servidor**. Para suportar o
 
 1. Ensinar o instalador a pular tiers remotos.
 2. Permitir que os endereços de contrato venham do `.env` (não só do `deployed_contracts.ini` local).
-3. Corrigir os URLs de IPFS nos arquivos `.env.integration` dos serviços — atualmente hardcodados como nomes de serviço Docker (`ipfs0`, `cluster0`), que só funcionam quando store-api e IPFS estão no mesmo host.
+3. Corrigir os URLs de IPFS nos arquivos `.env.integration` dos serviços — devem ser aliases derivados da topologia (`dark-ipfs-<site>-storage-<n>`), não nomes legados fixos.
 4. Atualizar `.env.example` com as novas variáveis.
 5. Atualizar `stop.py` e `clean.py` para não tentarem parar containers de tiers remotos.
 
@@ -143,13 +143,13 @@ quatro funções de geração de `.env.integration` por `resolve_contract_addres
 **Problema crítico:** os valores hardcodados abaixo só funcionam quando store-api e IPFS estão na mesma Docker network:
 
 ```python
-"IPFS_API_URL": "http://ipfs0:5001",           # nome de serviço Docker
-"IPFS_CLUSTER_API_URL": "http://cluster0:9094", # nome de serviço Docker
-"IPFS_CLUSTER_PROXY_API_URL": "http://cluster0:9095",
+"IPFS_API_URL": "http://dark-ipfs-site-a-storage-1:5001",
+"IPFS_CLUSTER_API_URL": "http://dark-ipfs-cluster-site-a-storage-1:9094",
+"IPFS_CLUSTER_PROXY_API_URL": "http://dark-ipfs-cluster-site-a-storage-1:9095",
 ```
 
 No modo desacoplado, o store-api está no servidor de aplicação e o IPFS em outro servidor —
-os nomes `ipfs0` e `cluster0` não resolvem.
+os aliases são gerados pela topologia e publicados no ambiente de cada site.
 
 **Solução:**
 
@@ -162,9 +162,9 @@ if ipfs_host:
     ipfs_cluster_proxy   = ipfs_cluster_url.replace(":9094", ":9095")
 else:
     # Local install: use Docker service names (same network as store-api)
-    ipfs_api_url       = "http://ipfs0:5001"
-    ipfs_cluster_url   = "http://cluster0:9094"
-    ipfs_cluster_proxy = "http://cluster0:9095"
+    ipfs_api_url       = "http://dark-ipfs-site-a-storage-1:5001"
+    ipfs_cluster_url   = "http://dark-ipfs-cluster-site-a-storage-1:9094"
+    ipfs_cluster_proxy = "http://dark-ipfs-cluster-site-a-storage-1:9095"
 
 integration_env = {
     ...

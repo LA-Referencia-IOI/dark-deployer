@@ -4,7 +4,7 @@
 
 La opción B de este documento fue seleccionada e implementada. Store API
 confirma un pin, el Minter conserva los payloads hasta alcanzar la política
-derivada de la topología y el Metadata Worker reconcilia en segundo plano.
+derivada de la topología y el Replication Reconciliation Worker reconcilia en segundo plano.
 Las demás opciones se conservan como análisis histórico.
 
 ## 1. Problema observado
@@ -416,7 +416,7 @@ mitigada por la retención en PostgreSQL. No hay variantes configurables.
 
 ## 10. Comportamiento del reconciliador
 
-El reconciliador es una fase del Metadata Worker, no un servicio nuevo:
+La reconciliación es responsabilidad exclusiva del Replication Reconciliation Worker:
 
 1. procesar la página normal de metadata pendiente;
 2. si no hay trabajo listo, seleccionar los payloads retenidos con la

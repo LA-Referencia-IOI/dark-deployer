@@ -251,7 +251,7 @@ cid: str
 
 ## 5. Minter Architecture
 
-The minter (`dark-core-minter-api`) is the most complex service. It operates in two independent processes: the **REST API** and the **Worker**.
+The minter (`dark-core-minter-api`) runs an HTTP API plus three independent singleton workers: metadata persistence, IPFS replication reconciliation, and chain publication. They share PostgreSQL; metadata and replication workers also share the optional filesystem payload volume.
 
 ### 5.1 ARK Lifecycle States
 
@@ -260,13 +260,14 @@ Every ARK record in the minter's PostgreSQL database passes through these states
 ```
   POST /arks ──► RESERVED (R) ──► DRAFT (D) ──────────────────────────────►┐
                                     │                                        │
-  PATCH /arks/{id}                  │  MetadataPersistenceWorker             │
+  PUT /arks/{id}                    │  MetadataPersistenceWorker             │
   (on existing published)           │  stores metadata to IPFS/store-api     │
                    │                ▼                                        │
   UPDATE (U) ──────┘         [metadata CIDs written]                        │
-       │                            │  ChainPublisherWorker                  │
-       │                            │  submits tx to blockchain              │
+       │                            │  ReplicationReconciliationWorker       │
+       │                            │  verifies and repairs storage replicas │
        │                            ▼                                        │
+       │                            │  ChainPublisherWorker                  │
        └──────────────────── PUBLISHED (P) ◄───────────────────────────────┘
   
   DELETE /arks/{id} ──────────────► TOMBSTONE (T)
@@ -288,7 +289,7 @@ The FastAPI app handles synchronous HTTP requests and writes to the PostgreSQL d
 | :--- | :--- | :--- |
 | `POST /arks` | → `RESERVED` | Reserve a single ARK. Generates a NOID-based identifier |
 | `POST /arks/batch` | → `RESERVED` | Batch-reserve multiple ARKs in a single request |
-| `PATCH /arks/{ark_id}` | `RESERVED` → `DRAFT` | Provide metadata and target URL; queues ARK for publication |
+| `PUT /arks/{ark_id}` | `RESERVED` → `DRAFT` | Provide metadata and target URL; queues ARK for publication |
 | `DELETE /arks/{ark_id}` | → `TOMBSTONE` | Deactivate an ARK |
 | `GET /arks/{ark_id}` | — | Query current state and metadata |
 
@@ -298,25 +299,29 @@ The FastAPI app handles synchronous HTTP requests and writes to the PostgreSQL d
 
 **mTLS middleware**: All API endpoints can require mutual TLS (`MTLS_ENABLED`). In non-production this can be disabled.
 
-### 5.3 Worker Process
+### 5.3 Worker Processes
 
-The worker runs as a **separate OS process** (`python -m app.main_worker`) alongside the API. Both share the same PostgreSQL database. A PID file (`/tmp/dark-core-worker.pid`) prevents duplicate worker processes.
-
-The worker runs two sequential workers in a loop:
+Each worker runs as a separate process/container using `python -m app.main_worker <mode>`. PostgreSQL advisory locks, per-worker PID files and `worker_runtime_status` heartbeats ensure one active instance per runtime name.
 
 ```
-Worker loop (every N seconds)
+Metadata worker loop
   │
-  ├─1─► MetadataPersistenceWorker.run_publish_cycle()
+  └─► MetadataPersistenceWorker.run_publish_cycle()
   │       Polls DB: ARKs in DRAFT or UPDATE state with no persisted CIDs
-  │       For each:
+          For each:
   │         1. Store Level 2 (original record) → dark-store-api or IPFS
   │            Returns level2_cid (original_cid in DB)
   │         2. Store Level 1 (minimal JSON + level2_cid reference)
   │            Returns level1_cid
-  │         3. Write both CIDs to DB, purge local content blobs
-  │
-  └─2─► ChainPublisherWorker.run_publish_cycle()
+          3. Write both CIDs to DB and retain payloads for reconciliation
+
+Replication worker loop
+  └─► ReplicationReconciliationWorker
+          checks and repairs both CIDs in Store API
+          updates replica counts and purges only when both targets are met
+
+Chain worker loop
+  └─► ChainPublisherWorker.run_publish_cycle()
           Polls DB: ARKs with both CIDs persisted, not yet PUBLISHED
           For each:
             1. Retrieve authority encrypted_private_key from Authority contract
@@ -324,7 +329,7 @@ Worker loop (every N seconds)
             3. Call dARK.create_ark() or dARK.update_ark() with (naan, name, url, level1_cid)
             4. Wait for tx receipt
             5. On success → mark PUBLISHED in DB
-            6. On failure → reconcile on-chain state, retry or mark permanent failure
+            6. On failure → reconcile on-chain state and retry according to policy
 ```
 
 ### 5.4 Metadata Levels
@@ -448,14 +453,13 @@ The storage layer handles all content-addressed metadata blobs. It is composed o
 
 ### 7.1 `dark-ipfs` — IPFS Cluster
 
-`dark-ipfs` runs a **6-container Docker Compose stack**: 3 IPFS nodes (Kubo) paired with 3 IPFS Cluster daemons.
+`dark-ipfs` runs one Kubo container and one IPFS Cluster container per storage node. The deployer installs one pair on each host; all pairs join one global CRDT Cluster.
 
 ```
  dark-ipfs Docker Compose
  ┌─────────────────────────────────────────────────────┐
- │  cluster0 ──── ipfs0  (bootstrap, exposes :9094)   │
- │  cluster1 ──── ipfs1  (joins cluster0 on start)     │
- │  cluster2 ──── ipfs2  (joins cluster0 on start)     │
+ │  cluster peer ──── Kubo peer (one pair per host)    │
+ │  all peers join the global CRDT Cluster over VPN    │
  └─────────────────────────────────────────────────────┘
          │               │
     IPFS API          IPFS Cluster REST API
@@ -464,15 +468,13 @@ The storage layer handles all content-addressed metadata blobs. It is composed o
 
 | Container | Image | Exposed port | Role |
 | :--- | :--- | :--- | :--- |
-| `ipfs0` | `ipfs/kubo` | `5001` (API), `8080` (gateway) | Bootstrap IPFS node |
-| `ipfs1`, `ipfs2` | `ipfs/kubo` | — | Peer IPFS nodes |
-| `cluster0` | `ipfs/ipfs-cluster` | `9094` (REST API), `9095` (proxy) | Bootstrap cluster daemon |
-| `cluster1`, `cluster2` | `ipfs/ipfs-cluster` | — | Peer cluster daemons |
+| `ipfs` | `ipfs/kubo` | `5001` (API), `4001` (swarm) | Storage peer |
+| `cluster` | `ipfs/ipfs-cluster` | `9094` (REST), `9095` (proxy), `9096` (swarm) | Cluster peer |
 
 **Key configuration:**
 - **Consensus**: CRDT (no leader election, eventually consistent)
 - **Replication**: configurable min/max factors (`CLUSTER_REPLICATION_MIN`/`MAX`, defaults 2/3)
-- **Startup order**: ipfs nodes first → cluster0 → cluster1/2 (each waits for health checks)
+- **Startup order**: Kubo first, then its Cluster peer; bootstrap and peer discovery use generated topology values
 - **CID version**: CIDv1 for all new content (`cid-version=1` on `/api/v0/add`)
 
 ### 7.2 `dark-store-api` — Storage Abstraction API
@@ -485,7 +487,7 @@ The storage layer handles all content-addressed metadata blobs. It is composed o
 | :--- | :--- | :--- | :--- |
 | `POST` | `/v1/store` | Store raw bytes (any Content-Type) | `{"cid": "...", "size": N}` |
 | `GET` | `/v1/retrieve/{cid}` | Retrieve content by CID | Raw bytes (`application/octet-stream`) |
-| `GET` | `/v1/status/{cid}` | Pin/replication status | `{"cid", "pinned", "replicas", "status"}` |
+| `GET` | `/v1/status/{cid}` | Pin/replication status | total/local/remote replicas, sites and purge readiness |
 | `GET` | `/health` | Service health check | `{"status": "healthy"}` |
 
 **Storage backends** (selected by `STORAGE_BACKEND` env var):
@@ -498,8 +500,8 @@ The storage layer handles all content-addressed metadata blobs. It is composed o
 Configuration for the IPFS backend:
 ```
 STORAGE_BACKEND=ipfs_cluster
-IPFS_API_URL=http://dark-ipfs-ipfs0:5001
-IPFS_CLUSTER_API_URL=http://dark-ipfs-cluster0:9094
+IPFS_API_URLS_JSON=["http://dark-ipfs-site-a-storage-1:5001"]
+IPFS_CLUSTER_API_URLS_JSON=["http://dark-ipfs-cluster-site-a-storage-1:9094"]
 ```
 
 ### 7.3 `MetadataService` in `dark-core-lib`

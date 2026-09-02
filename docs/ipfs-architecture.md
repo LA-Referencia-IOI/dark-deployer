@@ -356,7 +356,7 @@ Minter
   -> remote Kubo peers fetch blocks over the VPN
   -> Store API confirms at least one PINNED peer
   -> Minter publishes the CID on-chain
-  -> Metadata Worker reconciles L1 and L2 in the background
+  -> ReplicationReconciliationWorker reconciles L1 and L2 in the background
   -> Minter purges the retained payload after both targets are met
 ```
 
@@ -475,6 +475,31 @@ converge by merging pin additions after connectivity returns. Automatic global
 `unpin` is outside the supported operational model.
 
 ## 15. Reconciliation
+
+Reconciliation is exclusively owned by the minter's
+`ReplicationReconciliationWorker`; the metadata worker only persists Level 1
+and Level 2 and records their CIDs. The worker selects records with both CIDs
+and retained local payloads, processes pages of 50 with concurrency 2, and
+uses the following defaults:
+
+```ini
+REPLICATION_WORKER_ENABLED=true
+REPLICATION_WORKER_PAGE_SIZE=50
+REPLICATION_WORKER_CONCURRENCY=2
+REPLICATION_WORKER_SLEEP_SECONDS=30
+REPLICATION_WORKER_RECHECK_SECONDS=300
+REPLICATION_WORKER_STORAGE_RETRY_SECONDS=10
+REPLICATION_WORKER_RUNTIME_NAME=replication-reconciler
+```
+
+It retries indefinitely. A complete page is followed immediately by the next
+page; otherwise the worker sleeps 30 seconds. If Store API or IPFS is
+unavailable it pauses for 10 seconds without changing database records. Each
+repair is protected by the ARK lock and compares the stored CID before writing
+replica counters. Local payloads are purged only after both Level 1 and Level 2
+report the configured target. The worker has its own PID file, PostgreSQL
+advisory lock and `worker_runtime_status` heartbeat, so it can be deployed and
+restarted independently of the API, metadata and chain workers.
 
 Cluster retries failed pins that remain allocated to a recovered peer. A
 different case occurs when a peer or site was absent while new pins were

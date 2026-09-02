@@ -138,7 +138,7 @@ python3 install.py deployment render \
 
 The renderer creates one shared topology, endpoint and firewall policy plus one
 host configuration per server. The bundle contains secret paths but never
-secret contents. See [Production deployment bundles](docs/production-deployment-bundles.md).
+ secret contents. See [the production installation runbook](docs/production-single-site-four-server-installation.md).
 
 ## Roles
 

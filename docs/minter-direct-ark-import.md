@@ -13,10 +13,9 @@ servidor de aplicaciones. No exponen una ruta HTTP nueva.
 
 ## 1. Disponibilidad en una instalación del deployer
 
-Los comandos están disponibles en la rama
-`codex/production-deployment-readiness` del Minter. Antes de usar estos
-procedimientos en una instalación gestionada por el deployer, configure esa
-rama en `*_MINTER_REPOSITORY_BRANCH` dentro de `.env` y reconstruya el
+Los comandos están disponibles en la rama actual `main` del Minter. Antes de
+usar estos procedimientos en una instalación gestionada por el deployer,
+verifique `*_MINTER_REPOSITORY_BRANCH=main` dentro de `.env` y reconstruya el
 componente:
 
 ```bash

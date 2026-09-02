@@ -2,7 +2,7 @@
 
 This report explains how IPFS works and why `dark-store-api` is shaped as a thin storage facade over IPFS and IPFS Cluster. It is intentionally technical: the goal is to make the storage behavior predictable for developers and operators working on dARK.
 
-For deployment details, Docker networks and local startup order, see [IPFS, IPFS Cluster and Store API in a real environment](ipfs-cluster-store-api-real-environment.md).
+For deployment details, Docker networks and startup order, see [IPFS architecture](ipfs-architecture.md).
 
 ## Executive summary
 
@@ -70,7 +70,8 @@ In Store API, the public contract intentionally stays simpler:
 ```text
 POST /v1/store -> returns cid
 GET /v1/retrieve/{cid} -> returns raw bytes
-GET /v1/status/{cid} -> returns pin/replica status
+GET /v1/status/{cid} -> returns pin/replica status, including total/local/
+remote replicas, per-site counts and `purge_target_met`
 ```
 
 The caller should not need to know whether the CID maps to one block or a graph.
@@ -312,7 +313,9 @@ That gives a clean separation:
 - Store API needs one local Cluster Proxy API for writes.
 - Cluster owns the remote replication topology.
 
-This is why the current local Docker setup exposes `ipfs0` and `cluster0` to Store API, while `ipfs1/cluster1` and `ipfs2/cluster2` simulate remote nodes.
+The deployer derives endpoint aliases from the topology (for example,
+`dark-ipfs-site-a-storage-1` and `dark-ipfs-cluster-site-a-storage-1`) and
+passes them through `IPFS_API_URLS_JSON` and `IPFS_CLUSTER_API_URLS_JSON`.
 
 ## Same cluster vs independent clusters
 
@@ -323,14 +326,15 @@ When considering multiple configured IPFS/Cluster endpoints for Store API, it is
 This means each configured endpoint is another entry point into the same logical Cluster pinset.
 
 ```text
-Store API -> cluster0/ipfs0
-Store API -> cluster1/ipfs1
-Store API -> cluster2/ipfs2
+Store API -> local cluster/IPFS endpoint 1
+Store API -> local cluster/IPFS endpoint 2
 
 All cluster peers share the same cluster state.
 ```
 
-This is suitable for primary + failover. If `cluster0` is unavailable, Store API can use `cluster1` without changing the meaning of the write. The pinset remains the same logical storage system.
+This is suitable for primary + failover. If one local peer is unavailable,
+Store API can use the other without changing the meaning of the write. The
+pinset remains the same logical storage system.
 
 ### Independent clusters
 
@@ -360,9 +364,9 @@ A future Store API configuration could declare storage nodes explicitly:
 [
   {
     "id": "node-0",
-    "ipfs_api_url": "http://ipfs0:5001",
-    "cluster_api_url": "http://cluster0:9094",
-    "cluster_proxy_api_url": "http://cluster0:9095"
+    "ipfs_api_url": "http://dark-ipfs-site-a-storage-1:5001",
+    "cluster_api_url": "http://dark-ipfs-cluster-site-a-storage-1:9094",
+    "cluster_proxy_api_url": "http://dark-ipfs-cluster-site-a-storage-1:9095"
   },
   {
     "id": "node-1",

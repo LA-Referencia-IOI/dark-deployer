@@ -1,7 +1,7 @@
 # Production installation: one blockchain, one apps, and two IPFS servers
 
 > **Current workflow:** use the canonical inventory and rendered host bundles
-> described in [Production deployment bundles](production-deployment-bundles.md).
+> described in the deployer operations and production installation sections below.
 > The manual `.env` examples below remain useful as a network worksheet, but
 > Production validation now requires `SIGNER_MODE=shared` and
 > `DEPLOYER_BRANCH` matching the current checkout. Component versions follow
@@ -843,6 +843,12 @@ rg '_REPOSITORY_BRANCH=' .env \
 Store this branch inventory outside the checkout. Each role installs a
 different subset of components, so the recorded branch lists naturally differ
 by host.
+
+Branches are the only version selectors used by the installer and are mutable,
+so they are not immutable release artifacts. For every accepted rollout also
+record the resolved commit hash of each fetched repository (for example with
+`git rev-parse HEAD`) in the approval inventory. This provides operational
+traceability without introducing a commit-lock file or detached checkout.
 
 ### 17.2 Minimum backups
 

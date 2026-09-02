@@ -290,7 +290,7 @@ config = CoreConfig(
     authority_contract_address="0xdef...",
     admin_private_key="0x...",
     read_only=False,
-    chain_id=1337,
+    chain_id=2025,
 )
 client = DARKCoreClient(config)
 ```
