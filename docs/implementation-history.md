@@ -25,3 +25,16 @@ El dashboard consume el status simple en la portada y el status full solo en la 
 ## Verificación
 
 Antes de publicar cada commit se ejecutan las suites focalizadas del componente correspondiente y `git diff --check`. La ausencia de PHP en el entorno local impide ejecutar `php -l`; el código Laravel queda pendiente de validación en CI o en el contenedor de dashboard.
+
+## Commits temáticos
+
+| Componente | Commit | Contenido |
+| --- | --- | --- |
+| repositorio padre | `955ba09` | Instalador, topología, documentación operativa y hallazgos de timeout |
+| dashboard-web | `dfebd1e` | Status lite/full, cache de diagnóstico y revisión de errores |
+| dark-core-lib | `901b5c4` | Cliente Store API y pruebas de disponibilidad/replicación |
+| dark-core-minter-api | `e1c3935` | Workers, locks PostgreSQL, recovery, errores y status |
+| dark-store-api | `5d7d4c5` | Topología centralizada, pools y estado de réplicas |
+| dark-ipfs | `5f6a3eb` | Allocator por capacidad y configuración IPFS sin etiquetas obligatorias |
+
+Los commits se hicieron sobre `main` y agrupan los cambios pendientes por componente. Los componentes sin cambios pendientes ya estaban limpios y no recibieron commits vacíos.
