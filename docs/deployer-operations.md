@@ -179,13 +179,18 @@ For the required DARK 2 `2MM` shoulder format and its minter-code assignment
 rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).
 
 The Minter runs API, metadata persistence, IPFS replication reconciliation,
-and chain publication as four separate processes. The root `.env` controls the
+chain publication, and low-priority recovery as five separate processes. The root `.env` controls the
 reconciler through `REPLICATION_WORKER_ENABLED`, `REPLICATION_WORKER_PAGE_SIZE`,
 `REPLICATION_WORKER_CONCURRENCY`, `REPLICATION_WORKER_SLEEP_SECONDS`,
 `REPLICATION_WORKER_RECHECK_SECONDS`, `REPLICATION_WORKER_STORAGE_RETRY_SECONDS`,
 and `REPLICATION_WORKER_RUNTIME_NAME`. During installation and rebuild these
 values are copied into the Minter `.env.integration`; omitted values use the
 defaults from the Minter `.env.example`.
+
+Recovery is controlled by `RECOVERY_WORKER_ENABLED`, `RECOVERY_WORKER_PAGE_SIZE`,
+`RECOVERY_WORKER_SLEEP_SECONDS`, and `RECOVERY_WORKER_RUNTIME_NAME`. It only
+returns structurally recoverable ARKs to normal queues after all normal worker
+queues are idle.
 
 ## 7. Runtime lifecycle
 

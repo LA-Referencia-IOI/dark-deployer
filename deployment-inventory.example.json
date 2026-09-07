@@ -15,7 +15,7 @@
     "platform_key_target": "/opt/dark-deployer/secrets/platform.key"
   },
   "storage": {
-    "cluster_name": "dark-global",
+    "topology_file": "storage-topology.json",
     "swarm_key_target": "/opt/dark-deployer/secrets/ipfs-swarm.key",
     "cluster_secret_target": "/opt/dark-deployer/secrets/ipfs-cluster-secret"
   },
@@ -38,6 +38,7 @@
           "roles": [
             "apps"
           ],
+          "storage_access_group": "apps-a",
           "advertised_urls": {
             "admin": "http://10.20.30.20:8000",
             "minter": "http://10.20.30.20:8001",
@@ -49,7 +50,7 @@
         {
           "id": "site-a-storage-1",
           "management_address": "ipfs-1.internal.example",
-          "vpn_address": "10.20.30.31",
+          "storage_node_id": "storage-a",
           "roles": [
             "storage-node"
           ]
@@ -57,7 +58,7 @@
         {
           "id": "site-a-storage-2",
           "management_address": "ipfs-2.internal.example",
-          "vpn_address": "10.20.30.32",
+          "storage_node_id": "storage-b",
           "roles": [
             "storage-node"
           ]

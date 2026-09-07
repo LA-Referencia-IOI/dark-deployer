@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -17,11 +18,10 @@ SPEC.loader.exec_module(installer)
 
 
 class CommandParsingTests(unittest.TestCase):
-    def test_developer_wizard_selects_ha_topology(self):
+    def test_developer_wizard_selects_ha_runtime(self):
         env = {
             "TYPE": "developer",
             "DEVELOPER_INSTALL_COMPONENTS": "all",
-            "DEVELOPER_STORAGE_SITE_ID": "site-a",
         }
         with (
             mock.patch.object(installer, "_ask_choice", side_effect=[1, 2]),
@@ -34,10 +34,7 @@ class CommandParsingTests(unittest.TestCase):
             selected = installer.run_setup_wizard(env)
 
         self.assertEqual(selected["DEVELOPER_STORAGE_MODE"], "ha")
-        self.assertEqual(
-            selected["DEVELOPER_STORAGE_TOPOLOGY_FILE"],
-            "storage-topology.developer-ha.json",
-        )
+        self.assertNotIn("DEVELOPER_STORAGE_TOPOLOGY_FILE", selected)
         prepare.assert_called_once_with(selected)
 
     def test_resume_requires_an_explicit_known_stage(self):
@@ -96,6 +93,7 @@ class CommandParsingTests(unittest.TestCase):
         response.read.return_value = json.dumps({
             "workers": {
                 "metadata": {"alive": True, "status": "running"},
+                "replication": {"alive": True, "status": "running"},
                 "chain": {"alive": True, "status": "running"},
             }
         }).encode()
@@ -104,42 +102,17 @@ class CommandParsingTests(unittest.TestCase):
         with mock.patch.object(installer.urllib.request, "urlopen", return_value=response):
             status = installer.probe_minter_worker_status("http://localhost:8001")
 
-        self.assertEqual(status, "metadata=up, chain=up")
+        self.assertEqual(status, "metadata=up, replication=up, chain=up")
 
     def test_developer_storage_probe_uses_host_loopback(self):
-        topology = installer.StorageTopology(
-            "dark-developer",
-            (),
-            development_single_node=True,
-        )
-
         self.assertEqual(
-            installer.storage_probe_url(
-                topology,
-                "http://dark-ipfs-local:5001",
-                "127.0.0.1",
-                5001,
-            ),
+            installer.storage_probe_url("http://dark-ipfs-local:5001", 5001),
             "http://127.0.0.1:5001",
         )
 
     def test_developer_storage_operations_use_published_cluster_port(self):
-        peer = installer.StoragePeer(
-            id="site-a-storage-1",
-            site="site-a",
-            vpn_address="127.0.0.1",
-            ipfs_api_url="http://dark-ipfs-local:5001",
-            cluster_api_url="http://dark-ipfs-cluster-local:9094",
-            cluster_proxy_url="http://dark-ipfs-cluster-local:9095",
-        )
-        topology = installer.StorageTopology(
-            "dark-developer",
-            (peer,),
-            development_single_node=True,
-        )
-
         self.assertEqual(
-            installer.cluster_operation_endpoints(topology, "site-a"),
+            installer.cluster_operation_endpoints(installer.developer_runtime("simple")),
             ["http://127.0.0.1:9094"],
         )
 
@@ -270,6 +243,14 @@ class IntegrationTests(unittest.TestCase):
     def test_profile_minter_shoulder_is_written_to_minter_integration_env(self):
         minter_path = Path(self.temporary.name) / "minter"
         minter_path.mkdir()
+        topology_path = Path(self.temporary.name) / "storage-topology.json"
+        topology_path.write_text(json.dumps({
+            "version": 3,
+            "cluster_name": "dark-production",
+            "replication": {"publish_after_replicas": 1, "target_replicas": 2},
+            "nodes": [{"id": "storage-a", "address": "10.20.1.11"}, {"id": "storage-b", "address": "10.20.1.12"}],
+            "access_groups": {"apps-a": ["storage-a", "storage-b"]},
+        }))
         (minter_path / ".env.example").write_text(
             "MINTER_SHOULDER=200\n"
             "METADATA_STORAGE_TYPE=store_api\n"
@@ -282,6 +263,7 @@ class IntegrationTests(unittest.TestCase):
             "CHAIN_ID": "2025",
             "RPC_URL": "http://localhost:8545",
             "REPLICATION_WORKER_CONCURRENCY": "3",
+            "PRODUCTION_STORAGE_TOPOLOGY_FILE": str(topology_path),
         }
 
         with mock.patch.object(
@@ -296,6 +278,8 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(generated["REPLICATION_WORKER_ENABLED"], "true")
         self.assertEqual(generated["REPLICATION_WORKER_PAGE_SIZE"], "50")
         self.assertEqual(generated["REPLICATION_WORKER_CONCURRENCY"], "3")
+        self.assertEqual(generated["REPLICATION_PUBLISH_AFTER_REPLICAS"], "1")
+        self.assertEqual(generated["REPLICATION_TARGET_REPLICAS"], "2")
         self.assertEqual(generated["REPLICATION_WORKER_SLEEP_SECONDS"], "30")
         self.assertEqual(generated["REPLICATION_WORKER_RECHECK_SECONDS"], "300")
         self.assertEqual(generated["REPLICATION_WORKER_STORAGE_RETRY_SECONDS"], "10")
@@ -320,28 +304,19 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(target.read_text(), "NEW=value\n")
         self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
-    def test_store_api_env_is_derived_from_both_site_peers(self):
+    def test_store_api_env_is_generated_from_access_group(self):
         root = Path(self.temporary.name)
         topology_path = root / "topology.json"
         topology_path.write_text(json.dumps({
-            "version": 1,
+            "version": 3,
             "cluster_name": "dark-global",
-            "sites": [
-                {
-                    "id": "site-a",
-                    "peers": [
-                        {"id": "site-a-storage-1", "vpn_address": "10.20.1.11"},
-                        {"id": "site-a-storage-2", "vpn_address": "10.20.1.12"},
-                    ],
-                },
-                {
-                    "id": "site-b",
-                    "peers": [
-                        {"id": "site-b-storage-1", "vpn_address": "10.20.2.11"},
-                        {"id": "site-b-storage-2", "vpn_address": "10.20.2.12"},
-                    ],
-                },
+            "nodes": [
+                {"id": "storage-a", "address": "10.20.1.11"},
+                {"id": "storage-b", "address": "10.20.1.12"},
+                {"id": "storage-c", "address": "10.20.2.11"},
             ],
+            "access_groups": {"apps-a": ["storage-a", "storage-b"]},
+            "replication": {"publish_after_replicas": 1, "target_replicas": 2},
         }))
         store_path = root / "store-api"
         store_path.mkdir()
@@ -349,17 +324,15 @@ class IntegrationTests(unittest.TestCase):
         env = {
             "TYPE": "sandbox",
             "SANDBOX_STORAGE_TOPOLOGY_FILE": str(topology_path),
-            "SANDBOX_STORAGE_SITE_ID": "site-a",
+            "SANDBOX_STORAGE_ACCESS_GROUP": "apps-a",
         }
 
         installer.generate_store_api_env_integration(store_path, env)
 
         generated = installer.load_optional_env(store_path / ".env.integration")
-        self.assertEqual(len(json.loads(generated["IPFS_API_URLS_JSON"])), 2)
-        self.assertEqual(generated["IPFS_CLUSTER_LOCAL_SITE_ID"], "site-a")
-        self.assertNotIn("IPFS_CLUSTER_EXPECTED_PEERS", generated)
-        self.assertNotIn("IPFS_CLUSTER_WRITE_MIN_PEERS", generated)
-        self.assertNotIn("IPFS_CLUSTER_WRITE_MIN_SITES", generated)
+        self.assertEqual(generated["STORAGE_ENDPOINTS_FILE"], "/config/storage-endpoints.json")
+        generated_document = json.loads((store_path / ".storage-endpoints.json").read_text())
+        self.assertEqual([node["id"] for node in generated_document["nodes"]], ["storage-a", "storage-b"])
 
 
 class ValidationTests(unittest.TestCase):
@@ -370,67 +343,24 @@ class ValidationTests(unittest.TestCase):
                 "TYPE": "developer",
                 "DEVELOPER_INSTALL_COMPONENTS": "all",
                 "DEVELOPER_STORAGE_MODE": "ha",
-                "DEVELOPER_STORAGE_TOPOLOGY_FILE": (
-                    "storage-topology.developer-ha.json"
-                ),
-                "DEVELOPER_STORAGE_SITE_ID": "site-a",
-                "DEVELOPER_STORAGE_NODE_ID": "site-a-storage-1",
             }
 
             with mock.patch.object(installer, "PROJECT_ROOT", root):
                 installer._prepare_developer_storage_assets(env)
-                topology = installer.configured_storage_topology(
-                    "DEVELOPER", env
-                )
+                runtime = installer.configured_storage_runtime("DEVELOPER", env)
                 installer.validate_install_configuration("DEVELOPER", env)
 
-            self.assertFalse(topology.development_single_node)
-            self.assertEqual(len(topology.peers), 2)
-            self.assertEqual(topology.policy.replication_min, 1)
-            self.assertEqual(topology.policy.replication_max, 2)
-            self.assertEqual(
-                topology.peers[1].host_ipfs_api_url,
-                "http://127.0.0.1:5101",
-            )
-            self.assertEqual(
-                topology.peers[1].host_cluster_api_url,
-                "http://127.0.0.1:9194",
-            )
+            self.assertEqual(len(runtime.nodes), 2)
+            self.assertEqual(runtime.policy.publish_after_replicas, 1)
+            self.assertEqual(runtime.policy.target_replicas, 2)
+            self.assertTrue((root / ".generated/storage/runtime.json").is_file())
 
     def test_developer_ha_install_starts_both_storage_peers(self):
-        topology = installer.StorageTopology(
-            "dark-developer",
-            (
-                installer.StoragePeer(
-                    "site-a-storage-1",
-                    "site-a",
-                    "127.0.0.1",
-                    "http://dark-ipfs-site-a-storage-1:5001",
-                    "http://dark-ipfs-cluster-site-a-storage-1:9094",
-                    "http://dark-ipfs-cluster-site-a-storage-1:9095",
-                    "http://127.0.0.1:5001",
-                    "http://127.0.0.1:9094",
-                    "http://127.0.0.1:9095",
-                ),
-                installer.StoragePeer(
-                    "site-a-storage-2",
-                    "site-a",
-                    "127.0.0.2",
-                    "http://dark-ipfs-site-a-storage-2:5001",
-                    "http://dark-ipfs-cluster-site-a-storage-2:9094",
-                    "http://dark-ipfs-cluster-site-a-storage-2:9095",
-                    "http://127.0.0.1:5101",
-                    "http://127.0.0.1:9194",
-                    "http://127.0.0.1:9195",
-                ),
-            ),
-        )
         env = {
             "DEVELOPER_IPFS_REPOSITORY_URL": "https://example.invalid/ipfs.git",
             "DEVELOPER_IPFS_REPOSITORY_BRANCH": "main",
             "DEVELOPER_IPFS_SETUP": "True",
-            "DEVELOPER_STORAGE_SITE_ID": "site-a",
-            "DEVELOPER_STORAGE_NODE_ID": "site-a-storage-1",
+            "DEVELOPER_STORAGE_MODE": "ha",
             "DEVELOPER_IPFS_SWARM_KEY_FILE": "/tmp/swarm.key",
             "DEVELOPER_IPFS_CLUSTER_SECRET_FILE": "/tmp/cluster.secret",
         }
@@ -439,9 +369,6 @@ class ValidationTests(unittest.TestCase):
 
         with (
             mock.patch.object(installer, "install_repo"),
-            mock.patch.object(
-                installer, "configured_storage_topology", return_value=topology
-            ),
             mock.patch.object(installer, "ensure_dark_net"),
             mock.patch.object(
                 installer,
@@ -457,15 +384,16 @@ class ValidationTests(unittest.TestCase):
             installer.install_dark_ipfs("DEVELOPER", env)
 
         self.assertEqual(len(writes), 2)
-        self.assertEqual(len(setups), 2)
+        self.assertGreaterEqual(len(setups), 2)
         self.assertEqual(writes[0][1]["IPFS_API_HOST_PORT"], "5001")
         self.assertEqual(writes[1][1]["IPFS_API_HOST_PORT"], "5101")
         self.assertIn(
-            "dark-ipfs-site-a-storage-1",
+            "dark-ipfs-developer-storage-1",
             writes[1][1]["IPFS_BOOTSTRAP_HOSTS"],
         )
-        self.assertIn(".env.node.site-a-storage-1", setups[0]["commands_str"][0])
-        self.assertIn(".env.node.site-a-storage-2", setups[1]["commands_str"][0])
+        starts = [call for call in setups if "make down" not in call["commands_str"][0]]
+        self.assertIn(".env.node.developer-storage-1", starts[-2]["commands_str"][0])
+        self.assertIn(".env.node.developer-storage-2", starts[-1]["commands_str"][0])
 
     def test_developer_wizard_assets_are_generated_once_and_securely(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -473,9 +401,6 @@ class ValidationTests(unittest.TestCase):
             env = {
                 "TYPE": "developer",
                 "DEVELOPER_INSTALL_COMPONENTS": "all",
-                "DEVELOPER_STORAGE_TOPOLOGY_FILE": "storage-topology.json",
-                "DEVELOPER_STORAGE_SITE_ID": "site-a",
-                "DEVELOPER_STORAGE_NODE_ID": "site-a-storage-1",
                 "DEVELOPER_IPFS_SWARM_KEY_FILE": "/missing/swarm.key",
                 "DEVELOPER_IPFS_CLUSTER_SECRET_FILE": "/missing/cluster.secret",
             }
@@ -489,15 +414,10 @@ class ValidationTests(unittest.TestCase):
                 installer._prepare_developer_storage_assets(env)
                 installer.validate_install_configuration("DEVELOPER", env)
 
-            topology = installer.load_storage_topology(
-                root / "storage-topology.json"
-            )
-            self.assertTrue(topology.development_single_node)
-            self.assertEqual(len(topology.peers), 1)
-            self.assertEqual(
-                topology.peers[0].ipfs_api_url,
-                "http://dark-ipfs-local:5001",
-            )
+            runtime = installer.configured_storage_runtime("DEVELOPER", env)
+            self.assertEqual(len(runtime.nodes), 1)
+            self.assertEqual(runtime.nodes[0].ipfs_api_url, "http://dark-ipfs-local:5001")
+            self.assertTrue((root / ".generated/storage/store-endpoints.json").is_file())
             self.assertEqual(
                 Path(env["DEVELOPER_IPFS_SWARM_KEY_FILE"]).read_text(),
                 first_swarm,
@@ -515,6 +435,46 @@ class ValidationTests(unittest.TestCase):
                 & 0o777,
                 0o600,
             )
+
+    def test_switching_ha_to_simple_preserves_secrets_and_stops_only_inactive_peer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env = {"TYPE": "developer", "DEVELOPER_INSTALL_COMPONENTS": "all", "DEVELOPER_STORAGE_MODE": "ha"}
+            with mock.patch.object(installer, "PROJECT_ROOT", root):
+                installer._prepare_developer_storage_assets(env)
+                swarm_before = Path(env["DEVELOPER_IPFS_SWARM_KEY_FILE"]).read_bytes()
+                env["DEVELOPER_STORAGE_MODE"] = "simple"
+                installer._prepare_developer_storage_assets(env)
+                self.assertEqual(Path(env["DEVELOPER_IPFS_SWARM_KEY_FILE"]).read_bytes(), swarm_before)
+                self.assertEqual(len(installer.configured_storage_runtime("DEVELOPER", env).nodes), 1)
+
+            ipfs_dir = root / "components/storage/dark-ipfs"
+            ipfs_dir.mkdir(parents=True)
+            stale = ipfs_dir / ".env.node.developer-storage-2"
+            stale.write_text("NODE_ID=developer-storage-2\n")
+            calls = []
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with (
+                    mock.patch.object(installer, "install_repo"),
+                    mock.patch.object(installer, "ensure_dark_net"),
+                    mock.patch.object(installer, "write_env_secure"),
+                    mock.patch.object(installer, "setup_repo", side_effect=lambda **kwargs: calls.append(kwargs)),
+                ):
+                    installer.install_dark_ipfs("DEVELOPER", {
+                        "DEVELOPER_STORAGE_MODE": "simple",
+                        "DEVELOPER_IPFS_REPOSITORY_URL": "https://example.invalid/ipfs.git",
+                        "DEVELOPER_IPFS_REPOSITORY_BRANCH": "main",
+                        "DEVELOPER_IPFS_SETUP": "True",
+                        "DEVELOPER_IPFS_SWARM_KEY_FILE": "/tmp/swarm.key",
+                        "DEVELOPER_IPFS_CLUSTER_SECRET_FILE": "/tmp/cluster.key",
+                    })
+            finally:
+                os.chdir(original_cwd)
+            self.assertEqual(len(calls), 2)
+            self.assertIn("make down", calls[0]["commands_str"][0])
+            self.assertNotIn("-v", calls[0]["commands_str"][0])
 
     def test_resume_from_store_api_skips_completed_stages(self):
         env = {
@@ -554,9 +514,9 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             installer._selected_tiers("SANDBOX", {"SANDBOX_INSTALL_COMPONENTS": "storage"})
 
-    def test_single_node_developer_topology_is_rejected_by_production(self):
+    def test_legacy_single_node_topology_is_rejected(self):
         document = {
-            "version": 1,
+            "version": 2,
             "cluster_name": "dark-developer",
             "development_single_node": True,
             "sites": [
@@ -570,24 +530,13 @@ class ValidationTests(unittest.TestCase):
                     ],
                 }
             ],
+            "replication": {"publish_after_replicas": 1, "purge_after_replicas": 1},
         }
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "topology.json"
             path.write_text(json.dumps(document))
-            topology = installer.load_storage_topology(path)
-            env = {
-                "TYPE": "production",
-                "PRODUCTION_INSTALL_COMPONENTS": "storage-node",
-            }
-            with (
-                mock.patch.object(
-                    installer,
-                    "configured_storage_topology",
-                    return_value=topology,
-                ),
-                self.assertRaises(SystemExit),
-            ):
-                installer.validate_install_configuration("PRODUCTION", env)
+            with self.assertRaisesRegex(installer.StorageTopologyError, "version 3"):
+                installer.load_storage_topology(path)
 
     def test_storage_secrets_have_distinct_valid_formats(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -615,7 +564,7 @@ class ValidationTests(unittest.TestCase):
                 installer._validate_storage_secret_file("CLUSTER", str(cluster), "cluster")
 
     def test_reconcile_only_reapplies_pins(self):
-        topology = installer.load_storage_topology(PROJECT_ROOT / "storage-topology.example.json")
+        topology = installer.production_runtime(installer.load_storage_topology(PROJECT_ROOT / "storage-topology.example.json"))
         calls = []
 
         def request(urls, method, path, **kwargs):
@@ -627,7 +576,7 @@ class ValidationTests(unittest.TestCase):
             return "{}"
 
         with mock.patch.object(installer, "cluster_request", side_effect=request):
-            installer.reconcile_storage(topology, "site-a")
+            installer.reconcile_storage(topology)
 
         mutation_calls = [call for call in calls if call[1] == "POST"]
         self.assertEqual(len(mutation_calls), 2)
@@ -666,7 +615,7 @@ class ValidationTests(unittest.TestCase):
                 "PRODUCTION_DARK_CONTRACT_ADDRESS": "0x" + "1" * 40,
                 "PRODUCTION_AUTHORITY_CONTRACT_ADDRESS": "0x" + "2" * 40,
                 "PRODUCTION_STORE_API_URL": "https://store.example",
-                "PRODUCTION_STORAGE_SITE_ID": "site-a",
+                "PRODUCTION_STORAGE_ACCESS_GROUP": "apps-a",
                 "SIGNER_MODE": "shared",
                 "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
             }

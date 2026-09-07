@@ -2,10 +2,14 @@
 
 ## Estado de este documento
 
-La opción B de este documento fue seleccionada e implementada. Store API
-confirma un pin, el Minter conserva los payloads hasta alcanzar la política
-derivada de la topología y el Replication Reconciliation Worker reconcilia en segundo plano.
-Las demás opciones se conservan como análisis histórico.
+Este es un análisis histórico de rendimiento. Su diseño de referencia fue
+reemplazado: Store API devuelve el CID cuando Cluster acepta el `add`, sin
+esperar un pin; el Minter retiene los payloads, el Replication Reconciliation
+Worker observa/repara réplicas y Chain publica cuando L1 y L2 alcanzan
+`publish_after_replicas`. La purga requiere `target_replicas` para ambos
+CIDs. Las secciones que hablan de confirmar un pin, conteos por sede o
+`purge_target_met` describen alternativas descartadas, no el comportamiento
+vigente.
 
 ## 1. Problema observado
 
@@ -38,13 +42,10 @@ El dashboard presenta:
 peers disponibles / peers mínimos para escritura
 ```
 
-Por lo tanto, `2/1 peers` significa que dos peers están visibles y que la
-política de escritura exige confirmar uno. No significa que uno de los dos
-peers esté caído.
-
-Esto también significa que Store API no está esperando necesariamente la
-replicación completa en ambos peers antes de responder. Espera el quorum mínimo
-configurado, actualmente un peer.
+Por lo tanto, `2/1 peers` era una métrica del diseño anterior. En el diseño
+vigente Store API informa disponibilidad de endpoints locales, mientras la
+política de publicación y purga pertenece al Minter. Store API devuelve al ser
+aceptado el `add`; no espera un quorum de réplica antes de responder.
 
 ## 3. Diagnóstico del flujo actual
 
@@ -72,7 +73,7 @@ Los principales candidatos a cuello de botella son:
 - dos escrituras de metadata por ARK;
 - creación repetida de clientes/conexiones HTTP;
 - tiempo de `add` y pin en IPFS Cluster;
-- verificación de quorum realizada dentro de cada solicitud de Store API.
+- observación de réplicas y reparación después de la admisión de Store API.
 
 Antes de modificar la semántica de durabilidad, se debe medir cuánto tiempo
 corresponde a cada etapa.
@@ -82,8 +83,8 @@ corresponde a cada etapa.
 - Aumentar el throughput del Metadata Worker para cargas grandes.
 - Mantener disponible el minting cuando uno de los dos servidores IPFS de una
   sede no está disponible.
-- No publicar un CID que Store API no haya aceptado y fijado al menos en el
-  quorum mínimo.
+- No publicar un CID que Store API no haya aceptado y cuyas réplicas no hayan
+  alcanzado el umbral de publicación en el reconciliador.
 - Mantener una fuente recuperable mientras la réplica objetivo todavía no está
   completa.
 - No agregar Redis, Kafka ni nuevos servidores para resolver este problema.
@@ -204,8 +205,9 @@ sola la ventana de durabilidad.
 Esta es la opción simple solicitada y la principal candidata para una primera
 implementación completa.
 
-Store API deriva la política de la topología y de
-`IPFS_CLUSTER_LOCAL_SITE_ID`; no existen mínimos manuales de escritura o purga.
+El diseño vigente mantiene la política en la topología, pero Store API no la
+interpreta: el Minter aplica `publish_after_replicas` y
+`target_replicas` al total de pins observado.
 
 El flujo sería:
 
@@ -235,14 +237,14 @@ La implementación utiliza solamente:
 
 ```dotenv
 METADATA_WORKER_CONCURRENCY=4
-IPFS_CLUSTER_LOCAL_SITE_ID=site-a
+REPLICATION_WORKER_CONCURRENCY=2
+REPLICATION_PUBLISH_AFTER_REPLICAS=1
+REPLICATION_TARGET_REPLICAS=2
 ```
 
-Los valores fijos son un lote máximo de 50 ARKs y un intervalo máximo de cinco
-minutos bajo carga continua. Una topología de un peer exige una copia; una
-sede de dos peers exige dos copias locales; una topología multisede exige dos
-copias locales y al menos una remota. Estos objetivos no se almacenan en
-PostgreSQL.
+Los valores efectivos de publicación y purga se derivan de la topología y se
+propagan al Minter. No se exige una distribución por sede; los conteos se
+guardan en `ark_metadata` y el workflow interno en `ark_records`.
 La política comprueba Level 1 y Level 2 de manera independiente; no se pueden
 sumar copias de ambos CIDs ni asumir que están fijados en los mismos peers.
 
@@ -313,8 +315,8 @@ implementar cola durable, recuperación tras reinicio, idempotencia, límites de
 disco, estados y limpieza. PostgreSQL en Minter ya puede cumplir esta función,
 por lo que no se recomienda inicialmente.
 
-Responder sin confirmar un pin y sin un spool durable no se considera aceptable
-para producción.
+Responder sin confirmar un pin es el diseño vigente: PostgreSQL del Minter es
+el spool durable que retiene L1/L2 hasta su observación y posterior purga.
 
 ### 7.6 Opción F — API batch o archivos CAR/DAG
 
@@ -332,37 +334,21 @@ simple para el problema actual.
 
 ## 8. Observabilidad de copias locales y remotas
 
-Store API ya conoce el mapa `peer → site`. Se propone ampliar
-`GET /v1/status/{cid}` para devolver una vista explícita de replicación:
-
-```dotenv
-IPFS_CLUSTER_LOCAL_SITE_ID=site-a
-```
-
-El deployer debe derivar este valor del sitio al que pertenece la instancia de
-Store API y validarlo contra el mapa de peers de la topología.
+Store API recibe la topología y deriva sus endpoints locales por
+un grupo de acceso de Store API, pero la topología no es una dependencia funcional
+ni se expone en la API.
 
 ```json
 {
   "cid": "bafy...",
   "status": "pinned",
-  "replication": {
-    "total_replicas": 4,
-    "local_replicas": 2,
-    "remote_replicas": 2,
-    "sites": {
-      "site-a": 2,
-      "site-b": 2
-    },
-    "purge_target_met": true,
-    "checked_at": "2026-08-21T12:00:00Z"
-  }
+  "replication": {"total_replicas": 4, "checked_at": "2026-08-21T12:00:00Z"}
 }
 ```
 
-`local` siempre significa la sede configurada para esa instancia de Store API,
-no necesariamente el peer que recibió originalmente el contenido. `remote`
-significa cualquier peer perteneciente a otra sede del mismo cluster global.
+La distribución por sede no forma parte de la respuesta ni de la política
+funcional; el reconciliador decide sobre el total observado y los umbrales del
+Minter.
 
 El recuento se obtiene de los peers con estado `PINNED`, no de allocations,
 peers conectados ni pins en progreso. Un peer `PINNING`, `PIN_ERROR` o
@@ -379,9 +365,8 @@ replication_checked_at
 replication_last_error
 ```
 
-Los estados `pending`, `complete`, `degraded` y `error` se derivan al consultar;
-no se persisten. La distribución local/remota y por sede se obtiene en vivo de
-Store API. El payload solamente se elimina cuando L1 y L2 cumplen la política.
+Los estados de workflow se conservan compactamente en `ark_records`. El payload
+solamente se elimina cuando L1 y L2 cumplen la política de purga.
 
 ### 8.2 API operativa
 
@@ -393,7 +378,8 @@ Esta entrega no modifica el dashboard. `/api/v1/worker/status` agrega:
 - última ejecución con revisados, reparados, purgados y fallidos.
 
 `/api/v1/worker/replication` lista CIDs, los dos conteos, fecha y último error.
-La distribución por sede se consulta directamente en Store API.
+La respuesta de Store API solo aporta el total observado; no se consulta
+distribución por sede.
 
 Alertas mínimas:
 
@@ -440,7 +426,7 @@ vuelve a verificar que el estado persistido cumple la política.
 1. Ejecutar una carga representativa con el código actual.
 2. Registrar throughput, latencias por etapa y recursos.
 3. Repetir con un nodo IPFS detenido.
-4. Medir separadamente primer pin y réplica completa.
+4. Medir separadamente aceptación de Store API, primera réplica observada y réplica completa.
 
 ### Fase 1 — Pooling
 
@@ -453,11 +439,11 @@ vuelve a verificar que el estado persistido cumple la política.
 2. Evaluar 8 solamente si los recursos tienen margen.
 3. Mantener Level 2 → Level 1 dentro de cada ARK.
 
-### Fase 3 — Un pin, retención y observabilidad
+### Fase 3 — Admisión, retención y observabilidad
 
-1. Confirmar un pin antes de avanzar.
+1. Admitir el CID sin bloquear la ruta crítica y habilitar Chain solo tras observación asíncrona.
 2. Conservar L1 y L2 en PostgreSQL.
-3. Exponer conteos locales, remotos y por sede.
+3. Exponer el total de réplicas observado y las colas internas del Minter.
 4. Mostrar `replication_pending` y su antigüedad.
 
 ### Fase 4 — Reconciliación oportunista
@@ -530,10 +516,10 @@ La evolución recomendada es:
 
 1. instrumentación y clientes HTTP persistentes;
 2. concurrencia configurable, comenzando con 2 y luego 4;
-3. confirmar un pin y conservar el payload;
+3. admitir el CID y conservar el payload hasta la política de purga;
 4. reconciliar prioritariamente cuando el worker esté ocioso, con un límite de
    starvation para garantizar progreso;
-5. exponer copias locales, remotas y por sede para cada CID;
+5. exponer el total de copias observadas para cada CID;
 6. purgar solamente cuando Level 1 y Level 2 alcancen el objetivo acordado.
 
 Antes de implementar la fase que habilita el Chain Worker se debe elegir

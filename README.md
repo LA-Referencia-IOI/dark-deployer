@@ -5,18 +5,17 @@ global IPFS storage infrastructure.
 
 ## Architecture
 
-The storage model has one supported shape:
+The storage model has one global Cluster and any number of storage nodes:
 
 ```text
 one global CRDT IPFS Cluster
-└── N sites
-    ├── two storage servers: Kubo + Cluster peer
-    └── one application tier: Store API + Minter + Resolver
+├── storage nodes: Kubo + Cluster peer
+└── application tiers: Store API + Minter + Resolver
 ```
 
-Each site-local Store API uses its two local storage servers. Cross-site block
-and Cluster traffic travels over the VPN; Store APIs do not replicate to or
-control one another. See [IPFS architecture](docs/ipfs-architecture.md) for the
+Each Store API uses a generated endpoint pool selected from the shared
+topology. Cluster controls global replication; Store APIs do not replicate to
+or control one another. See [IPFS architecture](docs/ipfs-architecture.md) for the
 failure model and design rationale.
 
 For a single technical entry point covering the complete system, APIs, site
@@ -24,8 +23,8 @@ layout, deployment and operations, see the
 [dARK technical reference](docs/dark-technical-reference.md).
 
 The `developer` profile has local-only modes: one lightweight peer or two
-independent peers simulating site HA on the same machine as Store API. The
-single-peer topology is not accepted by `sandbox` or `production`.
+independent peers on the same machine as Store API. The mode is a generated
+runtime preset, not a manually maintained topology.
 
 ## Requirements
 
@@ -50,13 +49,13 @@ python3 install.py
 
 The wizard offers two storage modes:
 
-- `Simple`: one local Kubo + Cluster peer, using `storage-topology.json`.
-- `HA simulation`: two independent peers in one site, using
-  `storage-topology.developer-ha.json`.
+- `Simple`: one local Kubo + Cluster peer.
+- `HA simulation`: two independent local peers.
 
 Both modes share one private-swarm key and one Cluster secret under
-`.dark-secrets/developer/`. Existing topology and secret files are never
-overwritten, and all generated paths are excluded from Git. HA simulation uses
+`.dark-secrets/developer/`. Runtime configuration is regenerated under
+`.generated/storage/`; secrets, identities and volumes are never removed.
+HA simulation uses
 separate containers, identities, networks and volumes, but both peers still
 share the same physical Docker host.
 
@@ -67,27 +66,28 @@ cp .env.example .env
 cp storage-topology.example.json storage-topology.json
 ```
 
-Edit `storage-topology.json` once for the whole infrastructure. Every site must
-contain exactly two peers:
+Edit `storage-topology.json` once for the whole infrastructure. It lists
+storage nodes and application endpoint pools, not geographical constraints:
 
 ```json
 {
-  "version": 1,
+  "version": 3,
   "cluster_name": "dark-global",
-  "sites": [
-    {
-      "id": "site-a",
-      "peers": [
-        {"id": "site-a-storage-1", "vpn_address": "10.200.1.11"},
-        {"id": "site-a-storage-2", "vpn_address": "10.200.1.12"}
-      ]
-    }
-  ]
+  "replication": {
+    "publish_after_replicas": 1,
+    "target_replicas": 2
+  },
+  "nodes": [
+    {"id": "storage-a", "address": "10.200.1.11"},
+    {"id": "storage-b", "address": "10.200.1.12"}
+  ],
+  "access_groups": {"apps-a": ["storage-a", "storage-b"]}
 }
 ```
 
 The live file is excluded from Git. Copy the same topology to storage and apps
-hosts. In `.env`, select the active profile and configure its site/role fields:
+hosts. In `.env`, select the active profile and configure its role and storage
+selector fields:
 
 Generate two different secrets outside the repository:
 
@@ -102,21 +102,20 @@ openssl rand -hex 32 > /run/dark-secrets/ipfs-cluster-secret
 chmod 600 /run/dark-secrets/ipfs-swarm.key /run/dark-secrets/ipfs-cluster-secret
 ```
 
-Then select the active profile and configure its site/role fields:
+Then select the active profile and configure its role and storage selector:
 
 ```ini
 TYPE=production
 PRODUCTION_INSTALL_COMPONENTS=storage-node
 PRODUCTION_STORAGE_TOPOLOGY_FILE=storage-topology.json
-PRODUCTION_STORAGE_SITE_ID=site-a
-PRODUCTION_STORAGE_NODE_ID=site-a-storage-1
+PRODUCTION_STORAGE_NODE_ID=storage-a
 PRODUCTION_IPFS_SWARM_KEY_FILE=/run/dark-secrets/ipfs-swarm.key
 PRODUCTION_IPFS_CLUSTER_SECRET_FILE=/run/dark-secrets/ipfs-cluster-secret
 ```
 
-For an apps host, use `PRODUCTION_INSTALL_COMPONENTS=apps` and omit the node and
-storage secret fields. It still needs `PRODUCTION_STORAGE_SITE_ID` so the
-installer can generate both local endpoint lists.
+For an apps host, use `PRODUCTION_INSTALL_COMPONENTS=apps`, omit the node and
+storage secret fields, and set `PRODUCTION_STORAGE_ACCESS_GROUP=apps-a`.
+The installer derives its Store API failover endpoints from that group.
 
 For a complete, address-by-address production runbook covering one blockchain
 server, one apps server and two IPFS servers on one LAN, see
@@ -180,14 +179,13 @@ Valid stages, in order, are `blockchain`, `core-lib`, `admin`, `ipfs`,
 and blockchain handoff, does not open the wizard, and reports every preserved
 stage.
 
-### Recommended site sequence
+### Recommended storage sequence
 
-1. Deploy the first peer listed in `storage-topology.json`; it seeds the Cluster.
-2. Deploy its partner in the same site.
-3. Verify both peers with `python3 install.py storage audit`.
-4. Deploy the site's apps role; its Store API uses both local peers.
-5. Add later sites two storage peers at a time.
-6. Run `python3 install.py storage reconcile` after every topology expansion.
+1. Deploy the first node listed in `storage-topology.json`; it seeds the Cluster.
+2. Deploy the remaining nodes using their individual `storage_node_id`.
+3. Verify the cluster with `python3 install.py storage audit`.
+4. Deploy the apps role with its `storage_access_group`.
+5. Add nodes by editing the shared topology and rerun `storage reconcile`.
 
 Kubo and Cluster identities are generated once and retained in named Docker
 volumes. Do not copy one node's identity volume to another node.
@@ -199,24 +197,24 @@ A blockchain-only installation generates:
 - `.env.integration`: RPC URL, chain ID, contract addresses and ABIs;
 - `DARK_PLATFORM_ADDRESS`, when `SIGNER_MODE=shared` is active.
 
-Production V1 uses one externally provisioned `PLATFORM_PRIVATE_KEY_FILE` on
+Production uses one externally provisioned `PLATFORM_PRIVATE_KEY_FILE` on
 Blockchain and Apps. The private key is not placed in either handoff file.
-Copy only the public `.env.integration` from Blockchain to Apps. Legacy profiles
-may still use `.env.integration.secrets` for backward compatibility. Storage
+Copy only the public `.env.integration` from Blockchain to Apps. Storage
 nodes need neither blockchain handoff nor the platform signer.
 
 ## Store API durability
 
-The deployer calculates policy from topology size:
+The topology defines the two thresholds explicitly:
 
-| Topology | Cluster min/max | Successful Store API write |
+| Topology | Example policy | Successful Store API write |
 | --- | --- | --- |
-| developer single node | `1/1` | 1 pinned peer |
-| one site | `1/2` | 1 pinned peer; purge after 2 local copies |
-| two or more sites | `3/(2 × sites)` | 1 pinned peer; purge after 2 local and 1 remote copies |
+| developer simple | `publish=1`, `target=1` | Cluster accepts the CID |
+| developer HA | `publish=1`, `target=2` | Cluster accepts the CID |
+| production | chosen in topology | Cluster accepts the CID |
 
-Store API returns `503` when it creates a CID but cannot observe one pinned peer
-before timeout. Minter must not publish that CID on-chain until a retry succeeds.
+Store API returns the CID after Cluster accepts the add. The Minter publishes
+only after its reconciler observes the configured publication threshold for L1
+and L2; payloads are purged at the independent target threshold.
 
 Health endpoints:
 

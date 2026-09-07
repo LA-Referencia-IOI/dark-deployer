@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .files import parse_env_file, write_env_secure, write_text_secure
+from .storage import StorageTopologyError, load_storage_topology
 
 
 class DeploymentError(ValueError):
@@ -201,16 +202,12 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
     storage = inventory.get("storage")
     if not isinstance(storage, dict):
         raise DeploymentError("storage must be an object")
-    _identifier(storage.get("cluster_name"), "storage.cluster_name")
-    if "strict_single_site" in storage:
-        legacy_strict = storage["strict_single_site"]
-        if not isinstance(legacy_strict, bool):
-            raise DeploymentError("storage.strict_single_site must be a boolean")
-        if legacy_strict:
-            raise DeploymentError(
-                "storage.strict_single_site=true is no longer supported; remove "
-                "the field to use one-pin write confirmation"
-            )
+    topology_file = _string(storage.get("topology_file"), "storage.topology_file")
+    topology_path = (path.parent / topology_file).resolve()
+    try:
+        topology = load_storage_topology(topology_path)
+    except StorageTopologyError as exc:
+        raise DeploymentError(f"invalid storage topology: {exc}") from exc
     _absolute_path(storage.get("swarm_key_target"), "storage.swarm_key_target")
     _absolute_path(storage.get("cluster_secret_target"), "storage.cluster_secret_target")
     if storage["swarm_key_target"] == storage["cluster_secret_target"]:
@@ -229,6 +226,7 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
 
     seen_ids: set[str] = set()
     seen_addresses: set[str] = set()
+    seen_storage_nodes: set[str] = set()
     role_counts = {role: 0 for role in ALL_ROLES}
     for index, host in enumerate(hosts):
         field = f"sites[0].hosts[{index}]"
@@ -239,16 +237,35 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
             raise DeploymentError(f"duplicate host id {host_id!r}")
         seen_ids.add(host_id)
         _string(host.get("management_address"), f"{field}.management_address")
-        vpn_address = _ipv4(host.get("vpn_address"), f"{field}.vpn_address")
-        if ipaddress.ip_address(vpn_address) not in vpn_network:
-            raise DeploymentError(f"{field}.vpn_address is outside network.vpn_cidr")
-        if vpn_address in seen_addresses:
-            raise DeploymentError(f"duplicate host VPN address {vpn_address!r}")
-        seen_addresses.add(vpn_address)
         roles = host.get("roles")
         if not isinstance(roles, list) or len(roles) != 1 or roles[0] not in ALL_ROLES:
             raise DeploymentError(f"{field}.roles must contain one supported role")
         role_counts[roles[0]] += 1
+        role = roles[0]
+        if role == "storage-node":
+            node_id = _identifier(host.get("storage_node_id"), f"{field}.storage_node_id")
+            try:
+                topology.node(node_id)
+            except StorageTopologyError as exc:
+                raise DeploymentError(str(exc)) from exc
+            if node_id in seen_storage_nodes:
+                raise DeploymentError(f"duplicate storage node selector {node_id!r}")
+            seen_storage_nodes.add(node_id)
+            if "vpn_address" in host:
+                raise DeploymentError(f"{field}.vpn_address is derived from storage.topology_file")
+        else:
+            vpn_address = _ipv4(host.get("vpn_address"), f"{field}.vpn_address")
+            if ipaddress.ip_address(vpn_address) not in vpn_network:
+                raise DeploymentError(f"{field}.vpn_address is outside network.vpn_cidr")
+            if vpn_address in seen_addresses:
+                raise DeploymentError(f"duplicate host VPN address {vpn_address!r}")
+            seen_addresses.add(vpn_address)
+        if role == "apps":
+            group = _identifier(host.get("storage_access_group"), f"{field}.storage_access_group")
+            try:
+                topology.access_group_nodes(group)
+            except StorageTopologyError as exc:
+                raise DeploymentError(str(exc)) from exc
 
     if role_counts != {"blockchain": 1, "apps": 1, "storage-node": 2}:
         raise DeploymentError(
@@ -257,6 +274,8 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
 
     inventory["_repository_env"] = _load_repository_environment(project_root)
     inventory["_inventory_path"] = str(path.resolve())
+    inventory["_storage_topology_path"] = str(topology_path)
+    inventory["_storage_topology"] = topology
     return inventory
 
 
@@ -291,22 +310,6 @@ def _endpoints(inventory: dict) -> dict:
     return endpoints
 
 
-def _topology(inventory: dict) -> dict:
-    site = inventory["sites"][0]
-    peers = [host for host in site["hosts"] if "storage-node" in host["roles"]]
-    return {
-        "version": 1,
-        "cluster_name": inventory["storage"]["cluster_name"],
-        "sites": [{
-            "id": site["id"],
-            "peers": [
-                {"id": host["id"], "vpn_address": host["vpn_address"]}
-                for host in peers
-            ],
-        }],
-    }
-
-
 def _firewall_policy(inventory: dict) -> dict:
     vpn_cidr = inventory["network"]["vpn_cidr"]
     trusted_client = inventory["network"]["trusted_minter_clients"][0]
@@ -332,7 +335,6 @@ def _host_env(
     repository_env: dict[str, str],
     topology_hash: str,
 ) -> dict[str, str]:
-    site_id = inventory["sites"][0]["id"]
     role = host["roles"][0]
     values = {
         "TYPE": "production",
@@ -347,8 +349,8 @@ def _host_env(
         "CHAIN_ID": str(inventory.get("chain_id", 2025)),
         "PRODUCTION_STORAGE_TOPOLOGY_FILE": "storage-topology.json",
         "PRODUCTION_STORAGE_TOPOLOGY_SHA256": topology_hash,
-        "PRODUCTION_STORAGE_SITE_ID": site_id,
-        "PRODUCTION_STORAGE_NODE_ID": host["id"] if role == "storage-node" else "",
+        "PRODUCTION_STORAGE_ACCESS_GROUP": host.get("storage_access_group", "") if role == "apps" else "",
+        "PRODUCTION_STORAGE_NODE_ID": host.get("storage_node_id", "") if role == "storage-node" else "",
         "PRODUCTION_IPFS_SWARM_KEY_FILE": inventory["storage"]["swarm_key_target"],
         "PRODUCTION_IPFS_CLUSTER_SECRET_FILE": inventory["storage"]["cluster_secret_target"],
         "PRODUCTION_BLOCKCHAIN_HOST": (
@@ -384,7 +386,6 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
     inventory = load_deployment_inventory(inventory_path.resolve(), project_root.resolve())
     public_inventory = {key: value for key, value in inventory.items() if not key.startswith("_")}
     inventory_hash = sha256_json(public_inventory)
-    topology = _topology(inventory)
     endpoints = _endpoints(inventory)
     repository_env = inventory["_repository_env"]
     deployer_branch = repository_env["DEPLOYER_BRANCH"]
@@ -400,7 +401,9 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
     topology_path = shared / "storage-topology.json"
     endpoints_path = shared / "deployment-endpoints.json"
     firewall_path = shared / "firewall-policy.json"
-    _write_json(topology_path, topology)
+    # Production topology is the authored source of truth. Do not normalize or
+    # reconstruct it from inventory: bundles preserve its bytes and hash.
+    shutil.copyfile(Path(inventory["_storage_topology_path"]), topology_path)
     _write_json(endpoints_path, {"version": 1, "advertised": endpoints})
     _write_json(firewall_path, _firewall_policy(inventory))
     topology_hash = sha256_file(topology_path)
@@ -424,7 +427,9 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
                 "id": host["id"],
                 "role": host["roles"][0],
                 "management_address": host["management_address"],
-                "vpn_address": host["vpn_address"],
+                "vpn_address": host.get("vpn_address", ""),
+                "storage_node_id": host.get("storage_node_id", ""),
+                "storage_access_group": host.get("storage_access_group", ""),
             },
             "release": {
                 "deployer_branch": deployer_branch,

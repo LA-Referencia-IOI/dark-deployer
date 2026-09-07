@@ -404,7 +404,7 @@ Returns raw bytes. Content-Type is `application/octet-stream`.
 
 **Response `200`:**
 ```json
-{"cid": "bafyrei...", "status": "pinned", "replication": {"total_replicas": 2, "local_replicas": 2, "remote_replicas": 0, "sites": {"site-a": 2}, "purge_target_met": true, "checked_at": "2026-09-01T12:00:00Z"}}
+{"cid": "bafyrei...", "status": "pinned", "replication": {"total_replicas": 2, "checked_at": "2026-09-01T12:00:00Z"}}
 ```
 
 #### `GET /health` — Health check

@@ -53,9 +53,8 @@ flowchart TB
     Store --> IPFS
 ~~~
 
-Store API de una sede sólo usa sus dos nodos IPFS locales. No se comunica con
-Store APIs remotas; la propagación entre sedes ocurre dentro del clúster IPFS
-por la VPN privada.
+Store API usa el pool de endpoints generado por el instalador. No se comunica
+con Store APIs remotas; Cluster propaga globalmente por la red privada.
 
 ## 3. Sedes y layout físico
 
@@ -96,9 +95,8 @@ Un clúster global
 └── Site N: dos storage nodes; Apps N opcional
 ~~~
 
-Una sede es una etiqueta operativa y un dominio de fallo, no un subclúster.
-Cada peer tiene una identidad persistente y única. Los peers locales se conectan
-directamente; los peers de sedes distintas lo hacen por VPN.
+Los grupos de acceso son selectores de endpoints, no políticas geográficas ni
+subclústeres. Cada peer tiene una identidad persistente y única.
 
 Con dos sedes los datos pueden sobrevivir a la pérdida de una sede, pero los
 payloads se conservan hasta que exista una réplica remota. Con tres o más sedes,
@@ -165,11 +163,12 @@ stateDiagram-v2
 
 El orden de persistencia es L2 → L1:
 
-1. El Worker guarda el original como Level 2 y confirma un peer PINNED.
-2. Construye Level 1, que contiene el CID L2, y confirma un peer PINNED.
-3. Escribe ambos CIDs en PostgreSQL y habilita al Chain Worker.
-4. El Chain Worker publica L1 en dARK.sol mediante create_ark o update_ark.
-5. El Replication Reconciliation Worker verifica réplicas y sólo entonces purga los payloads.
+1. El Metadata Worker guarda el original como Level 2 y recibe su CID al ser aceptado por Cluster.
+2. Construye Level 1, que contiene el CID L2, y recibe su CID.
+3. Escribe ambos CIDs en PostgreSQL con conteos de réplicas desconocidos.
+4. El Replication Reconciliation Worker observa los pins reales y habilita Chain al alcanzar `publish_after_replicas`.
+5. El Chain Worker publica L1 en dARK.sol mediante create_ark o update_ark.
+6. El reconciliador purga los payloads solo al alcanzar `target_replicas` para L1 y L2.
 
 El CID de blockchain siempre apunta a L1; Resolver sigue el vínculo L1 → L2
 para devolver el registro original.
@@ -188,11 +187,11 @@ ejemplo 200 o 201. El espacio 00* se reserva para DARK 1; el sufijo MM debe ser
 Un CID identifica contenido, no disponibilidad. IPFS Cluster coordina pins para
 obtener durabilidad.
 
-| Topología | Cluster min/max | Éxito de escritura | Meta de purga para L1 y L2 |
+| Perfil | Cluster min/max | Éxito de escritura | Objetivo L1/L2 |
 | --- | --- | --- | --- |
-| Developer simple (un peer) | 1 / 1 | 1 PINNED | 1 copia local. |
-| Una sede (dos peers) | 1 / 2 | 1 PINNED | 2 copias locales. |
-| Dos o más sedes | 3 / 2 × sedes | 1 PINNED | 2 locales + 1 remota. |
+| Developer simple | 1 / 1 | CID aceptado | 1 |
+| Developer HA | 1 / 2 | CID aceptado | 2 |
+| Producción | 1 / `target_replicas` | CID aceptado | `target_replicas` |
 
 Sólo PINNED cuenta como copia durable. PINNING, PIN_ERROR, una asignación o un
 peer visible no cuentan como réplica.
@@ -210,13 +209,14 @@ ark_metadata sólo conserva el último conteo L1/L2, fecha de comprobación y
 | complete | Payloads purgados tras cumplir ambas metas. |
 
 El Replication Reconciliation Worker reconcilia sin trabajo nuevo y también durante carga. Procesa
-hasta 50 ARKs por lote y usa METADATA_WORKER_CONCURRENCY (por defecto 4). Un CID
+hasta 50 ARKs por lote y usa `REPLICATION_WORKER_CONCURRENCY` (por defecto 2). Un CID
 con cero copias se reconstruye desde PostgreSQL; si produce otro CID, se rechaza.
 
-Store API usa round-robin separado para Kubo, Cluster REST y Cluster Proxy
-locales. Timeout, conexión rechazada, 429 y 5xx provocan un cooldown de 30
+Store API usa round-robin separado para Kubo y Cluster REST locales. Timeout,
+conexión rechazada, 429 y 5xx provocan un cooldown de 30
 segundos. Así, con dos nodos el patrón es storage-1 → storage-2 → storage-1;
-si uno falla, usa el otro y minting continúa si se puede confirmar un pin.
+si uno falla, usa el otro y minting continúa cuando el reconciliador observa
+las réplicas requeridas.
 
 ## 8. APIs
 
@@ -262,9 +262,9 @@ Las APIs de aplicaciones están bajo /api/v1; Store API usa /v1.
 
 | Método | Ruta | Uso |
 | --- | --- | --- |
-| POST | /v1/store | Guarda bytes y devuelve CID/tamaño/réplicas. |
+| POST | /v1/store | Guarda bytes y devuelve CID/tamaño tras la aceptación de Cluster. |
 | GET | /v1/retrieve/{cid} | Recupera bytes. |
-| GET | /v1/status/{cid} | Réplicas total/local/remota, sedes y meta de purga. |
+| GET | /v1/status/{cid} | Réplicas totales observadas y momento de comprobación. |
 | GET | /health/live | Proceso vivo. |
 | GET | /health/read | Al menos un Kubo local operativo. |
 | GET | /health/write | Ruta local de escritura y peer Cluster conocido. |
@@ -273,14 +273,7 @@ Las APIs de aplicaciones están bajo /api/v1; Store API usa /v1.
 ~~~json
 {
   "cid": "bafy...",
-  "replication": {
-    "total_replicas": 3,
-    "local_replicas": 2,
-    "remote_replicas": 1,
-    "sites": {"site-a": 2, "site-b": 1},
-    "purge_target_met": true,
-    "checked_at": "2026-08-21T12:00:00Z"
-  }
+  "replication": {"total_replicas": 3, "checked_at": "2026-08-21T12:00:00Z"}
 }
 ~~~
 
@@ -309,9 +302,9 @@ debe asumir habilitado.
 
 | Perfil | Uso |
 | --- | --- |
-| developer | Stack local; uno o dos peers en el mismo host. |
-| sandbox | Infraestructura desacoplada de prueba; dos peers por sede. |
-| production | Bundles de hosts; dos peers por sede. |
+| developer | Stack local; preset simple o HA generado. |
+| sandbox | Infraestructura desacoplada con topología v3. |
+| production | Bundles de hosts y topología v3 compartida. |
 
 | Rol | Instala |
 | --- | --- |
@@ -320,8 +313,8 @@ debe asumir habilitado.
 | storage-node | Un Kubo y un peer Cluster. |
 | all | Los tres roles; sólo escenarios restringidos/no productivos. |
 
-El inventario de producción reúne CIDR VPN, clientes Minter permitidos, rutas
-de secretos, sitios, hosts, DNS, direcciones VPN, roles y URLs anunciadas.
+El inventario reúne CIDR VPN, rutas de secretos, hosts, roles, grupo de acceso
+y selectores de nodo. Las direcciones de storage salen de la topología.
 
 ~~~bash
 python3.12 install.py deployment validate --inventory deployment-inventory.json
@@ -380,22 +373,22 @@ python3 install.py plan
 python3 install.py resume --from store-api
 ~~~
 
-Ejecutar storage reconcile tras recuperar peers/sedes, añadir una sede o cambiar
+Ejecutar storage reconcile tras recuperar peers, añadir nodos o cambiar
 factores de réplica. No automatiza unpin ni eliminación de volúmenes.
 
 ## 12. Fallos, alertas y límites
 
 | Evento | Lecturas | Minting | Acción |
 | --- | --- | --- | --- |
-| Cae un storage local | Continúan por el peer local. | Continúa tras confirmar un pin. | Recuperar y reconciliar. |
+| Cae un storage local | Continúan por el otro peer local. | Continúa si la disponibilidad observada alcanza el umbral. | Recuperar y reconciliar. |
 | Cae una sede remota | Continúan localmente. | Puede continuar; purga espera réplica. | Recuperar VPN/sede. |
 | Sede aislada de VPN | Lecturas locales. | Continúa localmente; no logra meta remota. | Conservar payloads. |
 | Cae Store API | Apps de esa sede no sirve storage. | Indisponible desde esa sede. | Usar otra Apps si existe. |
 | Cae Apps/Blockchain únicos | Indisponible. | Indisponible. | Recuperar host; no hay HA V1. |
 
-Alertar por peers/sedes bajo objetivo, PIN_ERROR, pins bajo réplica máxima,
-disco Kubo bajo 20 %, peer esperado ausente, tiempo de primer pin, réplica
-completa y backlog/errores del reconciliador.
+Alertar por PIN_ERROR, pins bajo el umbral de publicación o purga, disco Kubo
+bajo 20 %, indisponibilidad de peers locales, latencia de aceptación de Store
+API y backlog/errores del reconciliador.
 
 Replicación no es backup contra un unpin autorizado o pérdida global. Se
 necesitan copias de secretos/configuración, inventario de pins y pruebas de

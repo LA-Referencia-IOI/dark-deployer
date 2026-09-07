@@ -487,21 +487,20 @@ The storage layer handles all content-addressed metadata blobs. It is composed o
 | :--- | :--- | :--- | :--- |
 | `POST` | `/v1/store` | Store raw bytes (any Content-Type) | `{"cid": "...", "size": N}` |
 | `GET` | `/v1/retrieve/{cid}` | Retrieve content by CID | Raw bytes (`application/octet-stream`) |
-| `GET` | `/v1/status/{cid}` | Pin/replication status | total/local/remote replicas, sites and purge readiness |
+| `GET` | `/v1/status/{cid}` | Pin/replication status | total pinned replicas and observation time |
 | `GET` | `/health` | Service health check | `{"status": "healthy"}` |
 
 **Storage backends** (selected by `STORAGE_BACKEND` env var):
 
 | Backend | Value | Description |
 | :--- | :--- | :--- |
-| `IPFSClusterBackend` | `ipfs_cluster` | Production backend. `store` calls IPFS `/api/v0/add` (CIDv1) then registers pin with cluster REST `/pins/{cid}`. `retrieve` calls IPFS `/api/v0/cat`. |
+| `IPFSClusterBackend` | `ipfs_cluster` | Production backend. `store` calls Cluster REST `/add?local=true` and returns when Cluster accepts the CID; `retrieve` calls Kubo `/api/v0/cat`. |
 | `FileSystemBackend` | `filesystem` | Dev/test only. Uses MD5 hash as pseudo-CID; stores raw blobs on local disk with atomic write. CIDs are **not** real IPFS CIDs. |
 
 Configuration for the IPFS backend:
 ```
 STORAGE_BACKEND=ipfs_cluster
-IPFS_API_URLS_JSON=["http://dark-ipfs-site-a-storage-1:5001"]
-IPFS_CLUSTER_API_URLS_JSON=["http://dark-ipfs-cluster-site-a-storage-1:9094"]
+STORAGE_ENDPOINTS_FILE=/config/storage-endpoints.json
 ```
 
 ### 7.3 `MetadataService` in `dark-core-lib`

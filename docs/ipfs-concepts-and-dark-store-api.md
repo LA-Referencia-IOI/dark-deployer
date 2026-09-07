@@ -70,8 +70,7 @@ In Store API, the public contract intentionally stays simpler:
 ```text
 POST /v1/store -> returns cid
 GET /v1/retrieve/{cid} -> returns raw bytes
-GET /v1/status/{cid} -> returns pin/replica status, including total/local/
-remote replicas, per-site counts and `purge_target_met`
+GET /v1/status/{cid} -> returns observed total pinned replicas and checked_at
 ```
 
 The caller should not need to know whether the CID maps to one block or a graph.
@@ -84,10 +83,11 @@ Adding content to IPFS means importing bytes into an IPFS node:
 client -> IPFS /api/v0/add -> local IPFS blockstore -> CID
 ```
 
-Depending on the path used, the add operation may also pin the data. In dARK, the preferred path is through IPFS Cluster Proxy:
+Depending on the path used, the add operation may also pin the data. In dARK,
+Store API submits it through the local IPFS Cluster REST API:
 
 ```text
-Store API -> Cluster Proxy /api/v0/add?cid-version=1&pin=true
+Store API -> Cluster REST /add?cid-version=1&pin=true&local=true
           -> local IPFS
           -> Cluster pin orchestration
           -> CID
@@ -95,7 +95,9 @@ Store API -> Cluster Proxy /api/v0/add?cid-version=1&pin=true
 
 This matters because a plain IPFS add only proves that one node accepted the bytes and produced a CID. It does not by itself prove that the content was replicated according to the cluster policy.
 
-The Store API currently uses `cluster_proxy` as the default mode because it makes the write path atomic from the application point of view: add and pin are one operation at the storage boundary.
+Cluster accepts the add and returns its CID immediately. Pin allocation and
+replication remain asynchronous; the minter reconciler determines when it is
+safe to publish or purge its retained payload.
 
 ## Retrieving content
 
@@ -181,14 +183,17 @@ replication_factor_min = minimum acceptable number of replicas
 replication_factor_max = maximum desired number of replicas
 ```
 
-In local dARK development we use a small cluster and typically configure:
+For dARK writes the local admission factor is one and the desired target is
+configured independently:
 
 ```text
-CLUSTER_REPLICATION_MIN=2
-CLUSTER_REPLICATION_MAX=2
+CLUSTER_REPLICATION_MIN=1
+CLUSTER_REPLICATION_MAX=target_replicas
 ```
 
-That means each stored object should be allocated to exactly two cluster peers. In production, this should be chosen according to node count, failure domains, storage budget and recovery expectations.
+Cluster accepts a local copy and asynchronously allocates toward the target.
+The target is chosen according to node count, storage budget and recovery
+expectations; no failure domain or site is mandatory.
 
 ## Cluster REST API vs Cluster Proxy
 
@@ -208,13 +213,16 @@ GET  /pins/{cid}
 POST /pins/{cid}
 ```
 
-The Cluster Proxy API exposes an IPFS-compatible API through the Cluster peer. For dARK, the key operation is:
+The Cluster Proxy API exposes an IPFS-compatible API through the Cluster peer.
+It is available for operator tooling, but Store API does not depend on it.
+For dARK, the key operation is the Cluster REST add endpoint:
 
 ```text
-POST /api/v0/add?cid-version=1&pin=true
+POST /add?cid-version=1&pin=true&local=true
 ```
 
-When Store API writes through the proxy, Cluster can add the content and register the pin in the cluster workflow. This is preferable to:
+Store API submits content to Cluster REST, which accepts the bytes and registers
+the pin workflow in the same Cluster request. This avoids the untracked path:
 
 ```text
 IPFS add -> Cluster pin
@@ -222,7 +230,8 @@ IPFS add -> Cluster pin
 
 because the two-step path creates an intermediate state where the content exists in local IPFS but may not yet be managed by Cluster.
 
-The legacy `ipfs_then_cluster` mode is useful for debugging and compatibility, but `cluster_proxy` is the intended default.
+The returned CID is an admission result, not a replication guarantee. The
+minter reconciliation worker observes the pinset asynchronously.
 
 ## Store API in dARK
 
@@ -294,7 +303,7 @@ Application network
   Store API
         |
         v
-  Local Cluster Proxy / REST
+  Local Cluster REST
         |
         v
   Local IPFS daemon
@@ -309,13 +318,13 @@ From the Store API point of view, the remote nodes are substrate. They are not d
 That gives a clean separation:
 
 - Store API needs one local IPFS API for reads.
-- Store API needs one local Cluster REST API for status and readiness.
-- Store API needs one local Cluster Proxy API for writes.
+- Store API needs one local Cluster REST API for writes, status and readiness.
 - Cluster owns the remote replication topology.
 
-The deployer derives endpoint aliases from the topology (for example,
-`dark-ipfs-site-a-storage-1` and `dark-ipfs-cluster-site-a-storage-1`) and
-passes them through `IPFS_API_URLS_JSON` and `IPFS_CLUSTER_API_URLS_JSON`.
+The deployer resolves the production access group before startup and mounts a
+generated endpoint document. Store API reads `STORAGE_ENDPOINTS_FILE`; Docker
+aliases such as `dark-ipfs-developer-storage-1` never need to be duplicated in
+environment variables or manually declared in production topology.
 
 ## Same cluster vs independent clusters
 
@@ -395,7 +404,7 @@ Symptoms:
 
 - `POST /api/v0/id` fails;
 - `cat` fails;
-- Cluster Proxy may also fail if it depends on the local IPFS daemon.
+- Cluster REST add may fail if its paired local IPFS daemon is unavailable.
 
 Store API should report storage readiness unhealthy. Minter metadata worker should pause instead of recording permanent ARK failures.
 
@@ -408,16 +417,6 @@ Symptoms:
 - pin status cannot be checked.
 
 Store API should report readiness unhealthy unless another configured node from the same cluster is available.
-
-### Cluster Proxy is down
-
-Symptoms:
-
-- direct Cluster REST may be healthy;
-- writes through `/api/v0/add` fail.
-
-Store API always writes through Cluster Proxy and should consider this not
-ready for writes. Liveness can still be healthy, but readiness should be unhealthy.
 
 ### Not enough Cluster peers
 
@@ -466,8 +465,8 @@ Only the first category is semantic to the ARK. The other two are storage infras
 ## Operational rules for dARK
 
 - Treat Store API as the only application-facing storage boundary.
-- Use Cluster Proxy for writes by default.
-- Do not call `/pins/{cid}` after a successful proxy add.
+- Use Cluster REST `/add?local=true` for writes.
+- Do not call `/pins/{cid}` synchronously after a successful add.
 - Keep `replication_min` aligned with expected durability and actual node count.
 - Use `/health/live` for container liveness.
 - Use `/health` for worker readiness.
@@ -487,7 +486,7 @@ Only the first category is semantic to the ARK. The other two are storage infras
 | Pin | Instruction for an IPFS node to keep content and protect it from garbage collection. |
 | Pinset | Set of CIDs a node or cluster is expected to pin. |
 | Cluster peer | IPFS Cluster process that coordinates pins for a paired IPFS daemon. |
-| Cluster Proxy | IPFS-compatible API exposed by Cluster, used by dARK for add+pin writes. |
+| Cluster Proxy | IPFS-compatible API exposed by Cluster; useful to operators but not used by Store API. |
 | Replication factor | Number of Cluster peers expected to hold a pin. |
 | Store API | dARK storage facade over IPFS/Cluster. |
 
