@@ -19,7 +19,7 @@ Supported profiles:
     - ``production`` — installs the production stack.
 
 Components installed (per profile):
-    - **blockchain** — three sub-repos: ``dark-env``, ``dark-dapp``, ``dark-explorador``
+    - **blockchain** — internal Besu runtime plus ``dark-dapp`` and ``dark-explorador``
     - **dark-ipfs**
     - **core-lib**
     - **admin**
@@ -69,11 +69,13 @@ from typing import Optional
 from dark_deployer.commands import get_commands, parse_commands
 from dark_deployer.deployment import (
     DeploymentError,
+    deployment_delivery_plan,
     host_status,
-    load_deployment_inventory,
+    load_deployment_topology,
     materialize_host_bundle,
     render_deployment,
     validate_host_bundle,
+    verify_deployment_bundle,
 )
 from dark_deployer.files import parse_env_file, write_env_secure, write_text_secure
 from dark_deployer.process import (
@@ -90,6 +92,7 @@ from dark_deployer.storage import (
     developer_runtime,
     entry_cid,
     load_storage_topology,
+    load_storage_topology_document,
     minter_replication_environment,
     node_environment,
     pin_entries,
@@ -154,16 +157,6 @@ def load_env(filepath: str = ".env") -> dict:
 def load_optional_env(filepath: Path) -> dict:
     """Parse an optional env-style file, returning an empty dict if absent."""
     return parse_env_file(filepath, required=False)
-
-
-def run_compose_up_detached(cmd: str, cwd: str, timeout_seconds: int = 180) -> None:
-    """Run a detached Docker Compose startup without interactive progress output."""
-    run_shell(
-        cmd,
-        cwd=cwd,
-        timeout_seconds=timeout_seconds,
-        compose_plain=True,
-    )
 
 
 def ensure_docker_running() -> None:
@@ -377,26 +370,67 @@ def docker_network_exists(network_name: str) -> bool:
     return result.returncode == 0
 
 
-def ensure_dark_net() -> None:
-    """Create the shared Docker network 'dark-net' if it doesn't already exist.
-
-    In a full install dark-env creates this network. In decoupled/storage-only
-    installs dark-env is absent, so we create the network here so that other
-    components (dark-ipfs, app services) can join it.
-    """
-    if docker_network_exists("dark-net"):
+def ensure_docker_network(network_name: str) -> None:
+    """Create a named external Docker network if it does not exist."""
+    if docker_network_exists(network_name):
         return
-    print("[INFO] Docker network 'dark-net' not found — creating it...")
+    print(f"[INFO] Docker network '{network_name}' not found — creating it...")
     result = subprocess.run(
-        "docker network create dark-net",
+        f"docker network create {shlex.quote(network_name)}",
         shell=True,
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        print(f"[ERROR] Failed to create Docker network 'dark-net': {result.stderr.strip()}")
+        print(f"[ERROR] Failed to create Docker network '{network_name}': {result.stderr.strip()}")
         sys.exit(1)
-    print("[OK] Docker network 'dark-net' created.")
+    print(f"[OK] Docker network '{network_name}' created.")
+
+
+def ensure_apps_network() -> None:
+    ensure_docker_network("dark-apps")
+
+
+def ensure_backbone_network() -> None:
+    """Ensure the simulated private VPN has deterministic addresses.
+
+    Blockchain enodes advertise addresses on this network.  A dynamic Docker
+    subnet would make a generated static-nodes.json invalid after recreation.
+    """
+    subnet = "172.31.0.0/24"
+    gateway = "172.31.0.1"
+    if docker_network_exists("dark-backbone"):
+        result = subprocess.run(
+            "docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' dark-backbone",
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        actual = result.stdout.strip()
+        if actual == subnet:
+            return
+        print(
+            "[ERROR] Docker network 'dark-backbone' uses "
+            f"{actual or 'an unknown subnet'}, but the deployment requires {subnet}.\n"
+            "        Stop dependent stacks, remove that network, then rerun install."
+        )
+        sys.exit(1)
+    result = subprocess.run(
+        f"docker network create --subnet {subnet} --gateway {gateway} dark-backbone",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"[ERROR] Failed to create Docker network 'dark-backbone': {result.stderr.strip()}")
+        sys.exit(1)
+    print(f"[OK] Docker network 'dark-backbone' created with private VPN subnet {subnet}.")
+
+
+def ensure_blockchain_network() -> None:
+    # Host-local validator networks are declared by the internal runtime Compose file.
+    # The only cross-host blockchain network is dark-backbone.
+    return
 
 
 def apps_probe_host() -> str:
@@ -417,29 +451,32 @@ def apps_health_url(port: int) -> str:
     return f"http://{apps_probe_host()}:{port}/health"
 
 
-def compose_up_stack(
-    compose_dir: Path,
-    stack_name: str,
-    health_url: Optional[str] = None,
+CENTRAL_COMPOSE_FILE = PROJECT_ROOT / "compose" / "apps.yml"
+
+
+def central_compose(
+    command: str,
+    project: str = "dark-apps",
+    compose_file: Path = CENTRAL_COMPOSE_FILE,
+    env_file: Path | None = None,
 ) -> None:
-    """Start a Docker Compose stack and optionally wait for its health endpoint."""
-    ensure_docker_running()
-    compose_file = compose_dir / "docker-compose.yml"
+    """Run the deployer's canonical Compose entrypoint."""
     if not compose_file.exists():
-        print(f"[WARNING] '{compose_file}' not found. Skipping {stack_name} Docker startup.")
-        return
-
-    ensure_dark_net()
-
-    print(f"[INFO] Starting {stack_name} Docker stack...")
-    run_compose_up_detached(
-        "docker compose up -d --build",
-        cwd=str(compose_dir),
-        timeout_seconds=900,
+        print(f"[ERROR] Central Compose entrypoint is missing: {compose_file}")
+        sys.exit(1)
+    selected_env = env_file or (PROJECT_ROOT / ".env")
+    if compose_file == CENTRAL_COMPOSE_FILE and not env_file:
+        try:
+            if parse_env_file(selected_env, required=False).get("TYPE", "developer").lower() == "production":
+                compose_file = PROJECT_ROOT / "compose" / "apps-production.yml"
+        except OSError:
+            pass
+    run_shell(
+        f"docker compose --project-name {shlex.quote(project)} "
+        f"--env-file {shlex.quote(str(selected_env))} "
+        f"-f {shlex.quote(str(compose_file))} {command}",
+        cwd=str(PROJECT_ROOT),
     )
-
-    if health_url:
-        wait_for_http_ready(health_url, service_name=stack_name)
 
 
 def print_install_summary(prefix: str, env: dict) -> None:
@@ -554,6 +591,17 @@ def run_commands(commands: str | list[str], cwd: str) -> None:
     """
     for command in parse_commands(commands):
         run_shell(command, cwd=cwd)
+
+
+def component_setup_commands(commands: str | list[str]) -> list[str]:
+    """Exclude legacy Docker lifecycle commands from component setup."""
+    return [
+        command for command in parse_commands(commands)
+        if "docker compose" not in command
+        and "docker-compose" not in command
+        and "make up" not in command
+        and "make down" not in command
+    ]
 
 
 def ensure_shared_venv() -> Path:
@@ -709,8 +757,8 @@ def private_key_identity(private_key: str) -> tuple[str, str]:
     return key.public_key.to_checksum_address(), "0x" + key.public_key.to_hex().removeprefix("0x")
 
 
-def prepare_dark_env_platform_wallet(target_dir: str, env: dict) -> None:
-    """Fund the configured shared platform signer in a new dark-env genesis."""
+def prepare_blockchain_runtime_platform_wallet(target_dir: str, env: dict) -> None:
+    """Fund the configured shared platform signer in a new runtime genesis."""
     if env.get("SIGNER_MODE", "legacy").strip().lower() != "shared":
         return
     private_key = get_role_private_key(env, "deployer")
@@ -731,7 +779,7 @@ def prepare_dark_env_platform_wallet(target_dir: str, env: dict) -> None:
         existing_address = address_path.read_text().strip()
         if existing_address.lower() != address.lower():
             print(
-                "[ERROR] Existing dark-env master wallet does not match the "
+                "[ERROR] Existing blockchain runtime master wallet does not match the "
                 "configured platform signer. A production genesis cannot be re-keyed."
             )
             sys.exit(1)
@@ -741,20 +789,27 @@ def prepare_dark_env_platform_wallet(target_dir: str, env: dict) -> None:
             genesis = json.loads(genesis_path.read_text())
             allocations = genesis.get("alloc", {})
         except (OSError, json.JSONDecodeError) as exc:
-            print(f"[ERROR] Cannot validate existing dark-env genesis: {exc}")
+            print(f"[ERROR] Cannot validate existing blockchain runtime genesis: {exc}")
             sys.exit(1)
         normalized_allocations = {
             str(key).removeprefix("0x").lower() for key in allocations
         }
         if address.removeprefix("0x").lower() not in normalized_allocations:
             print(
-                "[ERROR] Existing dark-env genesis does not fund the configured "
+                "[ERROR] Existing blockchain runtime genesis does not fund the configured "
                 "platform signer. Recreate the greenfield release before deployment."
             )
             sys.exit(1)
     else:
         write_text_secure(address_path, address + "\n", mode=0o600)
-    print(f"[OK] Prepared dark-env genesis allocation for platform signer {address}.")
+    runtime_updates = {
+        key: env[key]
+        for key in ("CHAIN_ID", "BLOCKCHAIN_RUNTIME_ROLE", "BLOCKCHAIN_RUNTIME_CHAIN_ARTIFACT_DIR", "BLOCKCHAIN_BACKBONE_IPS", "BLOCKCHAIN_BIND_ADDRESS", "BESU_IMAGE")
+        if env.get(key, "").strip()
+    }
+    if runtime_updates:
+        update_env_file(str(Path(target_dir) / ".env.runtime"), runtime_updates)
+    print(f"[OK] Prepared blockchain runtime genesis allocation for platform signer {address}.")
 
 
 def validate_private_key(private_key: str, profile: str) -> None:
@@ -1208,6 +1263,15 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
         print("[ERROR] DEPLOYER_PRIVATE_KEY (or legacy MASTER_PRIVATE_KEY) is not set")
         sys.exit(1)
     validate_private_key(private_key, env.get("TYPE", "developer").lower())
+    derived_address, derived_public_key = private_key_identity(private_key)
+    if address and address.lower() != derived_address.lower():
+        print(
+            "[ERROR] MASTER_WALLET_ADDRESS does not match the configured private key "
+            f"({address} != {derived_address})."
+        )
+        sys.exit(1)
+    address = derived_address
+    public_key = public_key or derived_public_key
 
     config = configparser.ConfigParser()
     config["base"]       = {"blockchain_net": "dark-local"}
@@ -1226,6 +1290,33 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
         temporary_config.seek(0)
         write_text_secure(config_path, temporary_config.read())
     print(f"[OK] config.ini generated at '{config_path}'.\n")
+
+    # Fail before an expensive Solidity build when the selected signer is not
+    # funded by the genesis currently served by the local RPC.
+    wait_for_rpc(rpc_url)
+    balance_request = urllib.request.Request(
+        rpc_url,
+        data=json.dumps({
+            "jsonrpc": "2.0",
+            "method": "eth_getBalance",
+            "params": [address, "latest"],
+            "id": 1,
+        }).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(balance_request, timeout=5) as response:
+            balance_body = json.loads(response.read().decode("utf-8"))
+        if int(balance_body.get("result", "0x0"), 16) <= 0:
+            print(
+                f"[ERROR] Deployment wallet {address} has no balance on chain {chain_id}. "
+                "Recreate the chain or align MASTER_PRIVATE_KEY with the funded genesis wallet."
+            )
+            sys.exit(1)
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError, OSError) as exc:
+        print(f"[ERROR] Could not verify deployment wallet balance: {exc}")
+        sys.exit(1)
 
     # ── Step 3: compile contracts ─────────────────────────────────────────────
     # compile.py uses relative paths (./contracts, ./compiled) so it must be
@@ -1248,7 +1339,6 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
     # so it must run from inside dARK_dapp/ as well.
     # Wait for the node to be ready before deploying — docker compose up -d
     # returns immediately but the node may still be initialising.
-    wait_for_rpc(rpc_url)
     print("[INFO] Deploying contracts to the network...")
     run_shell(f"{python} deploy.py", cwd=str(dapp_dir))
     print("[OK] Contracts deployed.\n")
@@ -1259,29 +1349,74 @@ def install_dark_dapp(target_dir: str, env: dict) -> None:
 
 
 def install_blockchain(prefix: str, env: dict) -> None:
-    """Clone and set up the three blockchain submodules.
-
-    Each submodule is an independent Git repository installed under
-    ``components/blockchain/<submodule>/``.
-
-    Submodules:
-        - ``dark-env``
-        - ``dark-dapp``
-        - ``dark-explorador``
-
-    :param prefix: Environment variable prefix (e.g. ``DEVELOPER``).
-    :type prefix: str
-    :param env: Dictionary of environment variables loaded from ``.env``.
-    :type env: dict
-    """
+    """Install the internal Besu runtime and the role-local chain applications."""
     print("\n── Blockchain ────────────────────────────────────────────────")
+    role = env.get("BLOCKCHAIN_RUNTIME_ROLE", "all").strip().lower()
+    if role not in {"all", "rpc", "validators-a", "validators-b"}:
+        print(f"[ERROR] Unsupported BLOCKCHAIN_RUNTIME_ROLE={role!r}")
+        sys.exit(1)
+    if env.get("TYPE", "developer").strip().lower() != "production":
+        ensure_backbone_network()
+        if role in {"all", "rpc"}:
+            ensure_apps_network()
+    runtime = PROJECT_ROOT / "blockchain"
+    if not runtime.is_dir():
+        print("[ERROR] Internal blockchain runtime is missing.")
+        sys.exit(1)
+    update_env_file(str(runtime / ".env.runtime"), {
+        key: env[key] for key in (
+            "CHAIN_ID", "BLOCKCHAIN_RUNTIME_ROLE", "BLOCKCHAIN_RUNTIME_CHAIN_ARTIFACT_DIR",
+            "BLOCKCHAIN_BACKBONE_IPS", "BLOCKCHAIN_BIND_ADDRESS", "BESU_IMAGE"
+        ) if env.get(key, "").strip()
+    })
+    if role not in {"validators-a", "validators-b"}:
+        prepare_blockchain_runtime_platform_wallet(str(runtime), env)
+    run_shell("./setup.sh", cwd=str(runtime))
+    # Compose lifecycle is owned by dark-deployer.  The runtime scripts remain
+    # useful for local maintenance, but install never starts the component's
+    # own Compose file.
+    production = env.get("TYPE", "").strip().lower() == "production"
+    compose_dir = PROJECT_ROOT / "compose"
+    if role == "all":
+        # Developer HA models the three physical hosts explicitly: apps/RPC,
+        # validators-a and validators-b.  Never put all validators in one
+        # Compose project, even though they share the same runtime definition.
+        central_compose(
+            "--profile validators-a up -d --build",
+            project="dark-blockchain-a",
+            compose_file=compose_dir / ("blockchain-production.yml" if production else "blockchain-a.yml"),
+        )
+        central_compose(
+            "--profile validators-b up -d --build",
+            project="dark-blockchain-b",
+            compose_file=compose_dir / ("blockchain-production.yml" if production else "blockchain-b.yml"),
+        )
+        central_compose(
+            "--profile rpc up -d --build rpc01",
+            project="dark-apps",
+            compose_file=compose_dir / ("apps-production.yml" if production else "apps.yml"),
+        )
+    else:
+        if role == "rpc":
+            compose_file = compose_dir / ("apps-production.yml" if production else "apps.yml")
+            project = "dark-apps"
+        elif role == "validators-b":
+            compose_file = compose_dir / ("blockchain-production.yml" if production else "blockchain-b.yml")
+            project = "dark-blockchain-b"
+        else:
+            compose_file = compose_dir / ("blockchain-production.yml" if production else "blockchain-a.yml")
+            project = "dark-blockchain-a"
+        profile_args = f"--profile {role}"
+        service = " rpc01" if role == "rpc" else ""
+        central_compose(f"{profile_args} up -d --build{service}", project=project, compose_file=compose_file)
+    if role in {"all", "rpc"}:
+        wait_for_rpc(env.get("RPC_URL", "http://127.0.0.1:8545"), timeout_seconds=180)
 
-    #: Mapping of submodule folder names to their env-variable suffixes.
-    submodules: dict = {
-        "dark-env":        "DARK_ENV",
-        "dark-dapp":       "DARK_DAPP",
-        "dark-explorador": "DARK_EXPLORADOR",
-    }
+    submodules: dict[str, str] = {}
+    if role in {"all", "rpc"}:
+        submodules["dark-dapp"] = "DARK_DAPP"
+    if role in {"all", "validators-a"}:
+        submodules["dark-explorador"] = "DARK_EXPLORADOR"
 
     for folder, suffix in submodules.items():
         url_key      = f"{prefix}_BLOCKCHAIN_{suffix}_REPOSITORY_URL"
@@ -1294,7 +1429,7 @@ def install_blockchain(prefix: str, env: dict) -> None:
             print(f"[SKIP] '{url_key}' is not set — skipping '{folder}'.")
             continue
 
-        default_branch = "main" if folder == "dark-env" else "master"
+        default_branch = "main" if folder == "dark-dapp" else "master"
         branch   = env.get(branch_key, default_branch).strip()
         do_setup = env.get(setup_key, "True").strip().lower() != "false"
         commands = get_commands(env, commands_key, DEFAULT_COMMANDS)
@@ -1303,25 +1438,31 @@ def install_blockchain(prefix: str, env: dict) -> None:
         install_repo(name=folder, repo_url=repo_url, branch=branch, target_dir=target)
 
         if do_setup:
-            if folder == "dark-env":
-                prepare_dark_env_platform_wallet(target, env)
             # dark-dapp has a dedicated installer that generates config.ini
             # and deploys smart contracts instead of running generic COMMANDS.
             if folder == "dark-dapp":
                 install_dark_dapp(target_dir=target, env=env)
             else:
-                setup_repo(target_dir=target, commands_str=commands)
+                # Docker lifecycle is owned by dark-deployer. Keep repository
+                # setup commands that prepare code, but ignore legacy Compose
+                # startup commands from component configuration.
+                non_compose_commands = [
+                    command for command in commands
+                    if "docker compose" not in command and "docker-compose" not in command
+                ]
+                setup_repo(target_dir=target, commands_str=non_compose_commands)
+                if folder == "dark-explorador" and role in {"validators-a", "all"}:
+                    explorer_compose = (
+                        PROJECT_ROOT / "compose" / "blockchain-production.yml"
+                        if env.get("TYPE", "").strip().lower() == "production"
+                        else PROJECT_ROOT / "compose" / "blockchain-a.yml"
+                    )
+                    central_compose(
+                        "--profile explorer up -d --build lite-explorer",
+                        project="dark-blockchain-a",
+                        compose_file=explorer_compose,
+                    )
 
-                # After dark-env is set up, attempt to extract the master wallet if present
-                if folder == "dark-env":
-                    wallet_path = Path(target) / "master-wallet.txt"
-                    wallet_info = extract_wallet_info(str(wallet_path))
-                    if wallet_info:
-                        print(f"[INFO] Extracted master wallet info from '{wallet_path}'.")
-                        update_env_file(".env", wallet_info)
-                        print("[OK] Updated global .env with master wallet keys.")
-                        # Update the in-memory env dict so subsequent setups (like dark-dapp) see the changes!
-                        env.update(wallet_info)
         else:
             print(f"[INFO] SETUP=False — '{folder}' cloned, setup skipped.\n")
 
@@ -1644,10 +1785,10 @@ def _derive_host_from_url(url: str) -> str:
     return urllib.parse.urlparse(url).hostname or url
 
 
-#: dark-env's docker-compose service name for the RPC node, reachable by other
+#: Internal blockchain runtime service name for the RPC node, reachable by other
 #: containers on the shared 'dark-net' network — NOT the same as the host-facing
 #: RPC_URL (usually 'localhost'), which is unreachable from inside a container.
-_LOCAL_BLOCKCHAIN_DOCKER_RPC_URL = "http://rpc01:8545"
+_LOCAL_BLOCKCHAIN_DOCKER_RPC_URL = "http://blockchain-rpc:8545"
 
 
 def _docker_rpc_url(env: dict) -> str:
@@ -1658,6 +1799,8 @@ def _docker_rpc_url(env: dict) -> str:
     the same Docker network under a fixed service name. Otherwise the blockchain
     is remote/decoupled, so the operator-provided RPC_URL is used as-is.
     """
+    if env.get("TYPE", "developer").strip().lower() == "developer":
+        return _LOCAL_BLOCKCHAIN_DOCKER_RPC_URL
     if env.get("_BLOCKCHAIN_CO_LOCATED") == "true":
         return _LOCAL_BLOCKCHAIN_DOCKER_RPC_URL
     return env.get("RPC_URL", "").strip()
@@ -1804,7 +1947,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         ).strip(),
         "REPLICATION_WORKER_PAGE_SIZE": env.get(
             "REPLICATION_WORKER_PAGE_SIZE",
-            template_env.get("REPLICATION_WORKER_PAGE_SIZE", "50"),
+            template_env.get("REPLICATION_WORKER_PAGE_SIZE", "100"),
         ).strip(),
         "REPLICATION_WORKER_CONCURRENCY": env.get(
             "REPLICATION_WORKER_CONCURRENCY",
@@ -1814,10 +1957,20 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "REPLICATION_WORKER_SLEEP_SECONDS",
             template_env.get("REPLICATION_WORKER_SLEEP_SECONDS", "30"),
         ).strip(),
-        "REPLICATION_WORKER_RECHECK_SECONDS": env.get(
-            "REPLICATION_WORKER_RECHECK_SECONDS",
-            template_env.get("REPLICATION_WORKER_RECHECK_SECONDS", "300"),
+        "REPLICATION_STATUS_BATCH_SIZE": env.get(
+            "REPLICATION_STATUS_BATCH_SIZE",
+            template_env.get("REPLICATION_STATUS_BATCH_SIZE", "200"),
         ).strip(),
+        "REPLICATION_IDLE_SLEEP_SECONDS": env.get(
+            "REPLICATION_IDLE_SLEEP_SECONDS",
+            template_env.get("REPLICATION_IDLE_SLEEP_SECONDS", "2"),
+        ).strip(),
+        "AVAILABILITY_RECHECK_SECONDS": env.get("AVAILABILITY_RECHECK_SECONDS", template_env.get("AVAILABILITY_RECHECK_SECONDS", "10")).strip(),
+        "AVAILABILITY_MAX_RECHECK_SECONDS": env.get("AVAILABILITY_MAX_RECHECK_SECONDS", template_env.get("AVAILABILITY_MAX_RECHECK_SECONDS", "60")).strip(),
+        "REPLICATION_RECHECK_SECONDS": env.get("REPLICATION_RECHECK_SECONDS", template_env.get("REPLICATION_RECHECK_SECONDS", "300")).strip(),
+        "REPLICATION_MAX_RECHECK_SECONDS": env.get("REPLICATION_MAX_RECHECK_SECONDS", template_env.get("REPLICATION_MAX_RECHECK_SECONDS", "1800")).strip(),
+        "REPLICATION_REPAIR_GRACE_SECONDS": env.get("REPLICATION_REPAIR_GRACE_SECONDS", template_env.get("REPLICATION_REPAIR_GRACE_SECONDS", "120")).strip(),
+        "REPLICATION_REPAIR_COOLDOWN_SECONDS": env.get("REPLICATION_REPAIR_COOLDOWN_SECONDS", template_env.get("REPLICATION_REPAIR_COOLDOWN_SECONDS", "900")).strip(),
         "REPLICATION_WORKER_STORAGE_RETRY_SECONDS": env.get(
             "REPLICATION_WORKER_STORAGE_RETRY_SECONDS",
             template_env.get("REPLICATION_WORKER_STORAGE_RETRY_SECONDS", "10"),
@@ -1858,9 +2011,9 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "CHAIN_WORKER_MIN_PAGE_SIZE",
             template_env.get("CHAIN_WORKER_MIN_PAGE_SIZE", "1"),
         ).strip(),
-        "CHAIN_WORKER_RECOVERY_SUCCESS_CYCLES": env.get(
-            "CHAIN_WORKER_RECOVERY_SUCCESS_CYCLES",
-            template_env.get("CHAIN_WORKER_RECOVERY_SUCCESS_CYCLES", "3"),
+        "CHAIN_WORKER_HEALTHY_CYCLES_BEFORE_GROWING": env.get(
+            "CHAIN_WORKER_HEALTHY_CYCLES_BEFORE_GROWING",
+            template_env.get("CHAIN_WORKER_HEALTHY_CYCLES_BEFORE_GROWING", "3"),
         ).strip(),
         "CHAIN_WORKER_MAX_RETRIES": env.get(
             "CHAIN_WORKER_MAX_RETRIES",
@@ -1873,22 +2026,6 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         "CHAIN_WORKER_RUNTIME_NAME": env.get(
             "CHAIN_WORKER_RUNTIME_NAME",
             template_env.get("CHAIN_WORKER_RUNTIME_NAME", "chain-publisher"),
-        ).strip(),
-        "RECOVERY_WORKER_ENABLED": env.get(
-            "RECOVERY_WORKER_ENABLED",
-            template_env.get("RECOVERY_WORKER_ENABLED", "true"),
-        ).strip(),
-        "RECOVERY_WORKER_PAGE_SIZE": env.get(
-            "RECOVERY_WORKER_PAGE_SIZE",
-            template_env.get("RECOVERY_WORKER_PAGE_SIZE", "50"),
-        ).strip(),
-        "RECOVERY_WORKER_SLEEP_SECONDS": env.get(
-            "RECOVERY_WORKER_SLEEP_SECONDS",
-            template_env.get("RECOVERY_WORKER_SLEEP_SECONDS", "30"),
-        ).strip(),
-        "RECOVERY_WORKER_RUNTIME_NAME": env.get(
-            "RECOVERY_WORKER_RUNTIME_NAME",
-            template_env.get("RECOVERY_WORKER_RUNTIME_NAME", "recovery-scheduler"),
         ).strip(),
         "WORKER_HEARTBEAT_INTERVAL_SECONDS": env.get(
             "WORKER_HEARTBEAT_INTERVAL_SECONDS",
@@ -1977,6 +2114,7 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
     }
 
     runtime = configured_storage_runtime(prefix, env)
+    integration_env["REPLICATION_TARGET_REPLICAS"] = str(runtime.policy.target_replicas)
     pool = storage_runtime_pool(prefix, env, runtime)
     # Store API receives only a generated endpoint pool. It cannot accidentally
     # reconstruct/override the production topology or apply site policy.
@@ -2132,35 +2270,24 @@ def generate_dashboard_env_integration(dashboard_path: Path, env: dict) -> None:
     print(f"[OK] Generated '{env_path}'.")
 
 
-def commands_include_docker_compose_up(commands_str: str | list[str]) -> bool:
-    """Return True when the command string already handles compose startup."""
-    return any(
-        "docker compose up" in cmd or "docker-compose up" in cmd
-        for cmd in parse_commands(commands_str)
-    )
-
-
 def start_minter_stack(minter_path: Path) -> None:
     """Build, migrate, and start minter services via Docker Compose."""
     ensure_docker_running()
-    compose_file = minter_path / "docker-compose.yml"
-    if not compose_file.exists():
-        print(f"[WARNING] '{compose_file}' not found. Skipping minter Docker startup.")
-        return
-
-    ensure_dark_net()
+    if parse_env_file(PROJECT_ROOT / ".env", required=False).get("TYPE", "developer").lower() != "production":
+        ensure_apps_network()
+        ensure_backbone_network()
 
     print("[INFO] Building minter Docker images...")
-    run_shell("docker compose build", cwd=str(minter_path))
+    central_compose("build minter-api minter-metadata-worker minter-replication-worker minter-chain-worker")
 
     print("[INFO] Starting minter Postgres for migration...")
-    run_compose_up_detached("docker compose up -d postgres", cwd=str(minter_path))
+    central_compose("up -d postgres")
 
     print("[INFO] Running minter database migrations...")
-    run_shell("docker compose run --rm minter-api migrate", cwd=str(minter_path))
+    central_compose("run --rm minter-api migrate")
 
     print("[INFO] Starting minter Docker stack...")
-    run_compose_up_detached("docker compose up -d", cwd=str(minter_path))
+    central_compose("up -d minter-api minter-metadata-worker minter-replication-worker minter-chain-worker")
     wait_for_http_ready(
         apps_health_url(8001),
         service_name="minter",
@@ -2169,29 +2296,20 @@ def start_minter_stack(minter_path: Path) -> None:
 
 def start_admin_api_stack(admin_api_path: Path) -> None:
     """Start admin API via Docker Compose when blockchain network exists."""
-    compose_up_stack(
-        compose_dir=admin_api_path,
-        stack_name="admin API",
-        health_url=apps_health_url(8000),
-    )
+    central_compose("up -d admin-api")
+    wait_for_http_ready(apps_health_url(8000), service_name="admin API")
 
 
 def start_resolver_api_stack(resolver_api_path: Path) -> None:
     """Start resolver API via Docker Compose when the component provides it."""
-    compose_up_stack(
-        compose_dir=resolver_api_path,
-        stack_name="resolver API",
-        health_url=apps_health_url(8002),
-    )
+    central_compose("up -d resolver-api")
+    wait_for_http_ready(apps_health_url(8002), service_name="resolver API")
 
 
 def start_store_api_stack(store_api_path: Path) -> None:
     """Start store API via Docker Compose when the component provides it."""
-    compose_up_stack(
-        compose_dir=store_api_path,
-        stack_name="store API",
-        health_url=apps_health_url(8003),
-    )
+    central_compose("up -d store-api")
+    wait_for_http_ready(apps_health_url(8003), service_name="store API")
 
 
 # ─── Selective component rebuilds ─────────────────────────────────────────────
@@ -2314,21 +2432,6 @@ def require_component_path(component: str, path: Path) -> Path:
     sys.exit(1)
 
 
-def run_compose_build(compose_dir: Path, services: list[str], no_cache: bool) -> None:
-    """Build one component stack or the selected services in that stack."""
-    compose_file = compose_dir / "docker-compose.yml"
-    if not compose_file.exists():
-        print(f"[ERROR] '{compose_file}' not found.")
-        sys.exit(1)
-
-    command = "docker compose build"
-    if no_cache:
-        command += " --no-cache"
-    if services:
-        command += " " + " ".join(services)
-    run_shell(command, cwd=str(compose_dir))
-
-
 def rebuild_service_component(
     component: str,
     env: dict,
@@ -2346,35 +2449,36 @@ def rebuild_service_component(
     env_generator(component_path, env)
 
     ensure_docker_running()
-    run_compose_build(
-        compose_dir=component_path,
-        services=list(spec["services"]),
-        no_cache=no_cache,
-    )
+    build_command = "build"
+    if no_cache:
+        build_command += " --no-cache"
+    if spec["services"]:
+        build_command += " " + " ".join(spec["services"])
+    central_compose(build_command)
 
     if no_start:
         print(f"[OK] Built {display}. Startup skipped because --no-start was provided.")
         return
 
-    ensure_dark_net()
+    if parse_env_file(PROJECT_ROOT / ".env", required=False).get("TYPE", "developer").lower() != "production":
+        ensure_apps_network()
 
     if component == "minter":
         print("[INFO] Starting minter Postgres...")
-        run_compose_up_detached("docker compose up -d postgres", cwd=str(component_path))
+        central_compose("up -d postgres")
 
         if migrate:
             print("[INFO] Running minter database migrations...")
-            run_shell("docker compose run --rm minter-api migrate", cwd=str(component_path))
+            central_compose("run --rm minter-api migrate")
 
         print("[INFO] Starting minter API and workers...")
-        run_compose_up_detached(
-            "docker compose up -d minter-api minter-metadata-worker minter-chain-worker",
-            cwd=str(component_path),
+        central_compose(
+            "up -d minter-api minter-metadata-worker minter-replication-worker minter-chain-worker"
         )
     else:
         service_names = " ".join(spec["services"])
         print(f"[INFO] Starting {display}...")
-        run_compose_up_detached(f"docker compose up -d {service_names}", cwd=str(component_path))
+        central_compose(f"up -d {service_names}")
 
     wait_for_http_ready(apps_health_url(int(spec["health_port"])), service_name=display)
     print(f"[OK] Rebuild complete for {display}.")
@@ -2592,15 +2696,12 @@ def install_core_admin_api(prefix: str, env: dict) -> None:
     generate_admin_api_env_integration(admin_api_path=target_path, env=env)
 
     if do_setup:
-        setup_repo(target_dir=target, commands_str=commands)
+        setup_repo(target_dir=target, commands_str=component_setup_commands(commands))
     else:
         print("[INFO] SETUP=False — 'dark-core-admin-api' cloned, setup skipped.\n")
         return
 
-    if commands_include_docker_compose_up(commands):
-        print("[INFO] Admin API Docker startup already handled by configured commands.")
-    else:
-        start_admin_api_stack(admin_api_path=target_path)
+    start_admin_api_stack(admin_api_path=target_path)
 
 
 def install_core_resolver_api(prefix: str, env: dict) -> None:
@@ -2655,12 +2756,8 @@ def install_core_resolver_api(prefix: str, env: dict) -> None:
             command.replace("pip ", f"{venv_pip} ")
             for command in commands
         ]
-        run_commands(commands, cwd=str(target_path))
-
-        if commands_include_docker_compose_up(commands):
-            print("[INFO] Resolver API Docker startup already handled by configured commands.")
-        else:
-            start_resolver_api_stack(resolver_api_path=target_path)
+        run_commands(component_setup_commands(commands), cwd=str(target_path))
+        start_resolver_api_stack(resolver_api_path=target_path)
     else:
         print("[INFO] No resolver COMMANDS configured. Trying Docker Compose startup by convention.")
         start_resolver_api_stack(resolver_api_path=target_path)
@@ -2718,12 +2815,8 @@ def install_dark_store_api(prefix: str, env: dict) -> None:
             command.replace("pip ", f"{venv_pip} ")
             for command in commands
         ]
-        run_commands(commands, cwd=str(target_path))
-
-        if commands_include_docker_compose_up(commands):
-            print("[INFO] Store API Docker startup already handled by configured commands.")
-        else:
-            start_store_api_stack(store_api_path=target_path)
+        run_commands(component_setup_commands(commands), cwd=str(target_path))
+        start_store_api_stack(store_api_path=target_path)
     else:
         print("[INFO] No store API COMMANDS configured. Trying Docker Compose startup by convention.")
         start_store_api_stack(store_api_path=target_path)
@@ -2809,7 +2902,13 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
         print(f"[OK] Generated '{node_env_path}' for {node.id}.")
 
     if do_setup:
-        ensure_dark_net()
+        if prefix == "DEVELOPER":
+            ensure_backbone_network()
+        storage_compose = (
+            PROJECT_ROOT / "compose" / "storage-production.yml"
+            if env.get("TYPE", "").strip().lower() == "production"
+            else PROJECT_ROOT / "compose" / "storage.yml"
+        )
         # HA -> simple must not leave the second developer peer participating
         # in Cluster. `down` preserves its named volumes, identities and data.
         if prefix == "DEVELOPER":
@@ -2820,18 +2919,21 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
                 except Exception:
                     stale_id = ""
                 if stale_id and stale_id not in active_ids:
-                    print(f"[INFO] Stopping inactive developer peer {stale_id} without removing volumes.")
-                    setup_repo(
-                        target_dir=target,
-                        commands_str=[f"ENV_FILE={shlex.quote(str(stale_env))} make down"],
+                    print(f"[INFO] Stopping inactive developer peer '{stale_id}' through central Compose.")
+                    central_compose(
+                        "down",
+                        project=f"dark-storage-{stale_id}",
+                        compose_file=storage_compose,
+                        env_file=stale_env,
                     )
         for node_id, node_env_path in generated_nodes:
-            node_commands = [
-                f"ENV_FILE={shlex.quote(str(node_env_path))} {command}"
-                for command in commands
-            ]
             print(f"[INFO] Starting IPFS peer '{node_id}'...")
-            setup_repo(target_dir=target, commands_str=node_commands)
+            central_compose(
+                "up -d --build",
+                project=f"dark-storage-{node_id}",
+                compose_file=storage_compose,
+                env_file=node_env_path,
+            )
     else:
         print("[INFO] SETUP=False — 'dark-ipfs' cloned, setup skipped.\n")
 
@@ -2879,15 +2981,12 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
         generate_minter_env_integration(minter_path=target_path, env=env)
 
     if do_setup:
-        setup_repo(target_dir=target, commands_str=commands)
+        setup_repo(target_dir=target, commands_str=component_setup_commands(commands))
     else:
         print(f"[INFO] SETUP=False — '{repo_name}' cloned, setup skipped.\n")
 
     if name.upper() == "MINTER" and do_setup:
-        if commands_include_docker_compose_up(commands):
-            print("[INFO] Minter Docker startup already handled by configured commands.")
-        else:
-            start_minter_stack(minter_path=target_path)
+        start_minter_stack(minter_path=target_path)
 
 
 # ─── Dashboard installer ──────────────────────────────────────────────────────
@@ -2931,7 +3030,11 @@ def install_dashboard(prefix: str, env: dict) -> None:
         print("[INFO] SETUP=False — 'dashboard-web' cloned, setup skipped.\n")
         return
 
-    run_commands(commands, cwd=str(Path(target).resolve()))
+    central_compose("up -d mysql cache app")
+    managed_commands = [
+        f"DARK_DEPLOYER_MANAGED_COMPOSE=1 {command}" for command in commands
+    ]
+    run_commands(managed_commands, cwd=str(Path(target).resolve()))
     print("[OK] 'dashboard-web' is up.\n")
 
 
@@ -2959,7 +3062,7 @@ def install_profile(
 
     Components installed in order:
 
-    1. Blockchain (``dark-env``, ``dark-dapp``, ``dark-explorador``)
+    1. Internal blockchain runtime, dapp and explorer
     2. Core Lib
     3. Core Admin API
     4. dark-ipfs
@@ -2985,9 +3088,10 @@ def install_profile(
             print(f"[RESUME] Keeping completed stage '{stage}'.")
         return selected
 
-    if install_bc:
+    install_rpc = install_apps and env.get("BLOCKCHAIN_RUNTIME_ROLE", "").strip().lower() == "rpc"
+    if install_bc or install_rpc:
         blockchain_host = env.get(f"{prefix}_BLOCKCHAIN_HOST", "").strip()
-        if blockchain_host:
+        if blockchain_host and not install_rpc:
             print(f"[INFO] Blockchain tier is remote ({blockchain_host}) — skipping local install.")
             env["_BLOCKCHAIN_CO_LOCATED"] = "false"
         else:
@@ -3008,7 +3112,7 @@ def install_profile(
         env["_BLOCKCHAIN_CO_LOCATED"] = "false"
 
     # Pure apps mode imports blockchain contract and signer handoff data.
-    if install_apps and not install_bc and not install_ipfs:
+    if install_apps and not install_bc and not install_ipfs and not install_rpc:
         validate_root_env_integration()
         _merge_root_env_integration_into_env(
             env=env,
@@ -3053,21 +3157,23 @@ def _selected_tiers(prefix: str, env: dict) -> tuple[bool, bool, bool]:
         for item in env.get(f"{prefix}_INSTALL_COMPONENTS", "all").split(",")
         if item.strip()
     }
-    unknown = components - {"all", "apps", "blockchain", "storage-node"}
+    unknown = components - {"all", "apps", "blockchain", "blockchain-a", "blockchain-b", "storage-node"}
     if unknown:
         print(f"[ERROR] Unknown install components: {', '.join(sorted(unknown))}")
         sys.exit(1)
     install_all = "all" in components
     return (
-        install_all or "blockchain" in components,
+        install_all or bool({"blockchain", "blockchain-a", "blockchain-b"} & components),
         install_all or "storage-node" in components,
         install_all or "apps" in components,
     )
 
 
-def storage_topology_path(prefix: str, env: dict) -> Path:
-    """Resolve the profile topology path from the deployer root."""
-    raw_path = env.get(f"{prefix}_STORAGE_TOPOLOGY_FILE", "storage-topology.json").strip()
+def deployment_topology_path(prefix: str, env: dict) -> Path:
+    raw_path = (
+        env.get(f"{prefix}_DEPLOYMENT_TOPOLOGY_FILE", "").strip()
+        or env.get("DEPLOYMENT_TOPOLOGY_FILE", "deployment-topology.json").strip()
+    )
     path = Path(raw_path)
     if not path.is_absolute():
         path = PROJECT_ROOT / path
@@ -3075,25 +3181,39 @@ def storage_topology_path(prefix: str, env: dict) -> Path:
 
 
 def configured_storage_topology(prefix: str, env: dict) -> StorageTopology:
-    """Load the profile's configured topology and validate its optional hash."""
-    path = storage_topology_path(prefix, env)
-    expected_hash = env.get(f"{prefix}_STORAGE_TOPOLOGY_SHA256", "").strip()
-    if expected_hash:
+    """Load storage from the canonical deployment topology."""
+    # Test/in-memory callers may provide an explicit document path; deployed
+    # `.env` files intentionally do not expose this legacy selector.
+    explicit = env.get(f"{prefix}_STORAGE_TOPOLOGY_FILE", "").strip()
+    if explicit:
         try:
-            actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError as exc:
-            print(f"[ERROR] Cannot hash global storage topology: {exc}")
+            document = json.loads(Path(explicit).read_text())
+            storage = document.get("storage", document)
+            topology_document = {
+                "version": 3,
+                "cluster_name": storage["cluster_name"],
+                "replication": storage["replication"],
+                "nodes": storage["nodes"],
+                "access_groups": storage.get("access_groups", {}),
+            }
+            return load_storage_topology_document(topology_document)
+        except (OSError, KeyError, TypeError, json.JSONDecodeError, StorageTopologyError) as exc:
+            print(f"[ERROR] Invalid explicit storage topology: {exc}")
             sys.exit(1)
-        if actual_hash != expected_hash:
-            print(
-                "[ERROR] Global storage topology hash does not match the "
-                f"deployment ({actual_hash} != {expected_hash})."
-            )
-            sys.exit(1)
+    canonical = deployment_topology_path(prefix, env)
     try:
-        return load_storage_topology(path)
-    except StorageTopologyError as exc:
-        print(f"[ERROR] Invalid global storage topology: {exc}")
+        document = json.loads(canonical.read_text())
+        storage = document["storage"]
+        topology_document = {
+            "version": 3,
+            "cluster_name": storage["cluster_name"],
+            "replication": storage["replication"],
+            "nodes": storage["nodes"],
+            "access_groups": storage.get("access_groups", {}),
+        }
+        return load_storage_topology_document(topology_document)
+    except (OSError, KeyError, TypeError, json.JSONDecodeError, StorageTopologyError) as exc:
+        print(f"[ERROR] Invalid deployment topology storage section: {exc}")
         sys.exit(1)
 
 
@@ -3433,11 +3553,8 @@ def run_storage_operation(action: str, prefix: str, env: dict) -> None:
     """Dispatch global storage audit/reconciliation commands."""
     runtime = configured_storage_runtime(prefix, env)
     deployment_id = env.get("DEPLOYMENT_ID", "").strip()
-    expected_hash = env.get(f"{prefix}_STORAGE_TOPOLOGY_SHA256", "").strip()
     if deployment_id:
         print(f"[INFO] Deployment: {deployment_id}")
-    if expected_hash:
-        print(f"[INFO] Topology SHA-256: {expected_hash}")
     summary = (
         audit_storage(runtime)
         if action == "audit"
@@ -3476,7 +3593,6 @@ def _ask_confirm(question: str, default: bool = True) -> bool:
 
 
 _BLOCKCHAIN_REPO_DEFAULTS: dict = {
-    "DARK_ENV":        "git@github.com:LA-Referencia-IOI/dark-env.git",
     "DARK_DAPP":       "git@github.com:LA-Referencia-IOI/dark-dapp.git",
     "DARK_EXPLORADOR": "git@github.com:LA-Referencia-IOI/dark-explorer.git",
 }
@@ -3648,7 +3764,7 @@ def _print_wizard_summary(install_type: str, prefix: str, env: dict) -> None:
         else:
             print(f"  Access group    : {env.get(f'{prefix}_STORAGE_ACCESS_GROUP', '(storage host)')}")
             print(f"  Storage node    : {env.get(f'{prefix}_STORAGE_NODE_ID', '(apps only)')}")
-            print(f"  Topology file   : {env.get(f'{prefix}_STORAGE_TOPOLOGY_FILE', 'storage-topology.json')}")
+            print(f"  Topology file   : {env.get('DEPLOYMENT_TOPOLOGY_FILE', 'deployment-topology.json')}")
     print("─" * 60)
 
 
@@ -3799,22 +3915,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
+    topology_parser = subparsers.add_parser(
+        "topology", help="Validate or render the canonical production topology."
+    )
+    topology_subparsers = topology_parser.add_subparsers(dest="topology_action", required=True)
+    topology_validate = topology_subparsers.add_parser("validate")
+    topology_validate.add_argument("--file", required=True, type=Path)
+    topology_render = topology_subparsers.add_parser("render")
+    topology_render.add_argument("--file", required=True, type=Path)
+    topology_render.add_argument("--output", required=True, type=Path)
+
     deployment_parser = subparsers.add_parser(
-        "deployment",
-        help="Validate or render a canonical production deployment inventory.",
+        "deployment", help="Plan or verify delivery of a rendered topology bundle."
     )
-    deployment_subparsers = deployment_parser.add_subparsers(
-        dest="deployment_action", required=True
-    )
-    deployment_validate = deployment_subparsers.add_parser(
-        "validate", help="Validate an inventory and its configured release branch."
-    )
-    deployment_validate.add_argument("--inventory", required=True, type=Path)
-    deployment_render = deployment_subparsers.add_parser(
-        "render", help="Generate deterministic, secret-free host bundles."
-    )
-    deployment_render.add_argument("--inventory", required=True, type=Path)
-    deployment_render.add_argument("--output", required=True, type=Path)
+    deployment_subparsers = deployment_parser.add_subparsers(dest="deployment_action", required=True)
+    for action in ("push", "apply", "verify"):
+        action_parser = deployment_subparsers.add_parser(action)
+        action_parser.add_argument("--bundle", required=True, type=Path)
+        if action in {"push", "apply"}:
+            action_parser.add_argument(
+                "--execute", action="store_true",
+                help="Execute the displayed SSH commands; without this flag the command is a safe plan."
+            )
 
     host_parser = subparsers.add_parser(
         "host", help="Validate, inspect or apply one rendered host bundle."
@@ -3931,16 +4053,38 @@ def main() -> None:
     args = build_arg_parser().parse_args()
 
     try:
-        if args.command == "deployment":
-            if args.deployment_action == "validate":
-                inventory = load_deployment_inventory(args.inventory, PROJECT_ROOT)
-                print(
-                    "[OK] Production deployment inventory is valid: "
-                    f"{inventory['deployment_id']}"
-                )
+        if args.command == "topology":
+            if args.topology_action == "validate":
+                topology = load_deployment_topology(args.file, PROJECT_ROOT)
+                print(f"[OK] Production deployment topology is valid: {topology['deployment_id']}")
             else:
-                bundle = render_deployment(args.inventory, args.output, PROJECT_ROOT)
+                bundle = render_deployment(args.file, args.output, PROJECT_ROOT)
                 print(f"[OK] Rendered production deployment bundle at '{bundle}'.")
+            return
+
+        if args.command == "deployment":
+            bundle = args.bundle.resolve()
+            if args.deployment_action == "verify":
+                verified = verify_deployment_bundle(bundle)
+                print(f"[OK] Verified {len(verified)} host bundles.")
+                return
+            plan = deployment_delivery_plan(bundle)
+            for item in plan:
+                remote = f"{item['destination']}:{item['remote_directory']}"
+                if args.deployment_action == "push":
+                    command = (
+                        f"rsync -az -e 'ssh -i {item['private_key_file']} -p {item['port']}' "
+                        f"{bundle}/ {remote}/bundles/"
+                    )
+                else:
+                    command = (
+                        f"ssh -i {item['private_key_file']} -p {item['port']} {item['destination']} "
+                        f"'cd {item['remote_directory']} && python3 install.py host apply "
+                        f"--config bundles/hosts/{item['host_id']}/host.json'"
+                    )
+                print(f"[{item['role']}] {command}")
+                if args.execute:
+                    subprocess.run(command, shell=True, check=True)
             return
 
         if args.command == "host" and args.host_action != "apply":
@@ -4008,7 +4152,7 @@ def main() -> None:
         install_bc, install_storage, install_apps = _selected_tiers(prefix, env)
         if install_bc:
             _apply_local_blockchain_defaults(env)
-        if install_apps and not install_bc:
+        if install_apps and not install_bc and env.get("BLOCKCHAIN_RUNTIME_ROLE", "").strip().lower() != "rpc":
             validate_root_env_integration()
             _merge_root_env_integration_into_env(
                 env=env, prefix=prefix, authoritative=True
