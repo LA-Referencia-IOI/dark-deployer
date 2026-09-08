@@ -1,0 +1,56 @@
+volumes:
+  dark-mysql-data:
+    driver: local
+
+  dark-redis-data:
+    driver: local
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: dashboard-mysql
+    volumes:
+      - dark-mysql-data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:3307:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=dark
+      - MYSQL_DATABASE=dark
+      - MYSQL_USER=dark
+      - MYSQL_PASSWORD=dark
+
+  cache:
+    image: redis:4.0
+    container_name: dashboard-redis
+    command: --appendonly yes
+    volumes:
+      - dark-redis-data:/data
+    ports:
+      - "127.0.0.1:6380:6379"
+
+  app:
+    image: ambientum/php:8.0-nginx
+    container_name: dashboard-app
+    volumes:
+      - ../../../components/frontend/dashboard-web:/var/www/app
+    env_file:
+      - ../../../components/frontend/dashboard-web/.env.integration
+    ports:
+      - "${APPS_BIND_ADDRESS:-127.0.0.1}:8081:8080"
+    environment:
+      XDEBUG_ENABLED: "true"
+    links:
+      - mysql
+      - cache
+    networks:
+      - default
+      - dark-apps
+      - dark-backbone
+
+networks:
+  dark-apps:
+    external: true
+    name: dark-apps
+  dark-backbone:
+    external: true
+    name: dark-backbone

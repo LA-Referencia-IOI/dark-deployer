@@ -65,7 +65,7 @@ def containers() -> list[dict]:
         except json.JSONDecodeError:
             continue
         name = row.get("Names", "")
-        if name.startswith(("dark-", "explorer-lite")):
+        if name.startswith(("dark-", "dashboard-")) or name == "explorer-lite":
             inspect_code, inspect_out, _ = run([
                 "docker", "inspect", "-f",
                 "{{json .Config.Labels}}|{{json .NetworkSettings.Networks}}|{{.State.Health.Status}}",
@@ -95,7 +95,7 @@ def stats() -> list[dict]:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if row.get("Name", "").startswith(("dark-", "explorer-lite")):
+        if row.get("Name", "").startswith(("dark-", "dashboard-")) or row.get("Name") == "explorer-lite":
             rows.append({k: row.get(k) for k in ("Name", "CPUPerc", "MemUsage", "MemPerc", "NetIO", "BlockIO")})
     return rows
 
