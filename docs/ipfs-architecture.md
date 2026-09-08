@@ -7,7 +7,9 @@ replicación entre sí.
 
 ## Fuente de verdad
 
-La topología de producción se escribe una sola vez en `storage-topology.json`:
+La topología de producción se escribe una sola vez en la sección `storage` de
+`deployment-topology.json`. El instalador distribuye ese mismo archivo; no
+crea ni acepta un `storage-topology.json` paralelo en producción:
 
 ```json
 {
@@ -59,8 +61,40 @@ la escritura local. No se espera a la primera réplica. Cluster asigna copias
 hacia `target_replicas`; el reconciliador puede reparar un CID usando el
 payload retenido.
 
-El Store API cuenta como réplica cada elemento `peer_map` cuyo estado sea
-`pinned`, incluyendo peers no presentes en el pool local. El Minter aplica:
+Cada peer usa `CLUSTER_PINTRACKER_CONCURRENTPINS=20` como punto de partida para
+las operaciones paralelas de pin/unpin. Este valor controla la capacidad real
+de ejecución de Kubo, no la velocidad de consulta del reconciliador. Debe
+ajustarse mediante una prueba de carga observando la cola `queued`, el tiempo
+hasta `pinned`, CPU, memoria y latencia de disco. Valores más altos pueden
+reducir el throughput por contención.
+
+### Incidente de configuración: alias Kubo compartido
+
+Durante una ejecución anterior de developer, los dos peers de IPFS Cluster
+usaban en `node_multiaddress` el alias Docker genérico `ipfs`. Como ambos
+Kubo estaban en la red compartida, Cluster podía resolver el mismo servicio
+desde los dos peers. El resultado era que una asignación parecía pertenecer a
+un peer, pero el CID solo estaba realmente fijado en el otro; Store API
+observaba estados `queued`, `pinning` o `unexpectedly_unpinned`, y el
+reconciliador repetía comprobaciones sin que el trabajo avanzara de forma
+fiable. También se detectó que el valor efectivo de concurrencia del
+pintracker seguía siendo 10 aunque el entorno declaraba 20, porque el valor
+no se estaba aplicando al `service.json` generado.
+
+La corrección fue hacer que cada Cluster apunte explícitamente al alias de su
+propio Kubo (`dark-ipfs-...-storage-1` o `dark-ipfs-...-storage-2`) y aplicar
+`CLUSTER_PINTRACKER_CONCURRENTPINS` al archivo de servicio durante el arranque.
+Después de la corrección los dos peers reportaron IDs Kubo distintos y Store
+API dejó de detectar peers duplicados. La limpieza posterior de contenedores,
+volúmenes y redes elimina los datos del incidente; una instalación nueva debe
+regenerar las identidades y verificar nuevamente los aliases y el
+`service.json` efectivo.
+
+El Store API cuenta como réplica confirmada cada elemento `peer_map` cuyo estado
+sea `pinned`, incluyendo peers no presentes en el pool local. También expone
+por separado asignaciones `pin_queued`, `pinning` y `pin_error`; una asignación
+en cola o en progreso no es una pérdida y nunca dispara una reparación. El
+Minter aplica:
 
 ```text
 stored      Cluster aceptó y devolvió CID
@@ -76,19 +110,18 @@ del allocator, nunca un requisito funcional.
 
 ## Instalador y distribución
 
-En producción, `.env` contiene solo perfil, archivo de topología, selector de
-grupo o nodo y secretos:
+En producción, `.env` es generado por el bundle y contiene solo perfil,
+selector de grupo o nodo y secretos:
 
 ```ini
 TYPE=production
 PRODUCTION_INSTALL_COMPONENTS=apps
-PRODUCTION_STORAGE_TOPOLOGY_FILE=storage-topology.json
+PRODUCTION_DEPLOYMENT_TOPOLOGY_FILE=.generated/deployment-topology.json
 PRODUCTION_STORAGE_ACCESS_GROUP=apps-a
 ```
 
 Un host de almacenamiento usa `PRODUCTION_STORAGE_NODE_ID=storage-a`. El
-inventario de producción referencia `storage.topology_file`; no reconstruye el
-JSON desde hosts. El bundle copia el archivo byte a byte y registra su SHA-256.
+bundle deriva el JSON desde la sección `storage` y registra su SHA-256.
 El instalador genera para Store API un documento mínimo de endpoints montado
 como `/config/storage-endpoints.json` (`STORAGE_ENDPOINTS_FILE`).
 
@@ -118,11 +151,23 @@ conteos globales ni espera replicación.
 ## Reconciliación
 
 `ReplicationReconciliationWorker` es el único responsable de observar y
-reparar réplicas. Usa páginas de 50, concurrencia 2, reintentos cada 300 s,
-pausa de 30 s entre páginas y pausa de 10 s si Store/API no está disponible.
-Usa heartbeat, PID y advisory lock por ARK. Antes de actualizar o purgar,
-vuelve a bloquear el registro y compara ambos CIDs; purga solo cuando L1 y L2
-alcanzan `target_replicas`.
+reparar réplicas. Consulta ambos CIDs mediante `POST /v1/status/batch`, en
+páginas de hasta 100 ARKs y lotes de hasta 200 CIDs. Availability se procesa
+antes que durabilidad y los espacios libres de la página se reasignan a
+durabilidad. Las esperas normales se vuelven a observar en la siguiente ronda
+global y se registran como `CLUSTER_QUEUED`, `CLUSTER_PINNING`,
+`INITIAL_VISIBILITY` o `REPLICA_TARGET`, no como errores. Solo los fallos
+técnicos de Store API usan una espera temporizada.
+
+Solo se repara ante evidencia real de error o ausencia de pin; nunca mientras
+el CID esté `pin_queued` o `pinning`. Usa heartbeat, PID y advisory lock por
+ARK.
+Antes de actualizar o purgar, vuelve a bloquear el registro y compara ambos
+CIDs; purga solo cuando L1 y L2 alcanzan `target_replicas`.
+
+`/v1/status/{cid}` devuelve `pinned`, `pinning`, `queued`, `unpinned`, `error`
+o `unknown`, junto con réplicas confirmadas, en cola, en pinning, con error y
+asignadas.
 
 ## Operación
 

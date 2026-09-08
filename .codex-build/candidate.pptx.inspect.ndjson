@@ -1,0 +1,109 @@
+{"kind":"deck","id":"pr/a3lxvs","name":"Deck"}
+{"kind":"layout","layoutId":"949be4f0-f9f5-4248-810f-ae5e0f96dec3","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"3a75a37e-f874-44ce-a8cb-815824691ab2","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/bbpsc0","slide":1,"title":"dARK 2.0","textShapes":6}
+{"kind":"textbox","id":"sh/s7mt0z6x","slide":1,"text":"dARK 2.0","textPreview":"dARK 2.0","textChars":8,"textLines":1,"bbox":[74,106,900,80]}
+{"kind":"textbox","id":"sh/r6tsru5c","slide":1,"text":"Arquitectura y API de Minter","textPreview":"Arquitectura y API de Minter","textChars":28,"textLines":1,"bbox":[78,198,900,48]}
+{"kind":"textbox","id":"sh/65kby9or","slide":1,"text":"Una plataforma de identificadores ARK con control de autoridad, almacenamiento IPFS y publicación on-chain","textPreview":"Una plataforma de identificadores ARK con control de autoridad, almacenamiento IPFS y publicación on-chain","textChars":106,"textLines":1,"bbox":[80,290,520,74]}
+{"kind":"textbox","id":"sh/1wvuxone","slide":1,"text":"Basado en la documentación del repositorio dark-deployer","textPreview":"Basado en la documentación del repositorio dark-deployer","textChars":56,"textLines":1,"bbox":[80,612,400,28]}
+{"kind":"textbox","id":"sh/gbmt4j6t","slide":1,"text":"dARK","textPreview":"dARK","textChars":4,"textLines":1,"bbox":[930,120,220,220]}
+{"kind":"textbox","id":"sh/fadsve58","slide":1,"text":"Minter\n:8001","textPreview":"Minter | :8001","textChars":12,"textLines":2,"bbox":[965,365,150,64]}
+{"kind":"notes","id":"nt/bbpsc0","slide":1,"text":""}
+{"kind":"slide","id":"sl/pwocr6","slide":2,"title":"dARK en una vista","textShapes":6}
+{"kind":"textbox","id":"sh/3q9k32xo","slide":2,"text":"dARK en una vista","textPreview":"dARK en una vista","textChars":17,"textLines":1,"bbox":[64,34,1152,54]}
+{"kind":"textbox","id":"sh/4ri1c7y9","slide":2,"text":"Tres capas separan autoridad, persistencia y resolución","textPreview":"Tres capas separan autoridad, persistencia y resolución","textChars":55,"textLines":1,"bbox":[66,91,1100,30]}
+{"kind":"textbox","id":"sh/5sr25cfu","slide":2,"text":"Capa de servicios\nAdmin API :8000     Minter API :8001     Resolver API :8002     Store API :8003","textPreview":"Capa de servicios | Admin API :8000     Minter API :8001     Resolver API :8002     Store API :8003","textChars":97,"textLines":2,"bbox":[80,155,1120,110]}
+{"kind":"textbox","id":"sh/u1gj6xg7","slide":2,"text":"Capa blockchain\nAuthority.sol  ↔  IAuthority.sol  ↔  dARK.sol\nBesu / dark-env","textPreview":"Capa blockchain | Authority.sol  ↔  IAuthority.sol  ↔  dARK.sol | Besu / dark-env","textChars":77,"textLines":3,"bbox":[80,302,1120,110]}
+{"kind":"textbox","id":"sh/vmpkz2xs","slide":2,"text":"Capa de almacenamiento\ndark-store-api  →  IPFS Cluster  →  nodos IPFS","textPreview":"Capa de almacenamiento | dark-store-api  →  IPFS Cluster  →  nodos IPFS","textChars":69,"textLines":2,"bbox":[80,449,1120,110]}
+{"kind":"shape","id":"sh/wny187yx","slide":2,"bbox":[640,265,1,37]}
+{"kind":"shape","id":"sh/ho721sfi","slide":2,"bbox":[640,412,1,37]}
+{"kind":"textbox","id":"sh/mxwj2dgv","slide":2,"text":"dARK 2.0  •  2","textPreview":"dARK 2.0  •  2","textChars":14,"textLines":1,"bbox":[1120,680,100,20]}
+{"kind":"notes","id":"nt/pwocr6","slide":2,"text":"Fuentes: DARK_2.0_ARCHITECTURE.md; docs/ipfs-concepts-and-dark-store-api.md"}
+{"kind":"slide","id":"sl/edeqju","slide":3,"title":"Contratos inteligentes","textShapes":6}
+{"kind":"textbox","id":"sh/orqt076x","slide":3,"text":"Contratos inteligentes","textPreview":"Contratos inteligentes","textChars":22,"textLines":1,"bbox":[64,34,1152,54]}
+{"kind":"textbox","id":"sh/nqhs72pc","slide":3,"text":"La arquitectura separa control de acceso y almacenamiento de ARKs","textPreview":"La arquitectura separa control de acceso y almacenamiento de ARKs","textChars":65,"textLines":1,"bbox":[66,91,1100,30]}
+{"kind":"textbox","id":"sh/2p8byxor","slide":3,"text":"Authority.sol\n\n• UUID ↔ wallet\n• estado activo\n• autorización de NAAN\n• clave privada cifrada\n\nAdmin registra y desactiva.\nLa autoridad reclama NAANs.","textPreview":"Authority.sol |  | • UUID ↔ wallet | • estado activo | • autorización de NAAN | • clave privada cifrada |  | Admin registra y desactiva. ...","textChars":150,"textLines":9,"bbox":[75,160,330,340]}
+{"kind":"textbox","id":"sh/xgjadcne","slide":3,"text":"IAuthority.sol\n\nis_authorized(wallet, naan)\nis_active_authority(wallet)","textPreview":"IAuthority.sol |  | is_authorized(wallet, naan) | is_active_authority(wallet)","textChars":71,"textLines":4,"bbox":[475,250,330,145]}
+{"kind":"textbox","id":"sh/cfqt476t","slide":3,"text":"dARK.sol\n\n• create_ark\n• update_ark\n• resolve\n• get_ark\n• ark_exists\n\nGuarda name, naan, url, cid, owner y timestamps.","textPreview":"dARK.sol |  | • create_ark | • update_ark | • resolve | • get_ark | • ark_exists |  | Guarda name, naan, url, cid, owner y timestamps.","textChars":118,"textLines":9,"bbox":[875,160,330,340]}
+{"kind":"shape","id":"sh/buhsb2p8","slide":3,"bbox":[405,320,70,1]}
+{"kind":"shape","id":"sh/at8b2hon","slide":3,"bbox":[805,320,70,1]}
+{"kind":"textbox","id":"sh/dkfa1s7a","slide":3,"text":"dARK 2.0  •  3","textPreview":"dARK 2.0  •  3","textChars":14,"textLines":1,"bbox":[1120,680,100,20]}
+{"kind":"notes","id":"nt/edeqju","slide":3,"text":"Fuentes: DARK_2.0_ARCHITECTURE.md, secciones 2.1–2.3; DARK_2.0_GUIDE.md, sección 4."}
+{"kind":"slide","id":"sl/hxubwu","slide":4,"title":"Topología de despliegue","textShapes":6}
+{"kind":"textbox","id":"sh/je1w7ehw","slide":4,"text":"Topología de despliegue","textPreview":"Topología de despliegue","textChars":23,"textLines":1,"bbox":[64,34,1152,54]}
+{"kind":"textbox","id":"sh/kfudgjy1","slide":4,"text":"En sandbox y producción, los tiers escalan por separado","textPreview":"En sandbox y producción, los tiers escalan por separado","textChars":55,"textLines":1,"bbox":[66,91,1100,30]}
+{"kind":"textbox","id":"sh/5g3e9ozm","slide":4,"text":"Blockchain tier\n≥3 nodos Besu / QBFT / PoA\nNode 1: bootnode + RPC + despliegue de contratos","textPreview":"Blockchain tier | ≥3 nodos Besu / QBFT / PoA | Node 1: bootnode + RPC + despliegue de contratos","textChars":91,"textLines":3,"bbox":[70,145,1140,125]}
+{"kind":"textbox","id":"sh/6hcvitg7","slide":4,"text":"Application tier\nAdmin API · Minter API · Resolver API · Store API · Dashboard","textPreview":"Application tier | Admin API · Minter API · Resolver API · Store API · Dashboard","textChars":78,"textLines":2,"bbox":[70,330,1140,125]}
+{"kind":"textbox","id":"sh/7ilwbyxs","slide":4,"text":"IPFS tier\nKubo + IPFS Cluster; el Cluster replica el contenido fijado","textPreview":"IPFS tier | Kubo + IPFS Cluster; el Cluster replica el contenido fijado","textChars":69,"textLines":2,"bbox":[70,515,1140,95]}
+{"kind":"shape","id":"sh/s3udk3yd","slide":4,"bbox":[640,270,1,60]}
+{"kind":"shape","id":"sh/t43ed8fy","slide":4,"bbox":[640,455,1,60]}
+{"kind":"textbox","id":"sh/ml8v69g3","slide":4,"text":"dARK 2.0  •  4","textPreview":"dARK 2.0  •  4","textChars":14,"textLines":1,"bbox":[1120,680,100,20]}
+{"kind":"notes","id":"nt/hxubwu","slide":4,"text":"Fuente: docs/decoupled-infrastructure.md. Nota: el documento se marca como histórico respecto al diseño de almacenamiento; se conserva aquí la separación de tiers y el modelo de despliegue."}
+{"kind":"slide","id":"sl/3zmk9s","slide":5,"title":"Ciclo de vida de un ARK","textShapes":14}
+{"kind":"textbox","id":"sh/lcfad4vi","slide":5,"text":"Ciclo de vida de un ARK","textPreview":"Ciclo de vida de un ARK","textChars":23,"textLines":1,"bbox":[64,34,1152,54]}
+{"kind":"textbox","id":"sh/yp4b29w7","slide":5,"text":"El Minter desacopla la reserva del identificador y la confirmación on-chain","textPreview":"El Minter desacopla la reserva del identificador y la confirmación on-chain","textChars":75,"textLines":1,"bbox":[66,91,1100,30]}
+{"kind":"textbox","id":"sh/zqdsbuds","slide":5,"text":"R","textPreview":"R","textChars":1,"textLines":1,"bbox":[90,215,150,92]}
+{"kind":"textbox","id":"sh/8f6t8je9","slide":5,"text":"reserved\nNOID asigna ID","textPreview":"reserved | NOID asigna ID","textChars":23,"textLines":2,"bbox":[80,325,170,60]}
+{"kind":"shape","id":"sh/9gfuhovu","slide":5,"bbox":[240,261,80,1]}
+{"kind":"textbox","id":"sh/mdob69w3","slide":5,"text":"D","textPreview":"D","textChars":1,"textLines":1,"bbox":[320,215,150,92]}
+{"kind":"textbox","id":"sh/nexcfedo","slide":5,"text":"draft\nmetadata recibida","textPreview":"draft | metadata recibida","textChars":23,"textLines":2,"bbox":[310,325,170,60]}
+{"kind":"shape","id":"sh/oj2twfe5","slide":5,"bbox":[470,261,80,1]}
+{"kind":"textbox","id":"sh/pkva5kva","slide":5,"text":"U","textPreview":"U","textChars":1,"textLines":1,"bbox":[550,215,150,92]}
+{"kind":"textbox","id":"sh/1kzi50zq","slide":5,"text":"update\ncambio pendiente","textPreview":"update | cambio pendiente","textChars":23,"textLines":2,"bbox":[540,325,170,60]}
+{"kind":"shape","id":"sh/0jqhcvyl","slide":5,"bbox":[700,261,80,1]}
+{"kind":"textbox","id":"sh/fih03qh0","slide":5,"text":"P","textPreview":"P","textChars":1,"textLines":1,"bbox":[780,215,150,92]}
+{"kind":"textbox","id":"sh/ehozalgf","slide":5,"text":"published\nconfirmado on-chain","textPreview":"published | confirmado on-chain","textChars":29,"textLines":2,"bbox":[770,325,170,60]}
+{"kind":"shape","id":"sh/pozi90f2","slide":5,"bbox":[930,261,80,1]}
+{"kind":"textbox","id":"sh/onqhgvyh","slide":5,"text":"T","textPreview":"T","textChars":1,"textLines":1,"bbox":[1010,215,150,92]}
+{"kind":"textbox","id":"sh/nmh07axw","slide":5,"text":"tombstone\nborrado lógico","textPreview":"tombstone | borrado lógico","textChars":24,"textLines":2,"bbox":[1000,325,170,60]}
+{"kind":"textbox","id":"sh/2l8ze5gb","slide":5,"text":"reserve() → R     PUT metadata: R → D o P → U     workers: D/U → P     DELETE: cualquier estado → T","textPreview":"reserve() → R     PUT metadata: R → D o P → U     workers: D/U → P     DELETE: cualquier estado → T","textChars":99,"textLines":1,"bbox":[120,495,1030,70]}
+{"kind":"textbox","id":"sh/xcjidkfy","slide":5,"text":"dARK 2.0  •  5","textPreview":"dARK 2.0  •  5","textChars":14,"textLines":1,"bbox":[1120,680,100,20]}
+{"kind":"notes","id":"nt/3zmk9s","slide":5,"text":"Fuentes: DARK_2.0_GUIDE.md sección 3; DARK_2.0_API_REFERENCE.md sección 2.1."}
+{"kind":"slide","id":"sl/bpun66","slide":6,"title":"Minter API","textShapes":9}
+{"kind":"textbox","id":"sh/hovm5k7i","slide":6,"text":"Minter API","textPreview":"Minter API","textChars":10,"textLines":1,"bbox":[64,34,1152,54]}
+{"kind":"textbox","id":"sh/ulk3a587","slide":6,"text":"Superficie REST para reservar, completar, consultar y retirar ARKs","textPreview":"Superficie REST para reservar, completar, consultar y retirar ARKs","textChars":66,"textLines":1,"bbox":[66,91,1100,30]}
+{"kind":"textbox","id":"sh/fmt43aps","slide":6,"text":"POST  /arks                    Reserva un ARK con NOID","textPreview":"POST  /arks                    Reserva un ARK con NOID","textChars":54,"textLines":1,"bbox":[70,145,1140,70]}
+{"kind":"textbox","id":"sh/sz2l8vq1","slide":6,"text":"POST  /arks/batch              Reserva varios y correlaciona por client_item_id","textPreview":"POST  /arks/batch              Reserva varios y correlaciona por client_item_id","textChars":79,"textLines":1,"bbox":[70,235,1140,70]}
+{"kind":"textbox","id":"sh/tkbm107m","slide":6,"text":"GET   /arks/{ark}              Consulta DB; fallback y merge con blockchain","textPreview":"GET   /arks/{ark}              Consulta DB; fallback y merge con blockchain","textChars":75,"textLines":1,"bbox":[70,325,1140,70]}
+{"kind":"textbox","id":"sh/6xk3658v","slide":6,"text":"PUT   /arks/{ark}              Guarda metadata y encola create/update","textPreview":"PUT   /arks/{ark}              Guarda metadata y encola create/update","textChars":69,"textLines":1,"bbox":[70,415,1140,70]}
+{"kind":"textbox","id":"sh/7yt4zapg","slide":6,"text":"DELETE /arks/{ark}              Tombstone irreversible, solo propietario","textPreview":"DELETE /arks/{ark}              Tombstone irreversible, solo propietario","textChars":72,"textLines":1,"bbox":[70,505,1140,70]}
+{"kind":"textbox","id":"sh/kv2l4vq5","slide":6,"text":"Escrituras: identidad de autoridad. Lecturas: mTLS. Worker status: red interna.","textPreview":"Escrituras: identidad de autoridad. Lecturas: mTLS. Worker status: red interna.","textChars":79,"textLines":1,"bbox":[70,625,1140,35]}
+{"kind":"textbox","id":"sh/5wb2x07a","slide":6,"text":"dARK 2.0  •  6","textPreview":"dARK 2.0  •  6","textChars":14,"textLines":1,"bbox":[1120,680,100,20]}
+{"kind":"notes","id":"nt/bpun66","slide":6,"text":"Fuente: DARK_2.0_API_REFERENCE.md sección 2.2."}
+{"kind":"slide","id":"sl/aqzd7e","slide":7,"title":"Ejemplo de integración","textShapes":6}
+{"kind":"textbox","id":"sh/250ni90z","slide":7,"text":"Ejemplo de integración","textPreview":"Ejemplo de integración","textChars":22,"textLines":1,"bbox":[64,34,1152,54]}
+{"kind":"textbox","id":"sh/p8bmtoja","slide":7,"text":"La API devuelve el estado operativo y los CIDs cuando están disponibles","textPreview":"La API devuelve el estado operativo y los CIDs cuando están disponibles","textChars":71,"textLines":1,"bbox":[66,91,1100,30]}
+{"kind":"textbox","id":"sh/o725kjip","slide":7,"text":"PUT /arks/ark:/12345/abc123","textPreview":"PUT /arks/ark:/12345/abc123","textChars":27,"textLines":1,"bbox":[78,145,1120,72]}
+{"kind":"textbox","id":"sh/but4ve1g","slide":7,"text":"{\n  \"authority_id\": \"org-uuid-12345\",\n  \"target\": \"https://example.org/item/1\",\n  \"minimal_metadata\": {\n    \"ark\": \"ark:/12345/abc123\", \"title\": \"My Item\"\n  },\n  \"original_metadata\": \"<oai_dc:dc>...</oai_dc:dc>\",\n  \"metadata_schema\": \"dublin_core\",\n  \"metadata_media_type\": \"application/xml\"\n}","textPreview":"{ |   \"authority_id\": \"org-uuid-12345\", |   \"target\": \"https://example.org/item/1\", |   \"minimal_metadata\": { |     \"ark\": \"ark:/12345/ab...","textChars":293,"textLines":10,"bbox":[78,242,1120,250]}
+{"kind":"textbox","id":"sh/qtknmt0v","slide":7,"text":"Respuesta: ARKResponse  |  state: D  |  level1_cid: null  |  level2_cid: null","textPreview":"Respuesta: ARKResponse  |  state: D  |  level1_cid: null  |  level2_cid: null","textChars":77,"textLines":1,"bbox":[78,535,1120,70]}
+{"kind":"textbox","id":"sh/dwbmxojm","slide":7,"text":"dARK 2.0  •  7","textPreview":"dARK 2.0  •  7","textChars":14,"textLines":1,"bbox":[1120,680,100,20]}
+{"kind":"notes","id":"nt/aqzd7e","slide":7,"text":"Fuente: DARK_2.0_API_REFERENCE.md sección 2.2. El ejemplo se adapta mínimamente del payload documentado."}
+{"kind":"slide","id":"sl/irlfwn","slide":8,"title":"Workers y persistencia","textShapes":9}
+{"kind":"textbox","id":"sh/alcfm107","slide":8,"text":"Workers y persistencia","textPreview":"Workers y persistencia","textChars":22,"textLines":1,"bbox":[64,34,1152,54]}
+{"kind":"textbox","id":"sh/xo3yhwzi","slide":8,"text":"El Minter mantiene PostgreSQL como cola de trabajo y usa Store API como frontera de almacenamiento","textPreview":"El Minter mantiene PostgreSQL como cola de trabajo y usa Store API como frontera de almacenamiento","textChars":98,"textLines":1,"bbox":[66,91,1100,30]}
+{"kind":"textbox","id":"sh/wnuhorix","slide":8,"text":"API\nreserva / recibe metadata","textPreview":"API | reserva / recibe metadata","textChars":29,"textLines":2,"bbox":[65,175,245,145]}
+{"kind":"textbox","id":"sh/ni1gbmhg","slide":8,"text":"PostgreSQL\n\nEstado del ARK\nreintentos\nerrores permanentes","textPreview":"PostgreSQL |  | Estado del ARK | reintentos | errores permanentes","textChars":57,"textLines":5,"bbox":[375,145,250,205]}
+{"kind":"textbox","id":"sh/mhsfih0v","slide":8,"text":"Metadata worker\nL1/L2 → Store API","textPreview":"Metadata worker | L1/L2 → Store API","textChars":33,"textLines":2,"bbox":[690,100,250,105]}
+{"kind":"textbox","id":"sh/9k3ydwzm","slide":8,"text":"Replication worker\nreconciliación IPFS/Cluster","textPreview":"Replication worker | reconciliación IPFS/Cluster","textChars":46,"textLines":2,"bbox":[690,245,250,105]}
+{"kind":"textbox","id":"sh/ojaxkri1","slide":8,"text":"Chain worker\ncreate/update → Besu","textPreview":"Chain worker | create/update → Besu","textChars":33,"textLines":2,"bbox":[995,175,210,145]}
+{"kind":"shape","id":"sh/zu1g72hk","slide":8,"bbox":[310,247,65,1]}
+{"kind":"shape","id":"sh/etsfex0z","slide":8,"bbox":[625,152,65,68]}
+{"kind":"shape","id":"sh/orm10jqp","slide":8,"bbox":[625,275,65,22]}
+{"kind":"shape","id":"sh/9sv2to7a","slide":8,"bbox":[940,247,55,1]}
+{"kind":"textbox","id":"sh/mp4jyt8z","slide":8,"text":"Para los servicios de negocio: Minter / Resolver → Store API → IPFS / Cluster","textPreview":"Para los servicios de negocio: Minter / Resolver → Store API → IPFS / Cluster","textChars":77,"textLines":1,"bbox":[110,470,1060,75]}
+{"kind":"textbox","id":"sh/nqdkryp4","slide":8,"text":"dARK 2.0  •  8","textPreview":"dARK 2.0  •  8","textChars":14,"textLines":1,"bbox":[1120,680,100,20]}
+{"kind":"notes","id":"nt/irlfwn","slide":8,"text":"Fuentes: DARK_2.0_ARCHITECTURE.md sección 5; docs/ipfs-concepts-and-dark-store-api.md secciones 7 y 8; docs/deployer-operations.md."}
+{"kind":"slide","id":"sl/dslsmf","slide":9,"title":"Publicación on-chain","textShapes":9}
+{"kind":"textbox","id":"sh/3qhcnu5w","slide":9,"text":"Publicación on-chain","textPreview":"Publicación on-chain","textChars":20,"textLines":1,"bbox":[64,34,1152,54]}
+{"kind":"textbox","id":"sh/4radwf6h","slide":9,"text":"El pipeline de transacciones maximiza throughput sin romper la secuencia de nonces","textPreview":"El pipeline de transacciones maximiza throughput sin romper la secuencia de nonces","textChars":82,"textLines":1,"bbox":[66,91,1100,30]}
+{"kind":"textbox","id":"sh/5sjupkn2","slide":9,"text":"Operaciones\ncreate / update","textPreview":"Operaciones | create / update","textChars":27,"textLines":2,"bbox":[70,165,215,110]}
+{"kind":"textbox","id":"sh/u18vq5of","slide":9,"text":"Ventana de 20\nnonce N…N+19","textPreview":"Ventana de 20 | nonce N…N+19","textChars":26,"textLines":2,"bbox":[350,165,215,110]}
+{"kind":"textbox","id":"sh/v2hcja50","slide":9,"text":"Firmar y enviar\nal mempool","textPreview":"Firmar y enviar | al mempool","textChars":26,"textLines":2,"bbox":[630,165,215,110]}
+{"kind":"textbox","id":"sh/gnqdsf6l","slide":9,"text":"Recibos y estados\nconfirmed / reverted / ambiguous","textPreview":"Recibos y estados | confirmed / reverted / ambiguous","textChars":50,"textLines":2,"bbox":[910,165,260,110]}
+{"kind":"shape","id":"sh/hozulkn6","slide":9,"bbox":[285,220,65,1]}
+{"kind":"shape","id":"sh/6xobm5oj","slide":9,"bbox":[565,220,65,1]}
+{"kind":"shape","id":"sh/7yxcfa5o","slide":9,"bbox":[845,220,65,1]}
+{"kind":"textbox","id":"sh/nqdgnuhw","slide":9,"text":"Regla de seguridad: un fallo de build, envío o receipt ambiguo detiene las ventanas siguientes y las marca not_sent para evitar un nonce gap.","textPreview":"Regla de seguridad: un fallo de build, envío o receipt ambiguo detiene las ventanas siguientes y las marca not_sent para evitar un nonce ...","textChars":141,"textLines":1,"bbox":[90,380,1080,110]}
+{"kind":"textbox","id":"sh/2p4zupgb","slide":9,"text":"Resultado por operación: ref · acción · estado · error opcional","textPreview":"Resultado por operación: ref · acción · estado · error opcional","textChars":63,"textLines":1,"bbox":[100,555,1080,55]}
+{"kind":"textbox","id":"sh/psvyp4zm","slide":9,"text":"dARK 2.0  •  9","textPreview":"dARK 2.0  •  9","textChars":14,"textLines":1,"bbox":[1120,680,100,20]}
+{"kind":"notes","id":"nt/dslsmf","slide":9,"text":"Fuente: DARK_2.0_ARCHITECTURE.md sección 4.1."}

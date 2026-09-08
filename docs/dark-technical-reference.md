@@ -209,7 +209,7 @@ ark_metadata sólo conserva el último conteo L1/L2, fecha de comprobación y
 | complete | Payloads purgados tras cumplir ambas metas. |
 
 El Replication Reconciliation Worker reconcilia sin trabajo nuevo y también durante carga. Procesa
-hasta 50 ARKs por lote y usa `REPLICATION_WORKER_CONCURRENCY` (por defecto 2). Un CID
+hasta 100 ARKs por lote y consulta hasta 200 CIDs únicos por llamada. Un CID
 con cero copias se reconstruye desde PostgreSQL; si produce otro CID, se rechaza.
 
 Store API usa round-robin separado para Kubo y Cluster REST locales. Timeout,
@@ -298,7 +298,7 @@ Cuando MTLS_ENABLED=false, VPN y firewall forman el límite de confianza. El
 diseño de claves Ed25519 firmadas por clientes de Minter es una propuesta; no se
 debe asumir habilitado.
 
-## 10. Despliegue e inventario
+## 10. Despliegue y topología
 
 | Perfil | Uso |
 | --- | --- |
@@ -313,14 +313,16 @@ debe asumir habilitado.
 | storage-node | Un Kubo y un peer Cluster. |
 | all | Los tres roles; sólo escenarios restringidos/no productivos. |
 
-El inventario reúne CIDR VPN, rutas de secretos, hosts, roles, grupo de acceso
-y selectores de nodo. Las direcciones de storage salen de la topología.
+`deployment-topology.json` reúne CIDR VPN, referencias SSH, rutas de secretos,
+hosts, roles, ramas, grupos de acceso y selectores de nodo. Las direcciones de
+storage se declaran una sola vez en su sección `storage`.
 
 ~~~bash
-python3.12 install.py deployment validate --inventory deployment-inventory.json
-python3.12 install.py deployment render \
-  --inventory deployment-inventory.json \
+python3.12 install.py topology validate --file deployment-topology.json
+python3.12 install.py topology render \
+  --file deployment-topology.json \
   --output dist/dark-site-a-1
+python3.12 install.py deployment verify --bundle dist/dark-site-a-1
 python3.12 install.py host validate --config dist/dark-site-a-1/hosts/<host>/host.json
 python3.12 install.py host plan --config dist/dark-site-a-1/hosts/<host>/host.json
 python3.12 install.py host apply --config dist/dark-site-a-1/hosts/<host>/host.json

@@ -10,9 +10,13 @@ La documentación consolidada cubre operación del instalador, despliegue de pro
 
 ## Minter API
 
-El minter queda dividido en API, metadata worker, replication worker, chain worker y recovery worker. Los workers comparten heartbeats y locks advisory por ARK en PostgreSQL. El estado interno usa códigos compactos, mientras las APIs exponen etiquetas legibles.
+La arquitectura vigente del minter tiene API, metadata worker, replication
+worker y chain worker. Los workers comparten heartbeats y locks advisory por
+ARK en PostgreSQL. El recovery worker automático fue retirado.
 
-El status simple consulta únicamente `worker_runtime_status`. El status full agrega diagnósticos operativos mediante consultas agregadas y bounded. Los errores se clasifican como `recoverable` o `permanent`; el recovery worker solo reencola casos recuperables cuando los workers normales están sanos y sin trabajo pendiente. La aprobación administrativa sigue siendo una operación mTLS separada.
+El status simple consulta únicamente `worker_runtime_status`. El status full
+agrega diagnósticos operativos acotados. Las esperas temporales se expresan como
+`WAITING`; solo `FAILED` requiere revisión y un reintento administrativo mTLS.
 
 ## Store API y core library
 
@@ -25,6 +29,21 @@ El dashboard consume el status simple en la portada y el status full solo en la 
 ## Verificación
 
 Antes de publicar cada commit se ejecutan las suites focalizadas del componente correspondiente y `git diff --check`. La ausencia de PHP en el entorno local impide ejecutar `php -l`; el código Laravel queda pendiente de validación en CI o en el contenedor de dashboard.
+
+## Cambios posteriores de rendimiento y diagnóstico
+
+Se añadió programación explícita de Availability mediante `next_action_at`,
+backoff con jitter para estados normales de Cluster, batches de status
+deduplicados, límites de concurrencia en Store API y prioridad del primer pin
+sobre la durabilidad. El dashboard y el monitor distinguen ahora trabajo listo,
+espera programada, motivo de espera y mantenimiento bloqueado por backlog; no
+tratan `queued` o `pinning` como errores.
+
+La reevaluación del 2026-09-08 concluyó que el cuello residual está en Chain y
+en la estabilidad de los validadores Besu (reinicios `Killed`, CPU elevada y
+cadencia QBFT irregular), no en el polling de IPFS. La página de Chain sigue
+limitada a 20 hasta estabilizar la red; cualquier aumento debe hacerse después
+de una prueba sostenida y gradual.
 
 ## Commits temáticos
 

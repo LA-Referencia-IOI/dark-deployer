@@ -1,0 +1,12 @@
+name: ${DARK_COMPOSE_PROJECT:-dark-apps}
+
+# Apps-host orchestration. Storage and validator Compose files are intentionally
+# excluded so Compose never interpolates or validates resources belonging to a
+# different physical host.
+include:
+  - ../blockchain/compose.yml
+  - components/services/admin-api.yml
+  - components/services/resolver-api.yml
+  - components/services/store-api.yml
+  - components/services/minter.yml
+  - components/frontend/dashboard.yml

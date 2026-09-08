@@ -72,7 +72,7 @@ Esos valores son escritos por el reconciliador después de consultar Cluster, nu
 
 ## Exclusión de workers
 
-Cada intento adquiere un advisory lock de PostgreSQL derivado del ARK, en una sesión dedicada que se conserva durante el I/O externo y la escritura final. No se persiste un estado `RUNNING`, propietario ni vencimiento. Si el proceso o su conexión mueren, PostgreSQL libera el lock automáticamente y el registro sigue en `PENDING` o `RETRY` para el siguiente ciclo.
+Cada intento adquiere un advisory lock de PostgreSQL derivado del ARK, en una sesión dedicada que se conserva durante el I/O externo y la escritura final. No se persiste un estado `RUNNING`, propietario ni vencimiento. Si el proceso o su conexión mueren, PostgreSQL libera el lock automáticamente y el registro permanece en `READY` o `WAITING` para el siguiente ciclo.
 
 La API y los workers adquieren el mismo lock por ARK antes de leer y modificar el registro. La conexión física permanece reservada hasta liberar el lock, incluso entre transacciones. La API responde `409 Conflict` si el ARK está ocupado; tras adquirirlo comprueba que una actualización parte de `PUBLISHED` (la primera carga sigue siendo `RESERVED → DRAFT`). Tombstones y rescates manuales también participan de la exclusión. Los workers vuelven a comprobar etapa, estado y fecha del reintento al adquirirlo. Se elimina el contador de revisión: el contenido no puede cambiar durante el intento. Una conexión perdida invalida el intento y no puede reconectarse para escribir resultados sin lock.
 
@@ -152,3 +152,20 @@ Debe alertarse cuando el health sea `ok` pero la tasa de persistencia o de publi
 El incidente original combinó un conteo de réplicas dependiente de una topología incompleta y un timeout de cliente menor que la espera síncrona de replicación. Ambos factores fueron removidos del diseño.
 
 La separación entre aceptación, disponibilidad, publicación y purga ya está implementada. La prioridad restante es validarla bajo fallos reales de PostgreSQL, Cluster, RPC y procesos, incluyendo la recuperación automática de advisory locks.
+
+## Estado vigente del primer pin
+
+`POST /v1/store` confirma únicamente que Cluster aceptó el contenido y devolvió
+un CID. La respuesta no garantiza que exista todavía un peer `pinned`. La
+confirmación del primer pin es responsabilidad exclusiva de
+`ReplicationReconciliationWorker`, que observa ambos CIDs mediante el endpoint
+batch de Store API.
+
+La publicación se habilita cuando `min(L1.pinned, L2.pinned)` alcanza
+`REPLICATION_PUBLISH_AFTER_REPLICAS` (por defecto 1). El payload local no se
+purga en ese momento: permanece retenido hasta que ambos CIDs alcancen
+`REPLICATION_TARGET_REPLICAS` (por defecto 2).
+
+La configuración vigente usa páginas de 100 ARKs y lotes de hasta 200 CIDs.
+No se usan cuotas separadas. Availability tiene prioridad y
+durabilidad usa la capacidad restante de la página.

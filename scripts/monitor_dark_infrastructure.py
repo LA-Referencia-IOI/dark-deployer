@@ -113,6 +113,32 @@ def sample(full: bool) -> dict:
             "docker_stats": stats(), "services": external, "cluster_peers": clusters}
 
 
+def rates(record: dict, previous: dict | None) -> dict:
+    """Derive bounded worker rates from cheap heartbeat counters."""
+    if previous is None:
+        return {}
+    try:
+        elapsed = max(
+            (datetime.fromisoformat(record["timestamp"]) - datetime.fromisoformat(previous["timestamp"])).total_seconds(),
+            0.001,
+        )
+        current = record["services"]["workers_lite"]["body"]["workers"]
+        earlier = previous["services"]["workers_lite"]["body"]["workers"]
+    except (KeyError, TypeError, ValueError):
+        return {}
+    result = {"sample_seconds": round(elapsed, 3), "workers": {}}
+    for name, worker in current.items():
+        before = earlier.get(name, {})
+        totals, old = worker.get("totals", {}), before.get("totals", {})
+        if not totals or not old:
+            continue
+        result["workers"][name] = {
+            key + "_per_second": round(max(0, int(totals.get(key, 0)) - int(old.get(key, 0))) / elapsed, 3)
+            for key in ("processed", "advanced", "failed")
+        }
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interval", type=float, default=60, help="seconds between samples")
@@ -123,10 +149,14 @@ def main() -> None:
         parser.error("--interval and --full-every must be positive")
     stream = None if args.output == "-" else open(args.output, "a", encoding="utf-8")
     last_full = 0.0
+    previous = None
     try:
         while True:
             now = time.monotonic(); full = now - last_full >= args.full_every
-            record = json.dumps(sample(full), ensure_ascii=False)
+            item = sample(full)
+            item["rates"] = rates(item, previous)
+            previous = item
+            record = json.dumps(item, ensure_ascii=False)
             if full: last_full = now
             print(record, flush=True)
             if stream: stream.write(record + "\n"); stream.flush()

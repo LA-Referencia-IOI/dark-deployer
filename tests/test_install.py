@@ -67,11 +67,15 @@ class CommandParsingTests(unittest.TestCase):
         with (
             mock.patch.object(installer, "install_repo"),
             mock.patch.object(installer, "run_commands") as run_commands,
+            mock.patch.object(installer, "central_compose"),
         ):
             installer.install_dashboard("SANDBOX", env)
 
         run_commands.assert_called_once()
-        self.assertEqual(run_commands.call_args.args[0], ["python3 install.py"])
+        self.assertEqual(
+            run_commands.call_args.args[0],
+            ["DARK_DEPLOYER_MANAGED_COMPOSE=1 python3 install.py"],
+        )
 
     def test_all_example_json_commands_are_valid(self):
         env = installer.parse_env_file(PROJECT_ROOT / ".env.example")
@@ -276,12 +280,11 @@ class IntegrationTests(unittest.TestCase):
         generated = installer.load_optional_env(minter_path / ".env.integration")
         self.assertEqual(generated["MINTER_SHOULDER"], "201")
         self.assertEqual(generated["REPLICATION_WORKER_ENABLED"], "true")
-        self.assertEqual(generated["REPLICATION_WORKER_PAGE_SIZE"], "50")
+        self.assertEqual(generated["REPLICATION_WORKER_PAGE_SIZE"], "100")
         self.assertEqual(generated["REPLICATION_WORKER_CONCURRENCY"], "3")
         self.assertEqual(generated["REPLICATION_PUBLISH_AFTER_REPLICAS"], "1")
         self.assertEqual(generated["REPLICATION_TARGET_REPLICAS"], "2")
         self.assertEqual(generated["REPLICATION_WORKER_SLEEP_SECONDS"], "30")
-        self.assertEqual(generated["REPLICATION_WORKER_RECHECK_SECONDS"], "300")
         self.assertEqual(generated["REPLICATION_WORKER_STORAGE_RETRY_SECONDS"], "10")
         self.assertEqual(
             generated["REPLICATION_WORKER_RUNTIME_NAME"],
@@ -369,7 +372,8 @@ class ValidationTests(unittest.TestCase):
 
         with (
             mock.patch.object(installer, "install_repo"),
-            mock.patch.object(installer, "ensure_dark_net"),
+            mock.patch.object(installer, "ensure_backbone_network"),
+            mock.patch.object(installer, "central_compose") as central,
             mock.patch.object(
                 installer,
                 "write_env_secure",
@@ -384,16 +388,14 @@ class ValidationTests(unittest.TestCase):
             installer.install_dark_ipfs("DEVELOPER", env)
 
         self.assertEqual(len(writes), 2)
-        self.assertGreaterEqual(len(setups), 2)
+        self.assertGreaterEqual(central.call_count, 2)
         self.assertEqual(writes[0][1]["IPFS_API_HOST_PORT"], "5001")
         self.assertEqual(writes[1][1]["IPFS_API_HOST_PORT"], "5101")
         self.assertIn(
             "dark-ipfs-developer-storage-1",
             writes[1][1]["IPFS_BOOTSTRAP_HOSTS"],
         )
-        starts = [call for call in setups if "make down" not in call["commands_str"][0]]
-        self.assertIn(".env.node.developer-storage-1", starts[-2]["commands_str"][0])
-        self.assertIn(".env.node.developer-storage-2", starts[-1]["commands_str"][0])
+        self.assertTrue(all("compose/storage.yml" in str(call.kwargs.get("compose_file")) for call in central.call_args_list))
 
     def test_developer_wizard_assets_are_generated_once_and_securely(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -458,7 +460,8 @@ class ValidationTests(unittest.TestCase):
                 os.chdir(root)
                 with (
                     mock.patch.object(installer, "install_repo"),
-                    mock.patch.object(installer, "ensure_dark_net"),
+                    mock.patch.object(installer, "ensure_backbone_network"),
+                    mock.patch.object(installer, "central_compose"),
                     mock.patch.object(installer, "write_env_secure"),
                     mock.patch.object(installer, "setup_repo", side_effect=lambda **kwargs: calls.append(kwargs)),
                 ):
@@ -472,9 +475,7 @@ class ValidationTests(unittest.TestCase):
                     })
             finally:
                 os.chdir(original_cwd)
-            self.assertEqual(len(calls), 2)
-            self.assertIn("make down", calls[0]["commands_str"][0])
-            self.assertNotIn("-v", calls[0]["commands_str"][0])
+            self.assertEqual(len(calls), 0)
 
     def test_resume_from_store_api_skips_completed_stages(self):
         env = {
@@ -564,7 +565,15 @@ class ValidationTests(unittest.TestCase):
                 installer._validate_storage_secret_file("CLUSTER", str(cluster), "cluster")
 
     def test_reconcile_only_reapplies_pins(self):
-        topology = installer.production_runtime(installer.load_storage_topology(PROJECT_ROOT / "storage-topology.example.json"))
+        deployment = json.loads((PROJECT_ROOT / "deployment-topology.example.json").read_text())
+        storage = deployment["storage"]
+        topology = installer.production_runtime(installer.load_storage_topology_document({
+            "version": 3,
+            "cluster_name": storage["cluster_name"],
+            "replication": storage["replication"],
+            "nodes": storage["nodes"],
+            "access_groups": storage.get("access_groups", {}),
+        }))
         calls = []
 
         def request(urls, method, path, **kwargs):
@@ -619,9 +628,15 @@ class ValidationTests(unittest.TestCase):
                 "SIGNER_MODE": "shared",
                 "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
             }
-            topology = installer.load_storage_topology(
-                PROJECT_ROOT / "storage-topology.example.json"
-            )
+            deployment = json.loads((PROJECT_ROOT / "deployment-topology.example.json").read_text())
+            storage = deployment["storage"]
+            topology = installer.load_storage_topology_document({
+                "version": 3,
+                "cluster_name": storage["cluster_name"],
+                "replication": storage["replication"],
+                "nodes": storage["nodes"],
+                "access_groups": storage.get("access_groups", {}),
+            })
             with (
                 mock.patch.object(
                     installer, "configured_storage_topology", return_value=topology
@@ -652,14 +667,14 @@ class ValidationTests(unittest.TestCase):
             key_path = root / "platform.key"
             key_path.write_text("44" * 32 + "\n")
             key_path.chmod(0o600)
-            target = root / "dark-env"
+            target = root / "blockchain"
             env = {
                 "TYPE": "production",
                 "SIGNER_MODE": "shared",
                 "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
             }
 
-            installer.prepare_dark_env_platform_wallet(str(target), env)
+            installer.prepare_blockchain_runtime_platform_wallet(str(target), env)
             address_file = target / "config" / "master-wallet"
             self.assertEqual(address_file.read_text().strip(), env["PLATFORM_ADDRESS"])
             self.assertEqual(address_file.stat().st_mode & 0o777, 0o600)
@@ -668,7 +683,7 @@ class ValidationTests(unittest.TestCase):
                 "alloc": {"0x" + "0" * 40: {"balance": "1"}}
             }))
             with self.assertRaises(SystemExit):
-                installer.prepare_dark_env_platform_wallet(str(target), env)
+                installer.prepare_blockchain_runtime_platform_wallet(str(target), env)
 
 
 class GitInstallerTests(unittest.TestCase):

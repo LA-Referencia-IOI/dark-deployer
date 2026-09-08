@@ -1,0 +1,17 @@
+name: ${DARK_COMPOSE_PROJECT:-dark-host}
+
+# Canonical orchestration entrypoint. Component repositories provide Dockerfiles
+# and application code; this file is the only Compose entrypoint used by the
+# deployer. Includes are resolved by Compose from the checked-out components.
+include:
+  - ../blockchain/compose.yml
+  - components/services/admin-api.yml
+  - components/services/resolver-api.yml
+  - components/services/store-api.yml
+  - components/services/minter.yml
+  - components/frontend/dashboard.yml
+  - components/blockchain/explorer.yml
+  - components/storage/ipfs.yml
+
+# Besu is maintained directly by dark-deployer and remains available through
+# blockchain/compose.yml until the role renderer emits the final host bundle.

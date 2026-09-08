@@ -29,7 +29,7 @@ Each tier scales independently. The application tier connects to the other two o
 │  ┌──────────────────────┐  ┌──────────────────┐  ┌──────────────────┐  │
 │  │   BLOCKCHAIN NODE 1  │  │ BLOCKCHAIN NODE 2│  │ BLOCKCHAIN NODE N│  │
 │  │  (bootnode + RPC)    │  │  (validator)     │  │  (validator)     │  │
-│  │  dark-env            │  │  dark-env        │  │  dark-env        │  │
+│  │ blockchain runtime   │  │ runtime           │  │ runtime           │  │
 │  │  dark-dapp           │  │                  │  │                  │  │
 │  │  dark-explorador     │  │                  │  │                  │  │
 │  │  :8545 (RPC)         │  │  :8545 (RPC)     │  │  :8545 (RPC)     │  │
@@ -79,8 +79,8 @@ The blockchain tier runs **at least 3 Hyperledger Besu nodes** forming a private
 
 | Node | Role | Components installed |
 | ---- | ---- | -------------------- |
-| Node 1 (bootnode) | Validator + RPC entrypoint + contract deployment | `dark-env`, `dark-dapp`, `dark-explorador` |
-| Node 2…N | Validators | `dark-env` only |
+| Apps/RPC | RPC no validador + contract deployment | blockchain runtime, `dark-dapp` |
+| blockchain-a / blockchain-b | Validadores y explorador en blockchain-a | blockchain runtime, `dark-explorador` en blockchain-a |
 
 **Node 1** is the primary RPC endpoint used by the application tier (`RPC_URL`). The remaining nodes connect to Node 1 via peer discovery and participate in block validation. Having at least 3 validators ensures Byzantine fault tolerance — the network remains live if one node fails.
 
@@ -193,7 +193,7 @@ apps host through a protected channel.
 ### Phase 2 — Additional Blockchain Validators
 
 The deployer wizard provisions the primary blockchain tier. Additional Besu
-validators are joined using `dark-env`'s bootnode and validator procedures;
+validators are joined using the internal runtime's bootnode and validator procedures;
 they must not redeploy contracts or regenerate the handoff. Preserve the
 primary tier's contract addresses and chain ID.
 
@@ -278,6 +278,6 @@ All ports above must be firewalled to allow only the listed source tiers. None s
 - [x] Remote RPC, Store API and IPFS endpoint propagation.
 - [x] Project-root-safe stop, restart and cleanup scripts.
 - [x] Preflight validation, redacted planning and component commit locks.
-- [ ] Expand the `dark-env` runbook for multi-node validator enrollment.
+- [ ] Expand the blockchain runtime runbook for multi-node validator enrollment.
 - [ ] Expand the IPFS Cluster runbook for peer bootstrap and replacement.
 - [ ] Maintain environment-specific firewall rules outside this repository.

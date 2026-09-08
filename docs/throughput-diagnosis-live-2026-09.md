@@ -17,6 +17,20 @@ validadores siguen disponibles; Chain puede procesar registros que ya tienen
 ambos primeros pins, pero recibe pocos nuevos mientras Availability está
 bloqueada por la cola de Cluster.
 
+## Seguimiento posterior: IPFS corregido, cuello trasladado a Chain
+
+La implementación posterior incorporó backoff efectivo para `queued`,
+`pinning` e `initial_visibility`, deduplicación de CIDs por página, límites
+separados de Store API y prioridad explícita del primer pin. En la revisión del
+8 de septiembre esos cambios estaban funcionando: Replication generaba batches
+con CIDs únicos, no había errores permanentes y la durabilidad quedaba bloqueada
+solo por backlog crítico. La hipótesis de polling continuo de Cluster deja de
+ser la explicación principal del retraso actual.
+
+El retraso vigente se concentra en Chain: páginas de 20 operaciones tardan
+25--45 s, con unos 2.900 ARKs listos, txpool sin congestión y reinicios `Killed`
+en validadores. Este hallazgo se detalla en `docs/chain-throughput-analysis.md`.
+
 ## Evidencia del monitor
 
 Las muestras de `dark-infrastructure-monitor.jsonl` muestran:

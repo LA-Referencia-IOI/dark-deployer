@@ -4,9 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 
 def load_script(name: str):
     spec = importlib.util.spec_from_file_location(name, PROJECT_ROOT / f"{name}.py")
@@ -15,117 +13,60 @@ def load_script(name: str):
     spec.loader.exec_module(module)
     return module
 
-
 stop_script = load_script("stop")
 restart_script = load_script("restart")
 clean_script = load_script("clean")
 
 
 class OperationalScriptTests(unittest.TestCase):
-    def make_stack(self, root: Path, relative_path: str) -> Path:
-        stack = root / relative_path
-        stack.mkdir(parents=True)
-        (stack / "docker-compose.yml").write_text("services: {}\n")
-        return stack
+    def make_compose(self, root: Path, name: str) -> Path:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("services: {}\n")
+        return path
 
     def test_stop_propagates_compose_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.make_stack(root, stop_script.COMPONENTS_TO_STOP[0])
-            result = mock.Mock(returncode=1)
-            with (
-                mock.patch.object(stop_script, "PROJECT_ROOT", root),
-                mock.patch.object(stop_script.subprocess, "run", return_value=result),
-            ):
-                self.assertEqual(stop_script.main(), 1)
+            compose = self.make_compose(Path(temporary), "compose/apps.yml")
+            with mock.patch.object(stop_script.subprocess, "run", return_value=mock.Mock(returncode=1)):
+                self.assertFalse(stop_script.stop("dark-apps", compose))
 
-    def test_restart_propagates_compose_failure_without_waiting(self):
+    def test_restart_propagates_compose_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            self.make_stack(root, restart_script.STACKS[0][0])
-            result = mock.Mock(returncode=1)
+            self.make_compose(root, "compose/apps.yml")
             with (
-                mock.patch.object(restart_script, "PROJECT_ROOT", root),
-                mock.patch.object(restart_script.subprocess, "run", return_value=result),
+                mock.patch.object(restart_script, "ROOT", root),
+                mock.patch.object(restart_script.subprocess, "run", return_value=mock.Mock(returncode=1)),
             ):
                 self.assertEqual(restart_script.main(), 1)
 
-    def test_restart_starts_and_checks_both_ipfs_ha_peers(self):
+    def test_restart_uses_central_storage_compose_for_each_peer(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            relative = "components/storage/dark-ipfs"
-            stack = self.make_stack(root, relative)
-            (stack / ".env.node.site-a-storage-1").write_text(
-                "HOST_BIND_ADDRESS=127.0.0.1\n"
-                "IPFS_API_HOST_PORT=5001\n"
-                "CLUSTER_REST_HOST_PORT=9094\n"
-            )
-            (stack / ".env.node.site-a-storage-2").write_text(
-                "HOST_BIND_ADDRESS=127.0.0.1\n"
-                "IPFS_API_HOST_PORT=5101\n"
-                "CLUSTER_REST_HOST_PORT=9194\n"
-            )
-            result = mock.Mock(returncode=0)
+            self.make_compose(root, "compose/apps.yml")
+            storage = root / "components/storage/dark-ipfs"
+            storage.mkdir(parents=True)
+            (storage / ".env.node.site-a-storage-1").write_text("NODE_ID=site-a-storage-1\n")
+            (storage / ".env.node.site-a-storage-2").write_text("NODE_ID=site-a-storage-2\n")
             with (
-                mock.patch.object(restart_script, "PROJECT_ROOT", root),
-                mock.patch.object(
-                    restart_script.subprocess, "run", return_value=result
-                ) as run,
-                mock.patch.object(
-                    restart_script, "wait_for_health", return_value=True
-                ) as wait,
+                mock.patch.object(restart_script, "ROOT", root),
+                mock.patch.object(restart_script.subprocess, "run", return_value=mock.Mock(returncode=0)) as run,
             ):
                 self.assertEqual(restart_script.main(), 0)
+            commands = [" ".join(call.args[0]) for call in run.call_args_list]
+            self.assertTrue(any("compose/storage.yml" in command for command in commands))
+            self.assertTrue(any("dark-storage-site-a-storage-1" in command for command in commands))
+            self.assertTrue(any("dark-storage-site-a-storage-2" in command for command in commands))
 
-            commands = [call.args[0] for call in run.call_args_list]
-            self.assertIn(
-                ["make", "up", "ENV_FILE=.env.node.site-a-storage-1"],
-                commands,
-            )
-            self.assertIn(
-                ["make", "up", "ENV_FILE=.env.node.site-a-storage-2"],
-                commands,
-            )
-            self.assertEqual(wait.call_count, 4)
-
-    def test_stop_stops_both_ipfs_ha_peers(self):
+    def test_clean_down_uses_central_compose(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            relative = "components/storage/dark-ipfs"
-            stack = self.make_stack(root, relative)
-            (stack / ".env.node.site-a-storage-1").write_text("")
-            (stack / ".env.node.site-a-storage-2").write_text("")
-            result = mock.Mock(returncode=0)
-            with (
-                mock.patch.object(stop_script, "PROJECT_ROOT", root),
-                mock.patch.object(
-                    stop_script.subprocess, "run", return_value=result
-                ) as run,
-            ):
-                self.assertEqual(stop_script.main(), 0)
-
-            commands = [call.args[0] for call in run.call_args_list]
-            self.assertIn(
-                ["make", "down", "ENV_FILE=.env.node.site-a-storage-1"],
-                commands,
-            )
-            self.assertIn(
-                ["make", "down", "ENV_FILE=.env.node.site-a-storage-2"],
-                commands,
-            )
-
-    def test_clean_removes_only_project_generated_directories(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "components").mkdir()
-            (root / "venv").mkdir()
-            outside = root / "keep"
-            outside.mkdir()
-            with mock.patch.object(clean_script, "PROJECT_ROOT", root):
-                self.assertEqual(clean_script.remove_generated_directories(False), [])
-            self.assertFalse((root / "components").exists())
-            self.assertFalse((root / "venv").exists())
-            self.assertTrue(outside.exists())
+            compose = self.make_compose(Path(temporary), "compose/apps.yml")
+            with mock.patch.object(clean_script.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+                self.assertTrue(clean_script.down("dark-apps", compose))
+            command = " ".join(run.call_args.args[0])
+            self.assertIn("compose/apps.yml", command)
+            self.assertIn("--volumes", command)
 
 
 if __name__ == "__main__":

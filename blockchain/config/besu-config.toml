@@ -1,0 +1,37 @@
+# =============================================================================
+#  dARK blockchain runtime — Besu base configuration (shared by all nodes)
+# =============================================================================
+
+# Data path inside the container
+data-path="/data"
+
+# Log level
+logging="INFO"
+
+# P2P networking
+p2p-enabled=true
+discovery-enabled=false
+p2p-host="0.0.0.0"
+
+# JSON-RPC HTTP (enabled for all nodes; restrict host-allowlist per node via CLI)
+rpc-http-enabled=true
+rpc-http-host="0.0.0.0"
+rpc-http-cors-origins=["*"]
+rpc-http-api=["ETH","NET","QBFT","ADMIN","WEB3","TXPOOL","DEBUG"]
+
+# GraphQL (disabled)
+graphql-http-enabled=false
+
+# Engine API (disabled — not needed for simple private networks)
+engine-rpc-enabled=false
+
+# Prometheus metrics
+metrics-enabled=true
+metrics-host="0.0.0.0"
+metrics-port=9545
+
+# Sync mode
+sync-mode="FULL"
+# Four local nodes provide at most three remote peers to each node. Keep this
+# compatible with the developer topology so a restarted node can resynchronize.
+sync-min-peers=3

@@ -1,0 +1,17 @@
+name: dark-storage-${NODE_ID:-storage}
+
+include:
+  - components/storage/ipfs.yml
+
+# A production storage host is self-contained.  Inter-host Cluster/Kubo
+# traffic uses the VPN addresses generated from deployment-topology.json, not
+# an external Docker network.
+networks:
+  dark-backbone:
+    name: dark-host
+    driver: bridge
+    external: false
+  storage:
+    name: dark-storage-${NODE_ID:-storage}
+    driver: bridge
+    external: false

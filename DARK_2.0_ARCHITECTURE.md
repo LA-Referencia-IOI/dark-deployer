@@ -23,7 +23,7 @@ The stack is composed of three layers:
 │                     BLOCKCHAIN LAYER                            │
 │       Authority.sol  ←── IAuthority.sol ───→  dARK.sol         │
 │       (access control)      (interface)      (ark storage)     │
-│                        dark-env (Besu network)                  │
+│                 dARK blockchain runtime (Besu network)          │
 └─────────────────────────────────────────────────────────────────┘
                          │ IPFS CID storage
 ┌────────────────────────▼────────────────────────────────────────┐
@@ -317,7 +317,8 @@ Metadata worker loop
 
 Replication worker loop
   └─► ReplicationReconciliationWorker
-          checks and repairs both CIDs in Store API
+          observes both CIDs with Store API batch status
+          waits for queued/pinning assignments; repairs only real errors
           updates replica counts and purges only when both targets are met
 
 Chain worker loop
@@ -488,6 +489,7 @@ The storage layer handles all content-addressed metadata blobs. It is composed o
 | `POST` | `/v1/store` | Store raw bytes (any Content-Type) | `{"cid": "...", "size": N}` |
 | `GET` | `/v1/retrieve/{cid}` | Retrieve content by CID | Raw bytes (`application/octet-stream`) |
 | `GET` | `/v1/status/{cid}` | Pin/replication status | total pinned replicas and observation time |
+| `POST` | `/v1/status/batch` | Bounded batch pin status | statuses with confirmed, queued, pinning and error counts |
 | `GET` | `/health` | Service health check | `{"status": "healthy"}` |
 
 **Storage backends** (selected by `STORAGE_BACKEND` env var):

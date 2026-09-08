@@ -22,6 +22,9 @@ For a single technical entry point covering the complete system, APIs, site
 layout, deployment and operations, see the
 [dARK technical reference](docs/dark-technical-reference.md).
 
+For high-volume publication, see
+[publication latency control](docs/publication-latency-control.md).
+
 The `developer` profile has local-only modes: one lightweight peer or two
 independent peers on the same machine as Store API. The mode is a generated
 runtime preset, not a manually maintained topology.
@@ -59,15 +62,11 @@ HA simulation uses
 separate containers, identities, networks and volumes, but both peers still
 share the same physical Docker host.
 
-For sandbox infrastructure, configure the topology and secrets explicitly:
-
-```bash
-cp .env.example .env
-cp storage-topology.example.json storage-topology.json
-```
-
-Edit `storage-topology.json` once for the whole infrastructure. It lists
-storage nodes and application endpoint pools, not geographical constraints:
+All host, blockchain and storage placement is defined in the single
+`deployment-topology.json` (copy `deployment-topology.example.json` to start).
+The same file drives developer simulation and production rendering; only the
+SSH and VPN values differ. It lists storage nodes and the replication policy,
+not geographical constraints:
 
 ```json
 {
@@ -85,9 +84,10 @@ storage nodes and application endpoint pools, not geographical constraints:
 }
 ```
 
-The live file is excluded from Git. Copy the same topology to storage and apps
-hosts. In `.env`, select the active profile and configure its role and storage
-selector fields:
+The live file is excluded from Git. Copy the same topology to every host. In
+`.env`, select the active profile and point `DEPLOYMENT_TOPOLOGY_FILE` at that
+file. `.env.example` is the versioned template and `.env` must keep the same
+keys.
 
 Generate two different secrets outside the repository:
 
@@ -107,7 +107,7 @@ Then select the active profile and configure its role and storage selector:
 ```ini
 TYPE=production
 PRODUCTION_INSTALL_COMPONENTS=storage-node
-PRODUCTION_STORAGE_TOPOLOGY_FILE=storage-topology.json
+PRODUCTION_DEPLOYMENT_TOPOLOGY_FILE=.generated/deployment-topology.json
 PRODUCTION_STORAGE_NODE_ID=storage-a
 PRODUCTION_IPFS_SWARM_KEY_FILE=/run/dark-secrets/ipfs-swarm.key
 PRODUCTION_IPFS_CLUSTER_SECRET_FILE=/run/dark-secrets/ipfs-cluster-secret
@@ -117,22 +117,37 @@ For an apps host, use `PRODUCTION_INSTALL_COMPONENTS=apps`, omit the node and
 storage secret fields, and set `PRODUCTION_STORAGE_ACCESS_GROUP=apps-a`.
 The installer derives its Store API failover endpoints from that group.
 
-For a complete, address-by-address production runbook covering one blockchain
-server, one apps server and two IPFS servers on one LAN, see
-[Production four-server installation](docs/production-single-site-four-server-installation.md).
+For a complete production topology with one apps/RPC server, two validator
+servers and two IPFS servers on one VPN, see
+[Production five-server installation](docs/production-single-site-four-server-installation.md).
 
-Production now uses a canonical inventory instead of four independently edited
-`.env` files. Component versions follow the repository branches configured in
-`.env`. Start from `deployment-inventory.example.json` and render the public
-host bundles:
+For a reproducible local lab that simulates those four Linux servers in
+Docker, see [local-infra/README.md](local-infra/README.md).
+
+For the proposed next-generation installer — modular roles, one canonical
+topology, arbitrary IPFS nodes and host-specific bundles — see the detailed
+[modular installation redesign proposal](docs/modular-installation-redesign-proposal.md).
+
+The minter worker workflow and its fresh-database verification handoff are
+documented in [the simplification proposal](docs/worker-workflow-simplification-proposal.md),
+[the implementation record](docs/worker-workflow-simplification-implementation.md),
+and [the verification procedure](docs/worker-workflow-simplification-verification.md).
+For code-based evidence of the Metadata → Replication → Chain cycle, timing,
+state transitions and Store API pin semantics, see [Worker cycle evidence](docs/worker-cycle-evidence.md).
+
+Production uses `deployment-topology.json` as its canonical configuration.
+It defines host addresses, SSH references, component branches and storage
+policy; `.env` is rendered per host and is not a source of production versions.
+Start from `deployment-topology.example.json` and render the public host bundles:
 
 ```bash
-cp deployment-inventory.example.json deployment-inventory.json
-# Set addresses and secret target paths in the inventory.
-python3 install.py deployment validate --inventory deployment-inventory.json
-python3 install.py deployment render \
-  --inventory deployment-inventory.json \
+cp deployment-topology.example.json deployment-topology.json
+# Set addresses and secret target paths in the topology.
+python3 install.py topology validate --file deployment-topology.json
+python3 install.py topology render \
+  --file deployment-topology.json \
   --output dist/dark-site-a-1
+python3 install.py deployment verify --bundle dist/dark-site-a-1
 ```
 
 The renderer creates one shared topology, endpoint and firewall policy plus one
@@ -144,9 +159,10 @@ host configuration per server. The bundle contains secret paths but never
 | Value | Installed on this server |
 | --- | --- |
 | `storage-node` | one Kubo daemon and one Cluster peer |
-| `apps` | core library, Admin API, Store API, Minter, Resolver and dashboard |
-| `blockchain` | blockchain node, contracts and explorer |
-| `all` | all three roles; mainly useful for constrained non-production setups |
+| `apps` | RPC node, contracts, core library, Admin API, Store API, Minter, Resolver and dashboard |
+| `blockchain-a` | validators 01/02 and explorer |
+| `blockchain-b` | validators 03/04 |
+| `all` | local developer simulation of every role |
 
 There is no legacy `storage` role and no single-host three-peer IPFS mode.
 Store API always belongs to `apps`, never to a storage node.
@@ -181,7 +197,7 @@ stage.
 
 ### Recommended storage sequence
 
-1. Deploy the first node listed in `storage-topology.json`; it seeds the Cluster.
+1. Deploy the first storage node listed in `deployment-topology.json`; it seeds the Cluster.
 2. Deploy the remaining nodes using their individual `storage_node_id`.
 3. Verify the cluster with `python3 install.py storage audit`.
 4. Deploy the apps role with its `storage_access_group`.
@@ -260,7 +276,9 @@ minimum or reports a pin error, making the audit suitable for monitoring jobs.
 dark-deployer/
 ├── install.py
 ├── restart.py / stop.py / clean.py
-├── storage-topology.example.json
+├── deployment-topology.example.json
+├── compose/                    # all operational Docker orchestration
+├── blockchain/                 # internal Besu runtime templates/scripts
 ├── dark_deployer/
 │   ├── commands.py
 │   ├── files.py

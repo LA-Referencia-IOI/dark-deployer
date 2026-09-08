@@ -1921,6 +1921,10 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "METADATA_WORKER_CONCURRENCY",
             template_env.get("METADATA_WORKER_CONCURRENCY", "4"),
         ).strip(),
+        "METADATA_WORKER_MIN_CONCURRENCY": env.get(
+            "METADATA_WORKER_MIN_CONCURRENCY",
+            template_env.get("METADATA_WORKER_MIN_CONCURRENCY", "2"),
+        ).strip(),
         "METADATA_WORKER_SLEEP_SECONDS": env.get(
             "METADATA_WORKER_SLEEP_SECONDS",
             template_env.get("METADATA_WORKER_SLEEP_SECONDS", "2"),
@@ -1955,7 +1959,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         ).strip(),
         "REPLICATION_WORKER_SLEEP_SECONDS": env.get(
             "REPLICATION_WORKER_SLEEP_SECONDS",
-            template_env.get("REPLICATION_WORKER_SLEEP_SECONDS", "30"),
+            template_env.get("REPLICATION_WORKER_SLEEP_SECONDS", "2"),
         ).strip(),
         "REPLICATION_STATUS_BATCH_SIZE": env.get(
             "REPLICATION_STATUS_BATCH_SIZE",
@@ -1965,10 +1969,10 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "REPLICATION_IDLE_SLEEP_SECONDS",
             template_env.get("REPLICATION_IDLE_SLEEP_SECONDS", "2"),
         ).strip(),
-        "AVAILABILITY_RECHECK_SECONDS": env.get("AVAILABILITY_RECHECK_SECONDS", template_env.get("AVAILABILITY_RECHECK_SECONDS", "10")).strip(),
-        "AVAILABILITY_MAX_RECHECK_SECONDS": env.get("AVAILABILITY_MAX_RECHECK_SECONDS", template_env.get("AVAILABILITY_MAX_RECHECK_SECONDS", "60")).strip(),
-        "REPLICATION_RECHECK_SECONDS": env.get("REPLICATION_RECHECK_SECONDS", template_env.get("REPLICATION_RECHECK_SECONDS", "300")).strip(),
-        "REPLICATION_MAX_RECHECK_SECONDS": env.get("REPLICATION_MAX_RECHECK_SECONDS", template_env.get("REPLICATION_MAX_RECHECK_SECONDS", "1800")).strip(),
+        "REPLICATION_PINNING_RECHECK_SECONDS": env.get("REPLICATION_PINNING_RECHECK_SECONDS", template_env.get("REPLICATION_PINNING_RECHECK_SECONDS", "2")).strip(),
+        "REPLICATION_QUEUED_RECHECK_SECONDS": env.get("REPLICATION_QUEUED_RECHECK_SECONDS", template_env.get("REPLICATION_QUEUED_RECHECK_SECONDS", "5")).strip(),
+        "REPLICATION_VISIBILITY_RECHECK_SECONDS": env.get("REPLICATION_VISIBILITY_RECHECK_SECONDS", template_env.get("REPLICATION_VISIBILITY_RECHECK_SECONDS", "3")).strip(),
+        "REPLICATION_MAX_RECHECK_SECONDS": env.get("REPLICATION_MAX_RECHECK_SECONDS", template_env.get("REPLICATION_MAX_RECHECK_SECONDS", "30")).strip(),
         "REPLICATION_REPAIR_GRACE_SECONDS": env.get("REPLICATION_REPAIR_GRACE_SECONDS", template_env.get("REPLICATION_REPAIR_GRACE_SECONDS", "120")).strip(),
         "REPLICATION_REPAIR_COOLDOWN_SECONDS": env.get("REPLICATION_REPAIR_COOLDOWN_SECONDS", template_env.get("REPLICATION_REPAIR_COOLDOWN_SECONDS", "900")).strip(),
         "REPLICATION_WORKER_STORAGE_RETRY_SECONDS": env.get(
@@ -2111,6 +2115,9 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
             "IPFS_HEALTH_CACHE_TTL_SECONDS",
             template_env.get("IPFS_HEALTH_CACHE_TTL_SECONDS", "10"),
         ).strip(),
+        "STORE_ADD_CONCURRENCY": env.get("STORE_ADD_CONCURRENCY", template_env.get("STORE_ADD_CONCURRENCY", "4")).strip(),
+        "STORE_STATUS_CONCURRENCY": env.get("STORE_STATUS_CONCURRENCY", template_env.get("STORE_STATUS_CONCURRENCY", "6")).strip(),
+        "STORE_PROMOTION_CONCURRENCY": env.get("STORE_PROMOTION_CONCURRENCY", template_env.get("STORE_PROMOTION_CONCURRENCY", "1")).strip(),
     }
 
     runtime = configured_storage_runtime(prefix, env)

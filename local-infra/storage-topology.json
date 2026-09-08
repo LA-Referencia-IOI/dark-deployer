@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "cluster_name": "dark-local",
+  "replication": {"target_replicas": 2, "publish_after_replicas": 1},
+  "nodes": [
+    {"id": "storage-a", "address": "172.30.0.31"},
+    {"id": "storage-b", "address": "172.30.0.32"}
+  ],
+  "access_groups": {"apps-local": ["storage-a", "storage-b"]}
+}

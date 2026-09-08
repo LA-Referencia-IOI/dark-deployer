@@ -155,14 +155,8 @@ def _require_positive_integer(value: Any, field: str) -> int:
     return value
 
 
-def load_storage_topology(path: Path) -> StorageTopology:
-    """Load and strictly validate the manually authored v3 topology."""
-    try:
-        document = json.loads(path.read_text())
-    except FileNotFoundError as exc:
-        raise StorageTopologyError(f"storage topology file not found: {path}") from exc
-    except json.JSONDecodeError as exc:
-        raise StorageTopologyError(f"invalid storage topology JSON: {exc}") from exc
+def load_storage_topology_document(document: Any) -> StorageTopology:
+    """Strictly validate a v3 storage topology embedded in a larger document."""
     if not isinstance(document, dict) or document.get("version") != 3:
         raise StorageTopologyError("storage topology must use schema version 3")
     unknown_root = set(document) - {"version", "cluster_name", "replication", "nodes", "access_groups"}
@@ -217,6 +211,17 @@ def load_storage_topology(path: Path) -> StorageTopology:
             raise StorageTopologyError(f"access group {name!r} references unknown node(s): {', '.join(sorted(unknown))}")
         groups[name] = members
     return StorageTopology(cluster_name, tuple(nodes), groups, publish_after, target)
+
+
+def load_storage_topology(path: Path) -> StorageTopology:
+    """Load and strictly validate a standalone v3 storage topology file."""
+    try:
+        document = json.loads(path.read_text())
+    except FileNotFoundError as exc:
+        raise StorageTopologyError(f"storage topology file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise StorageTopologyError(f"invalid storage topology JSON: {exc}") from exc
+    return load_storage_topology_document(document)
 
 
 def production_runtime(topology: StorageTopology) -> StorageRuntime:
@@ -282,6 +287,7 @@ def node_environment(runtime: StorageRuntime, node_id: str, swarm_key_file: str,
         "IPFS_ANNOUNCE_MULTIADDRESS": announce_ipfs, "CLUSTER_ANNOUNCE_MULTIADDRESS": announce_cluster,
         "IPFS_BOOTSTRAP_HOSTS": bootstrap_hosts, "CLUSTER_BOOTSTRAP_HOSTS": cluster_bootstrap,
         "CLUSTER_REPLICATION_MIN": "1", "CLUSTER_REPLICATION_MAX": str(runtime.policy.target_replicas),
+        "CLUSTER_PINTRACKER_CONCURRENTPINS": "20",
         "HOST_BIND_ADDRESS": host_bind, "IPFS_API_HOST_PORT": "5001", "IPFS_SWARM_HOST_PORT": "4001",
         "CLUSTER_REST_HOST_PORT": "9094", "CLUSTER_PROXY_HOST_PORT": "9095", "CLUSTER_SWARM_HOST_PORT": "9096",
         "IPFS_DARK_NET_ALIAS": local.docker_ipfs_alias or f"dark-ipfs-{local.id}",

@@ -178,21 +178,26 @@ rebuilt from that branch.
 For the required DARK 2 `2MM` shoulder format and its minter-code assignment
 rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).
 
-The Minter runs API, metadata persistence, IPFS replication reconciliation,
-chain publication, and low-priority recovery as five separate processes. The root `.env` controls the
-reconciler through `REPLICATION_WORKER_ENABLED`, `REPLICATION_WORKER_PAGE_SIZE`,
-`REPLICATION_WORKER_CONCURRENCY`, `REPLICATION_WORKER_SLEEP_SECONDS`,
-`REPLICATION_WORKER_RECHECK_SECONDS`, `REPLICATION_WORKER_STORAGE_RETRY_SECONDS`,
-and `REPLICATION_WORKER_RUNTIME_NAME`. During installation and rebuild these
-values are copied into the Minter `.env.integration`; omitted values use the
-defaults from the Minter `.env.example`.
+The Minter runs three workers alongside the API: metadata persistence, IPFS
+replication reconciliation, and chain publication. The reconciler uses a page size of
+`100`, status batches of up to `200` unique CIDs, and a two-second global idle
+sleep. The initial pin is `1/1`; after publication, maintenance promotes it to
+the topology target (normally `2`) only when metadata and first-pin work are
+clear. The installer derives these values from the shared topology and writes
+the generated Minter environment. There are no normal per-ARK recheck timers
+or quota split in the current workflow; `queued` and `pinning` are ordinary
+transitional states.
 
-Recovery is controlled by `RECOVERY_WORKER_ENABLED`, `RECOVERY_WORKER_PAGE_SIZE`,
-`RECOVERY_WORKER_SLEEP_SECONDS`, and `RECOVERY_WORKER_RUNTIME_NAME`. It only
-returns structurally recoverable ARKs to normal queues after all normal worker
-queues are idle.
+## 7. Compose ownership and runtime lifecycle
 
-## 7. Runtime lifecycle
+Docker orchestration is owned by `dark-deployer`. The installer and lifecycle
+scripts select only the role-specific files under `compose/`: `apps.yml`,
+`blockchain-a.yml` and `storage.yml` for developer, plus their
+`*-production.yml` overlays for real hosts. Component repositories provide
+application sources and Dockerfiles, but their former operational
+`docker-compose.yml` files are no longer entrypoints. This keeps developer and
+production host boundaries aligned and avoids a second source of service names,
+networks or volumes.
 
 All lifecycle scripts resolve paths from their own repository location, so they
 can be invoked from any working directory.

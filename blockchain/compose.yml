@@ -1,0 +1,193 @@
+# =============================================================================
+#  dARK blockchain runtime — docker compose
+#  Role-selectable Besu nodes (4 QBFT validators + 1 non-validator RPC)
+#
+
+
+x-besu-common: &besu-common
+  # Pin Besu; override BESU_IMAGE deliberately when testing an upgrade.
+  image: ${BESU_IMAGE:-hyperledger/besu:26.6.1}
+  restart: unless-stopped
+
+services:
+
+  # ============================================================
+  # Node 1 — validator01 (bootnode + validator)
+  # ============================================================
+  validator01:
+    <<: *besu-common
+    profiles: ["validators-a"]
+    container_name: dark-validator01
+    hostname: validator01
+    networks:
+      dark-bc-a-local:
+      dark-backbone:
+        ipv4_address: 172.31.0.11
+    volumes:
+      - ./config:/config:ro
+      - ./nodes/validator01/data:/data
+    command:
+      - --config-file=/config/besu-config.toml
+      - --genesis-file=/config/genesis.json
+      - --node-private-key-file=/data/nodekey
+      - --p2p-port=30303
+      - --rpc-http-port=8545
+      - --host-allowlist=*
+    ports:
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30303:30303/tcp"
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30303:30303/udp"
+    healthcheck:
+      # The upstream Besu image includes bash but not curl. Opening the RPC
+      # socket verifies that Besu has completed startup and is accepting work.
+      test: ["CMD", "/usr/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8545"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ============================================================
+  # Node 2 — validator02
+  # ============================================================
+  validator02:
+    <<: *besu-common
+    profiles: ["validators-a"]
+    container_name: dark-validator02
+    hostname: validator02
+    networks:
+      dark-bc-a-local:
+      dark-backbone:
+        ipv4_address: 172.31.0.12
+    volumes:
+      - ./config:/config:ro
+      - ./nodes/validator02/data:/data
+    command:
+      - --config-file=/config/besu-config.toml
+      - --genesis-file=/config/genesis.json
+      - --node-private-key-file=/data/nodekey
+      - --p2p-port=30304
+      - --rpc-http-port=8545
+      - --host-allowlist=*
+    ports:
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30304:30304/tcp"
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30304:30304/udp"
+
+  # ============================================================
+  # Node 3 — validator03
+  # ============================================================
+  validator03:
+    <<: *besu-common
+    profiles: ["validators-b"]
+    container_name: dark-validator03
+    hostname: validator03
+    networks:
+      dark-bc-b-local:
+      dark-backbone:
+        ipv4_address: 172.31.0.21
+    volumes:
+      - ./config:/config:ro
+      - ./nodes/validator03/data:/data
+    command:
+      - --config-file=/config/besu-config.toml
+      - --genesis-file=/config/genesis.json
+      - --node-private-key-file=/data/nodekey
+      - --p2p-port=30305
+      - --rpc-http-port=8545
+      - --host-allowlist=*
+    ports:
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30305:30305/tcp"
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30305:30305/udp"
+
+  # ============================================================
+  # Node 4 — validator04
+  # ============================================================
+  validator04:
+    <<: *besu-common
+    profiles: ["validators-b"]
+    container_name: dark-validator04
+    hostname: validator04
+    networks:
+      dark-bc-b-local:
+      dark-backbone:
+        ipv4_address: 172.31.0.22
+    volumes:
+      - ./config:/config:ro
+      - ./nodes/validator04/data:/data
+    command:
+      - --config-file=/config/besu-config.toml
+      - --genesis-file=/config/genesis.json
+      - --node-private-key-file=/data/nodekey
+      - --p2p-port=30306
+      - --rpc-http-port=8545
+      - --host-allowlist=*
+    ports:
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30306:30306/tcp"
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30306:30306/udp"
+
+  # ============================================================
+  # Node 5 — rpc01 (non-validator + public RPC endpoint)
+  # ============================================================
+  rpc01:
+    <<: *besu-common
+    profiles: ["rpc"]
+    container_name: dark-rpc01
+    hostname: rpc01
+    networks:
+      dark-apps:
+        aliases:
+          - blockchain-rpc
+      dark-backbone:
+        ipv4_address: 172.31.0.31
+    volumes:
+      - ./config:/config:ro
+      - ./nodes/rpc01/data:/data
+    command:
+      - --config-file=/config/besu-config.toml
+      - --genesis-file=/config/genesis.json
+      - --node-private-key-file=/data/nodekey
+      - --p2p-port=30307
+      - --rpc-http-port=8545
+      - --rpc-ws-enabled=true
+      - --rpc-ws-port=8546
+      - --rpc-ws-api=ETH,NET,WEB3,ADMIN,TXPOOL,DEBUG,QBFT
+      - --host-allowlist=*
+      - --rpc-http-cors-origins=*
+    ports:
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30307:30307/tcp"
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:30307:30307/udp"
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:8545:8545"      # JSON-RPC HTTP
+      - "${BLOCKCHAIN_BIND_ADDRESS:-127.0.0.1}:8546:8546"      # JSON-RPC WebSocket
+    healthcheck:
+      test: ["CMD", "/usr/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8545"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+# =============================================================================
+# Two private host-local networks plus the simulated private VPN backbone.
+# =============================================================================
+networks:
+  dark-bc-a-local:
+    name: dark-bc-a-local
+    driver: bridge
+    internal: true
+    ipam:
+      driver: default
+      config:
+          - subnet: 172.30.10.0/24
+            gateway: 172.30.10.1
+  dark-bc-b-local:
+    name: dark-bc-b-local
+    driver: bridge
+    internal: true
+    ipam:
+      driver: default
+      config:
+          - subnet: 172.30.11.0/24
+            gateway: 172.30.11.1
+  dark-apps:
+    external: true
+    name: dark-apps
+  dark-backbone:
+    external: true
+    name: dark-backbone

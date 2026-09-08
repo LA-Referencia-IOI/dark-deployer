@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .files import parse_env_file, write_env_secure, write_text_secure
-from .storage import StorageTopologyError, load_storage_topology
+from .storage import StorageTopologyError, load_storage_topology_document
 
 
 class DeploymentError(ValueError):
@@ -22,8 +22,11 @@ class DeploymentError(ValueError):
 
 
 COMPONENTS_BY_ROLE = {
-    "blockchain": {"dark-env", "dark-dapp", "dark-explorador"},
+    "blockchain-a": {"blockchain-runtime", "dark-explorador"},
+    "blockchain-b": {"blockchain-runtime"},
     "apps": {
+        "blockchain-runtime",
+        "dark-dapp",
         "dark-core-lib",
         "dark-core-admin-api",
         "dark-core-resolver-api",
@@ -42,7 +45,6 @@ APP_ENDPOINT_PORTS = {
     "dashboard": 8081,
 }
 COMPONENT_ENV_PREFIX = {
-    "dark-env": "PRODUCTION_BLOCKCHAIN_DARK_ENV",
     "dark-dapp": "PRODUCTION_BLOCKCHAIN_DARK_DAPP",
     "dark-explorador": "PRODUCTION_BLOCKCHAIN_DARK_EXPLORADOR",
     "dark-core-lib": "PRODUCTION_CORE_LIB",
@@ -137,13 +139,12 @@ def current_deployer_branch(project_root: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def _load_repository_environment(project_root: Path) -> dict[str, str]:
-    """Load branch-based repository configuration from the root env files."""
-    values = parse_env_file(project_root / ".env.example", required=True)
-    active = parse_env_file(project_root / ".env", required=False)
-    values.update({key: value for key, value in active.items() if value})
-
-    deployer_branch = _string(values.get("DEPLOYER_BRANCH"), "DEPLOYER_BRANCH")
+def _load_component_references(document: dict, project_root: Path) -> dict[str, str]:
+    """Validate component branches from the canonical deployment topology."""
+    deployment = document.get("deployment")
+    if not isinstance(deployment, dict):
+        raise DeploymentError("deployment must be an object")
+    deployer_branch = _string(deployment.get("deployer_branch"), "deployment.deployer_branch")
     current_branch = current_deployer_branch(project_root)
     if current_branch != deployer_branch:
         raise DeploymentError(
@@ -151,27 +152,47 @@ def _load_repository_environment(project_root: Path) -> dict[str, str]:
             f"checkout {current_branch or 'detached HEAD'!r}"
         )
 
-    required_components = set().union(*COMPONENTS_BY_ROLE.values())
+    components = document.get("components")
+    if not isinstance(components, dict):
+        raise DeploymentError("components must be an object")
+    values = {"DEPLOYER_BRANCH": deployer_branch}
+    required_components = set().union(*COMPONENTS_BY_ROLE.values()) - {"blockchain-runtime"}
     for component in sorted(required_components):
+        definition = components.get(component)
+        if not isinstance(definition, dict):
+            raise DeploymentError(f"components.{component} must be an object")
         env_prefix = COMPONENT_ENV_PREFIX[component]
         repository_key = f"{env_prefix}_REPOSITORY_URL"
         branch_key = f"{env_prefix}_REPOSITORY_BRANCH"
-        repository = _string(values.get(repository_key), repository_key)
-        _string(values.get(branch_key), branch_key)
+        repository = _string(definition.get("repository_url"), f"components.{component}.repository_url")
+        branch = _string(definition.get("branch"), f"components.{component}.branch")
+        values[repository_key] = repository
+        values[branch_key] = branch
         parsed_repository = urlparse(repository)
         if parsed_repository.username or parsed_repository.password:
             raise DeploymentError(f"{repository_key} must not contain credentials")
     return values
 
 
-def load_deployment_inventory(path: Path, project_root: Path) -> dict:
-    """Load and validate the supported four-host production inventory."""
-    inventory = _read_json(path, "deployment inventory")
+def load_deployment_topology(path: Path, project_root: Path) -> dict:
+    """Load and validate the canonical five-host production topology."""
+    inventory = _read_json(path, "deployment topology")
     if inventory.get("version") != 1:
-        raise DeploymentError("deployment inventory must use schema version 1")
+        raise DeploymentError("deployment topology must use schema version 1")
     if inventory.get("environment") != "production":
         raise DeploymentError("deployment inventory environment must be 'production'")
-    _identifier(inventory.get("deployment_id"), "deployment_id")
+    deployment = inventory.get("deployment")
+    if not isinstance(deployment, dict):
+        raise DeploymentError("deployment must be an object")
+    inventory["deployment_id"] = _identifier(deployment.get("id"), "deployment.id")
+    ssh = deployment.get("ssh")
+    if not isinstance(ssh, dict):
+        raise DeploymentError("deployment.ssh must be an object")
+    _string(ssh.get("user"), "deployment.ssh.user")
+    if not isinstance(ssh.get("port"), int) or not 1 <= ssh["port"] <= 65535:
+        raise DeploymentError("deployment.ssh.port must be a TCP port")
+    _absolute_path(ssh.get("private_key_file"), "deployment.ssh.private_key_file")
+    _absolute_path(ssh.get("remote_directory"), "deployment.ssh.remote_directory")
 
     network = inventory.get("network")
     if not isinstance(network, dict) or network.get("trust_boundary") != "vpn":
@@ -199,13 +220,23 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
         raise DeploymentError("signing.mode must be 'shared'")
     _absolute_path(signing.get("platform_key_target"), "signing.platform_key_target")
 
+    blockchain = inventory.get("blockchain")
+    if not isinstance(blockchain, dict):
+        raise DeploymentError("blockchain must be an object")
+    _absolute_path(blockchain.get("chain_artifact_target"), "blockchain.chain_artifact_target")
+
     storage = inventory.get("storage")
     if not isinstance(storage, dict):
         raise DeploymentError("storage must be an object")
-    topology_file = _string(storage.get("topology_file"), "storage.topology_file")
-    topology_path = (path.parent / topology_file).resolve()
+    topology_document = {
+        "version": 3,
+        "cluster_name": storage.get("cluster_name"),
+        "replication": storage.get("replication"),
+        "nodes": storage.get("nodes"),
+        "access_groups": storage.get("access_groups", {}),
+    }
     try:
-        topology = load_storage_topology(topology_path)
+        topology = load_storage_topology_document(topology_document)
     except StorageTopologyError as exc:
         raise DeploymentError(f"invalid storage topology: {exc}") from exc
     _absolute_path(storage.get("swarm_key_target"), "storage.swarm_key_target")
@@ -213,23 +244,16 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
     if storage["swarm_key_target"] == storage["cluster_secret_target"]:
         raise DeploymentError("storage secret files must use different paths")
 
-    sites = inventory.get("sites")
-    if not isinstance(sites, list) or len(sites) != 1:
-        raise DeploymentError("this release requires exactly one production site")
-    site = sites[0]
-    if not isinstance(site, dict):
-        raise DeploymentError("sites[0] must be an object")
-    _identifier(site.get("id"), "sites[0].id")
-    hosts = site.get("hosts")
-    if not isinstance(hosts, list) or len(hosts) != 4:
-        raise DeploymentError("the production site must define exactly four hosts")
+    hosts = inventory.get("hosts")
+    if not isinstance(hosts, list) or len(hosts) != 5:
+        raise DeploymentError("the production site must define exactly five hosts")
 
     seen_ids: set[str] = set()
     seen_addresses: set[str] = set()
     seen_storage_nodes: set[str] = set()
     role_counts = {role: 0 for role in ALL_ROLES}
     for index, host in enumerate(hosts):
-        field = f"sites[0].hosts[{index}]"
+        field = f"hosts[{index}]"
         if not isinstance(host, dict):
             raise DeploymentError(f"{field} must be an object")
         host_id = _identifier(host.get("id"), f"{field}.id")
@@ -237,11 +261,16 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
             raise DeploymentError(f"duplicate host id {host_id!r}")
         seen_ids.add(host_id)
         _string(host.get("management_address"), f"{field}.management_address")
-        roles = host.get("roles")
-        if not isinstance(roles, list) or len(roles) != 1 or roles[0] not in ALL_ROLES:
-            raise DeploymentError(f"{field}.roles must contain one supported role")
-        role_counts[roles[0]] += 1
-        role = roles[0]
+        role = host.get("role")
+        if role not in ALL_ROLES:
+            raise DeploymentError(f"{field}.role must name one supported role")
+        role_counts[role] += 1
+        vpn_address = _ipv4(host.get("vpn_address"), f"{field}.vpn_address")
+        if ipaddress.ip_address(vpn_address) not in vpn_network:
+            raise DeploymentError(f"{field}.vpn_address is outside network.vpn_cidr")
+        if vpn_address in seen_addresses:
+            raise DeploymentError(f"duplicate host VPN address {vpn_address!r}")
+        seen_addresses.add(vpn_address)
         if role == "storage-node":
             node_id = _identifier(host.get("storage_node_id"), f"{field}.storage_node_id")
             try:
@@ -251,15 +280,8 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
             if node_id in seen_storage_nodes:
                 raise DeploymentError(f"duplicate storage node selector {node_id!r}")
             seen_storage_nodes.add(node_id)
-            if "vpn_address" in host:
-                raise DeploymentError(f"{field}.vpn_address is derived from storage.topology_file")
-        else:
-            vpn_address = _ipv4(host.get("vpn_address"), f"{field}.vpn_address")
-            if ipaddress.ip_address(vpn_address) not in vpn_network:
-                raise DeploymentError(f"{field}.vpn_address is outside network.vpn_cidr")
-            if vpn_address in seen_addresses:
-                raise DeploymentError(f"duplicate host VPN address {vpn_address!r}")
-            seen_addresses.add(vpn_address)
+            if topology.node(node_id).address != vpn_address:
+                raise DeploymentError(f"{field}.vpn_address must match storage.nodes.{node_id}.address")
         if role == "apps":
             group = _identifier(host.get("storage_access_group"), f"{field}.storage_access_group")
             try:
@@ -267,14 +289,13 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
             except StorageTopologyError as exc:
                 raise DeploymentError(str(exc)) from exc
 
-    if role_counts != {"blockchain": 1, "apps": 1, "storage-node": 2}:
+    if role_counts != {"blockchain-a": 1, "blockchain-b": 1, "apps": 1, "storage-node": 2}:
         raise DeploymentError(
-            "host roles must contain one blockchain, one apps and two storage-node hosts"
+            "host roles must contain one apps, one blockchain-a, one blockchain-b and two storage-node hosts"
         )
 
-    inventory["_repository_env"] = _load_repository_environment(project_root)
-    inventory["_inventory_path"] = str(path.resolve())
-    inventory["_storage_topology_path"] = str(topology_path)
+    inventory["_repository_env"] = _load_component_references(inventory, project_root)
+    inventory["_topology_path"] = str(path.resolve())
     inventory["_storage_topology"] = topology
     return inventory
 
@@ -282,13 +303,12 @@ def load_deployment_inventory(path: Path, project_root: Path) -> dict:
 def _host_for_role(inventory: dict, role: str) -> dict:
     return next(
         host
-        for host in inventory["sites"][0]["hosts"]
-        if role in host["roles"]
+        for host in inventory["hosts"]
+        if host["role"] == role
     )
 
 
 def _endpoints(inventory: dict) -> dict:
-    blockchain = _host_for_role(inventory, "blockchain")
     apps = _host_for_role(inventory, "apps")
     overrides = apps.get("advertised_urls", {})
     if overrides is None:
@@ -296,7 +316,7 @@ def _endpoints(inventory: dict) -> dict:
     if not isinstance(overrides, dict):
         raise DeploymentError("apps advertised_urls must be an object")
     endpoints = {
-        "rpc": f"http://{blockchain['vpn_address']}:8545",
+        "rpc": f"http://{apps['vpn_address']}:8545",
         **{
             name: f"http://{apps['vpn_address']}:{port}"
             for name, port in APP_ENDPOINT_PORTS.items()
@@ -317,7 +337,13 @@ def _firewall_policy(inventory: dict) -> dict:
         "version": 1,
         "trust_boundary": "vpn",
         "rules": [
-            {"role": "blockchain", "protocol": "tcp", "ports": [8545, 8546], "sources": [vpn_cidr]},
+            {"role": "apps", "protocol": "tcp", "ports": [8545, 8546], "sources": [_host_for_role(inventory, "blockchain-a")["vpn_address"]]},
+            {"role": "apps", "protocol": "tcp", "ports": [30307], "sources": [vpn_cidr]},
+            {"role": "apps", "protocol": "udp", "ports": [30307], "sources": [vpn_cidr]},
+            {"role": "blockchain-a", "protocol": "tcp", "ports": [30303, 30304], "sources": [vpn_cidr]},
+            {"role": "blockchain-a", "protocol": "udp", "ports": [30303, 30304], "sources": [vpn_cidr]},
+            {"role": "blockchain-b", "protocol": "tcp", "ports": [30305, 30306], "sources": [vpn_cidr]},
+            {"role": "blockchain-b", "protocol": "udp", "ports": [30305, 30306], "sources": [vpn_cidr]},
             {"role": "apps", "protocol": "tcp", "ports": [8000, 8002, 8003, 8081], "sources": [vpn_cidr]},
             {"role": "apps", "protocol": "tcp", "ports": [8001], "sources": [trusted_client]},
             {"role": "storage-node", "protocol": "tcp", "ports": [4001, 5001, 9094, 9095, 9096], "sources": [vpn_cidr]},
@@ -335,7 +361,15 @@ def _host_env(
     repository_env: dict[str, str],
     topology_hash: str,
 ) -> dict[str, str]:
-    role = host["roles"][0]
+    role = host["role"]
+    apps = _host_for_role(inventory, "apps")
+    blockchain_a = _host_for_role(inventory, "blockchain-a")
+    blockchain_b = _host_for_role(inventory, "blockchain-b")
+    dark_env_role = {"apps": "rpc", "blockchain-a": "validators-a", "blockchain-b": "validators-b"}.get(role, "")
+    backbone_ips = ",".join((
+        blockchain_a["vpn_address"], blockchain_a["vpn_address"],
+        blockchain_b["vpn_address"], blockchain_b["vpn_address"], apps["vpn_address"],
+    ))
     values = {
         "TYPE": "production",
         "PRODUCTION_INSTALL_COMPONENTS": role,
@@ -347,18 +381,20 @@ def _host_env(
         "RPC_URL": endpoints["rpc"],
         "RPC_PUBLIC_URL": endpoints["rpc"],
         "CHAIN_ID": str(inventory.get("chain_id", 2025)),
-        "PRODUCTION_STORAGE_TOPOLOGY_FILE": "storage-topology.json",
-        "PRODUCTION_STORAGE_TOPOLOGY_SHA256": topology_hash,
+        "PRODUCTION_DEPLOYMENT_TOPOLOGY_FILE": ".generated/deployment-topology.json",
+        "PRODUCTION_DEPLOYMENT_TOPOLOGY_SHA256": sha256_file(Path(inventory["_topology_path"])),
         "PRODUCTION_STORAGE_ACCESS_GROUP": host.get("storage_access_group", "") if role == "apps" else "",
         "PRODUCTION_STORAGE_NODE_ID": host.get("storage_node_id", "") if role == "storage-node" else "",
         "PRODUCTION_IPFS_SWARM_KEY_FILE": inventory["storage"]["swarm_key_target"],
         "PRODUCTION_IPFS_CLUSTER_SECRET_FILE": inventory["storage"]["cluster_secret_target"],
-        "PRODUCTION_BLOCKCHAIN_HOST": (
-            "" if role == "blockchain" else _host_for_role(inventory, "blockchain")["vpn_address"]
-        ),
+        "PRODUCTION_BLOCKCHAIN_HOST": "",
+        "BLOCKCHAIN_RUNTIME_ROLE": dark_env_role,
+        "BLOCKCHAIN_RUNTIME_CHAIN_ARTIFACT_DIR": inventory["blockchain"]["chain_artifact_target"] if dark_env_role else "",
+        "BESU_IMAGE": _string(inventory["blockchain"].get("besu_image"), "blockchain.besu_image"),
+        "BLOCKCHAIN_BACKBONE_IPS": backbone_ips,
         "PRODUCTION_STORE_API_URL": "http://store-api:8003",
         "APPS_BIND_ADDRESS": host["vpn_address"] if role == "apps" else "",
-        "BLOCKCHAIN_BIND_ADDRESS": host["vpn_address"] if role == "blockchain" else "",
+        "BLOCKCHAIN_BIND_ADDRESS": host["vpn_address"] if role in {"apps", "blockchain-a", "blockchain-b"} else "",
         "PRODUCTION_ADMIN_PUBLIC_URL": endpoints["admin"],
         "PRODUCTION_MINTER_PUBLIC_URL": endpoints["minter"],
         "PRODUCTION_RESOLVER_PUBLIC_URL": endpoints["resolver"],
@@ -366,6 +402,8 @@ def _host_env(
         "PRODUCTION_DASHBOARD_PUBLIC_URL": endpoints["dashboard"],
     }
     for component in sorted(COMPONENTS_BY_ROLE[role]):
+        if component == "blockchain-runtime":
+            continue
         env_prefix = COMPONENT_ENV_PREFIX[component]
         repository_key = f"{env_prefix}_REPOSITORY_URL"
         branch_key = f"{env_prefix}_REPOSITORY_BRANCH"
@@ -381,9 +419,9 @@ def _write_json(path: Path, value: Any, mode: int = 0o644) -> None:
     write_text_secure(path, json.dumps(value, indent=2, sort_keys=True) + "\n", mode=mode)
 
 
-def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path) -> Path:
-    """Validate an inventory and render a deterministic, secret-free bundle."""
-    inventory = load_deployment_inventory(inventory_path.resolve(), project_root.resolve())
+def render_deployment(topology_path: Path, output_dir: Path, project_root: Path) -> Path:
+    """Validate a topology and render deterministic, secret-free host bundles."""
+    inventory = load_deployment_topology(topology_path.resolve(), project_root.resolve())
     public_inventory = {key: value for key, value in inventory.items() if not key.startswith("_")}
     inventory_hash = sha256_json(public_inventory)
     endpoints = _endpoints(inventory)
@@ -398,16 +436,14 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
     shared.mkdir(parents=True, exist_ok=True)
     hosts_dir.mkdir(parents=True, exist_ok=True)
 
-    topology_path = shared / "storage-topology.json"
+    topology_output = shared / "deployment-topology.json"
     endpoints_path = shared / "deployment-endpoints.json"
     firewall_path = shared / "firewall-policy.json"
-    # Production topology is the authored source of truth. Do not normalize or
-    # reconstruct it from inventory: bundles preserve its bytes and hash.
-    shutil.copyfile(Path(inventory["_storage_topology_path"]), topology_path)
+    shutil.copyfile(topology_path, topology_output)
     _write_json(endpoints_path, {"version": 1, "advertised": endpoints})
     _write_json(firewall_path, _firewall_policy(inventory))
-    topology_hash = sha256_file(topology_path)
-    for host in inventory["sites"][0]["hosts"]:
+    topology_hash = sha256_file(topology_output)
+    for host in inventory["hosts"]:
         host_dir = hosts_dir / host["id"]
         host_dir.mkdir(parents=True, exist_ok=True)
         env_values = _host_env(
@@ -425,7 +461,7 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
             "environment": "production",
             "host": {
                 "id": host["id"],
-                "role": host["roles"][0],
+                "role": host["role"],
                 "management_address": host["management_address"],
                 "vpn_address": host.get("vpn_address", ""),
                 "storage_node_id": host.get("storage_node_id", ""),
@@ -437,9 +473,13 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
                 "topology_sha256": topology_hash,
                 "environment_sha256": sha256_file(environment_path),
             },
+            "delivery": {
+                "ssh": inventory["deployment"]["ssh"],
+                "apply_order": ["blockchain-a", "blockchain-b", "apps", "storage-node"],
+            },
             "files": {
                 "environment": ".env.public",
-                "topology": "../../shared/storage-topology.json",
+                "topology": "../../shared/deployment-topology.json",
             },
             "secrets": {
                 "platform_key": inventory["signing"]["platform_key_target"],
@@ -453,13 +493,15 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
 
 1. Verify the deployer checkout uses branch `{deployer_branch}`.
 2. Copy the public bundle to each host; do not add secrets to this directory.
-3. Provision the platform key on Blockchain and Apps with mode 0600.
-4. Provision both IPFS secrets on both storage hosts with mode 0600.
-5. Run `host validate`, then `host plan`, on every host.
-6. Apply Blockchain and copy its public `.env.integration` handoff to Apps.
-7. Apply both storage hosts, run `storage audit`, then apply Apps.
-8. Verify that published services bind only to VPN or loopback addresses.
-9. Stop either IPFS host and verify minting and metadata resolution.
+3. Provision the platform key on Apps with mode 0600.
+4. Securely distribute the generated dARK blockchain runtime artifact: genesis and the
+   selected node key material only to each matching node host.
+5. Provision both IPFS secrets on both storage hosts with mode 0600.
+6. Run `host validate`, then `host plan`, on every host.
+7. Apply blockchain-a, then blockchain-b, then Apps/RPC and contracts.
+8. Apply both storage hosts, run `storage audit`, then apply Apps services.
+9. Verify that published services bind only to VPN or loopback addresses.
+10. Stop either IPFS host and verify minting and metadata resolution.
 """
     write_text_secure(bundle / "CHECKLIST.md", checklist, mode=0o644)
 
@@ -472,6 +514,7 @@ def render_deployment(inventory_path: Path, output_dir: Path, project_root: Path
         "version": 1,
         "deployment_id": inventory["deployment_id"],
         "deployer_branch": deployer_branch,
+        "deployment_topology_sha256": sha256_file(topology_path),
         "inventory_sha256": inventory_hash,
         "topology_sha256": topology_hash,
         "files": file_hashes,
@@ -517,7 +560,7 @@ def validate_host_bundle(path: Path, require_secrets: bool = True) -> dict:
     if require_secrets:
         role = config["host"]["role"]
         required_names = (
-            {"platform_key"} if role in {"blockchain", "apps"} else
+            {"platform_key"} if role == "apps" else
             {"ipfs_swarm_key", "ipfs_cluster_secret"}
         )
         for name in required_names:
@@ -542,8 +585,10 @@ def materialize_host_bundle(path: Path, project_root: Path) -> dict:
         )
     shutil.copyfile(validated["files"]["environment"], project_root / ".env")
     os.chmod(project_root / ".env", 0o600)
-    shutil.copyfile(validated["files"]["topology"], project_root / "storage-topology.json")
-    os.chmod(project_root / "storage-topology.json", 0o644)
+    generated_topology = project_root / ".generated" / "deployment-topology.json"
+    generated_topology.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(validated["files"]["topology"], generated_topology)
+    os.chmod(generated_topology, 0o644)
     return validated
 
 
@@ -558,3 +603,36 @@ def host_status(path: Path, project_root: Path) -> dict:
         "inventory_sha256": config["release"]["inventory_sha256"],
         "topology_sha256": config["release"]["topology_sha256"],
     }
+
+
+def deployment_host_configs(bundle: Path) -> list[Path]:
+    """Return host configs in the safe, fixed deployment order."""
+    role_order = {"blockchain-a": 0, "blockchain-b": 1, "apps": 2, "storage-node": 3}
+    configs = sorted((bundle / "hosts").glob("*/host.json"))
+    return sorted(
+        configs,
+        key=lambda item: (role_order[load_host_config(item)[0]["host"]["role"]], item.parent.name),
+    )
+
+
+def deployment_delivery_plan(bundle: Path) -> list[dict[str, str]]:
+    """Build the SSH delivery plan; callers decide whether to execute it."""
+    plan: list[dict[str, str]] = []
+    for config_path in deployment_host_configs(bundle):
+        config, _ = load_host_config(config_path)
+        ssh = config["delivery"]["ssh"]
+        host = config["host"]
+        plan.append({
+            "host_id": host["id"],
+            "role": host["role"],
+            "destination": f"{ssh['user']}@{host['management_address']}",
+            "port": str(ssh["port"]),
+            "private_key_file": ssh["private_key_file"],
+            "remote_directory": ssh["remote_directory"],
+        })
+    return plan
+
+
+def verify_deployment_bundle(bundle: Path) -> list[dict]:
+    """Validate all public host bundles without contacting remote hosts."""
+    return [validate_host_bundle(config, require_secrets=False) for config in deployment_host_configs(bundle)]

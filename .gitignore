@@ -106,8 +106,7 @@ celerybeat.pid
 # Environments
 .env
 .generated/
-storage-topology.json
-storage-topology.developer-*.json
+deployment-topology.json
 .dark-secrets/
 .env.integration
 .env.integration.secrets
