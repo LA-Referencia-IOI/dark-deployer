@@ -103,6 +103,7 @@ def stats() -> list[dict]:
 def sample(full: bool) -> dict:
     worker = get_json("http://127.0.0.1:8001/api/v1/worker/status", timeout=5)
     external = {name: get_json(url) for name, url in HTTP_ENDPOINTS.items()}
+    external["workers_lite"] = worker
     clusters = {name: get_json(url) for name, url in CLUSTER_ENDPOINTS.items()}
     external["rpc"] = get_json("http://127.0.0.1:8545", payload={"jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": []})
     external["txpool"] = get_json("http://127.0.0.1:8545", payload={"jsonrpc": "2.0", "id": 2, "method": "txpool_besuStatistics", "params": []})
