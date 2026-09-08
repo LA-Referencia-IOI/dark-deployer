@@ -43,7 +43,13 @@ def get_json(url: str, *, payload: dict | None = None, timeout: float = 5) -> di
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             raw = response.read().decode()
-            return {"ok": True, "status": response.status, "body": json.loads(raw)}
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                # Cluster REST streams /peers as newline-delimited JSON.
+                lines = [line for line in raw.splitlines() if line.strip()]
+                body = [json.loads(line) for line in lines]
+            return {"ok": True, "status": response.status, "body": body}
     except (OSError, urllib.error.URLError, TimeoutError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
 
