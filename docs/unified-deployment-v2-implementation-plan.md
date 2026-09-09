@@ -5,12 +5,13 @@ Fecha: 2026-09-09. Base: [análisis del instalador](installer-local-remote-unifi
 
 ## Estado de implementación
 
-La primera fase está iniciada: `deploy.py` y `deployment_v2/` validan el
+La primera fase está implementada: `deploy.py` y `deployment_v2/` validan el
 inventario v2, resuelven grupos/máquinas, asignan subredes Docker de forma
 determinista, derivan endpoints y generan un plan y bundle público. También
-existe `preflight` de solo lectura con executor local/SSH. Todavía no genera
-Compose final ni ejecuta `apply`; las secciones 5 a 12 siguen siendo trabajo
-pendiente y son la fuente de verdad para continuar.
+existe `preflight` de solo lectura con executor local/SSH. Los ejemplos local
+simple, HA local y cinco hosts validan en las pruebas automatizadas. Todavía
+no genera Compose final ni ejecuta `apply`; las secciones 5 a 12 siguen siendo
+trabajo pendiente y son la fuente de verdad para continuar.
 
 ## 1. Resultado obligatorio y límites
 
