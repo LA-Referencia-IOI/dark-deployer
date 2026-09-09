@@ -235,6 +235,44 @@ Cada componente aparece tres veces en `.env.example` con URL, rama, setup y
 comandos. La mayoría de valores son iguales (`main`, mismo repositorio), pero
 se mantienen tres copias que pueden divergir.
 
+### Complejidad observable en `.env.example`
+
+`.env.example` documenta correctamente que el instalador necesita parámetros
+de ejecución, pero hoy también funciona como catálogo de repositorios,
+ramas, comandos de setup, selección de tiers, endpoints remotos, secretos,
+roles blockchain y ajustes de workers. Hay bloques casi paralelos para
+`DEVELOPER`, `SANDBOX` y `PRODUCTION`, además de un bloque general. Esto hace
+difícil saber qué debe editar un operador y qué será generado por el inventario.
+
+Para la siguiente implementación conviene clasificar cada variable del archivo
+en cuatro grupos, y eliminar progresivamente los grupos que sean derivados:
+
+1. **Identidad del host:** perfil, host-id y rol local.
+2. **Ejecución:** modo local/SSH, proyecto Compose, puertos y límites de
+   desarrollo.
+3. **Secretos:** solo rutas o referencias a almacenes seguros.
+4. **Derivados:** ramas, URLs entre servicios, nodos, peers, redes, rutas de
+   datos y comandos de componentes; deben proceder de
+   `deployment-topology.json` o de un bundle generado.
+
+Preguntas que el agente debe resolver antes de simplificar `.env.example`:
+
+- ¿Puede un plan normalizado por host reemplazar los tres bloques prefijados?
+- ¿Developer simple/HA debe ser una plantilla de inventario en vez de una
+  variable especial?
+- ¿Qué overrides necesita realmente un operador después de renderizar el
+  inventario?
+- ¿Los comandos de setup de cada repositorio pueden desaparecer al quedar
+  Compose bajo control del deployer?
+- ¿El mismo archivo generado puede alimentar ejecución local y SSH sin
+  reescribir `.env.integration` en hosts distintos?
+- ¿Qué variables deben ser obligatorias, cuáles opcionales y cuáles deben
+  rechazarse si contradicen el inventario?
+
+La meta no es eliminar `.env`, sino reducirlo a un selector de ejecución y
+secretos referenciados. El inventario debe seguir siendo la única descripción
+de la infraestructura.
+
 ### Infraestructura en dos modelos
 
 El inventario define hosts, pero el wizard todavía pide o conserva variables de
