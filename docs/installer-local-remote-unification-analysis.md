@@ -306,6 +306,50 @@ host apply y el wizard.
 ya está integrado en el deployer. No es un repositorio externo activo, pero el
 nombre puede inducir a error en nuevos cambios.
 
+## Cómo está modularizado hoy `install.py`
+
+`install.py` sigue siendo el orquestador principal y concentra buena parte de
+la lógica. Su modularización actual es funcional, pero no equivale todavía a
+un motor de despliegue por host:
+
+1. **Entrada y precondiciones.** Lee `.env`, comprueba Python, Docker y
+   Compose, prepara el virtualenv compartido y normaliza el perfil.
+2. **Archivos y procesos.** Delega lectura/escritura segura de entornos en
+   `dark_deployer.files`, ejecución de comandos en `dark_deployer.process` y
+   parsing de comandos de componentes en `dark_deployer.commands`.
+3. **Topología y bundles.** Importa de `dark_deployer.deployment` la carga y
+   validación del inventario, el render de bundles, la materialización por
+   host, el plan SSH y la verificación de manifiestos.
+4. **Storage.** Importa de `dark_deployer.storage` los runtimes developer y
+   production, generación de entornos de nodos, endpoints, secretos y
+   operaciones `audit`/`reconcile`.
+5. **Instalación de componentes.** Mantiene funciones específicas para
+   clonar/actualizar repositorios, instalar dependencias, ejecutar setup y
+   arrancar Compose agregados.
+6. **Integración.** Genera `.env.integration`, ABI, endpoints de RPC/Store y
+   configuraciones que consumen etapas posteriores.
+7. **CLI de operaciones.** En el mismo archivo conviven el wizard, instalación
+   completa, rebuild selectivo, migración, storage audit/reconcile, topología,
+   deployment remoto y `host apply`.
+
+El flujo típico de ejecución es:
+
+```text
+parse_env_file(.env)
+  → validar perfil/topología y precondiciones
+  → preparar venv, repositorios y secretos derivados
+  → seleccionar tiers/rol
+  → central_compose(build/up/run)
+  → esperar health y generar handoffs
+  → instalar el siguiente componente
+  → imprimir resumen y estado
+```
+
+La modularidad, por tanto, está dividida entre módulos auxiliares y muchas
+funciones del propio `install.py`; todavía no existe una interfaz única que
+represente `Plan(host, role, compose, networks, dependencies, executor)`.
+Ese es el punto de acoplamiento principal que debe resolver la unificación.
+
 ## Modelo unificado propuesto para la siguiente fase
 
 ### Fuente única
