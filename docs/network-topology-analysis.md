@@ -4,7 +4,7 @@
 > en [`decoupled-infrastructure.md`](decoupled-infrastructure.md),
 > [`ipfs-architecture.md`](ipfs-architecture.md) y el índice de
 > [`docs/README.md`](README.md). Las referencias a `dark-env`,
-> `storage-topology.json` o a la estructura anterior del instalador que quedan
+> a los archivos separados de storage o a la estructura anterior del instalador que quedan
 > más abajo son evidencia de la evolución y no instrucciones de instalación.
 
 Documento de referencia para la conectividad de una sede. La simulación
@@ -228,7 +228,7 @@ En producción estas redes son locales a sus respectivos servidores. La comunica
 
 ## Store API como puente
 
-Store API es el único componente que necesita conocer la infraestructura IPFS. En producción se ejecuta en el servidor apps y recibe de `storage-topology.json` los endpoints privados/VPN de los peers de almacenamiento.
+Store API es el único componente que necesita conocer la infraestructura IPFS. En producción se ejecuta en el servidor apps y recibe del inventario `deployment-topology.json` los endpoints privados/VPN de los peers de almacenamiento.
 
 El dashboard, minter, resolver y admin no deben conocer directamente Kubo o Cluster.
 
@@ -322,7 +322,7 @@ Estos nombres solo deben existir en la red developer correspondiente.
 
 ### Producción
 
-Usar direcciones privadas/VPN derivadas del inventario y `storage-topology.json`:
+Usar direcciones privadas/VPN derivadas exclusivamente de `deployment-topology.json`:
 
 ```text
 http://10.20.0.20:8545
@@ -343,9 +343,7 @@ La topología no debe declarar peers remotos como aliases Docker globales. El pe
 Existe una inconsistencia que debe resolverse antes de implementar las redes:
 
 - `dark_deployer/storage.py` valida esquema v3.
-- `storage-topology.example.json` usa v3.
-- `storage-topology.json` usa v2.
-- `storage-topology.developer-ha.json` usa v2.
+- Los archivos separados de storage usaban versiones divergentes.
 
 Aunque el runtime developer se genera internamente, mantener ambos formatos produce confusión y puede provocar fallos al validar bundles. La futura implementación debe elegir una única versión vigente y actualizar o retirar los ejemplos obsoletos.
 
@@ -375,7 +373,7 @@ La política inter-sede debe definirse después de estabilizar la topología de 
 11. Mantener las redes locales de bases de datos sin exponerlas innecesariamente a la red troncal.
 12. Actualizar `clean.py` para limpiar las nuevas redes sin borrar redes de otros despliegues.
 13. Actualizar documentación, ejemplos de `.env` y diagramas.
-14. Unificar la versión de `storage-topology.json` y eliminar referencias al esquema obsoleto.
+14. Unificar la versión del inventario y eliminar referencias a los esquemas obsoletos.
 15. Probar developer simple, developer HA y un bundle de producción con cuatro hosts.
 
 ## Criterios de aceptación
@@ -484,16 +482,16 @@ Archivos: `install.py` y `dark_deployer/storage.py`.
 4. Usar esta función para core-lib, Admin API, Resolver API, Minter y dashboard.
 5. Nunca generar `http://rpc01:8545` para servicios apps.
 6. En developer, `developer_runtime()` debe producir endpoints IPFS alcanzables por Store API sobre `dark-backbone`.
-7. En producción, `production_runtime()` continúa generando endpoints VPN desde `storage-topology.json`.
+7. En producción, `production_runtime()` genera endpoints VPN desde el inventario.
 8. Renombrar variables históricas `IPFS_DARK_NET_ALIAS` y `CLUSTER_DARK_NET_ALIAS` por nombres neutrales de backbone.
 
 Prueba: generar `.env.integration` para developer y producción y comparar que cada URL corresponde al perfil correcto.
 
-### Fase 6 — Unificar `storage-topology`
+### Fase 6 — Integrar storage en el inventario
 
-Archivos: `storage-topology.json`, `storage-topology.developer-ha.json`, `storage-topology.example.json`, `dark_deployer/storage.py` y `tests/test_storage.py`.
+Archivos: inventario de despliegue, `dark_deployer/storage.py` y `tests/test_storage.py`.
 
-1. Adoptar exclusivamente el esquema v3 que valida `load_storage_topology()`.
+1. Adoptar exclusivamente el esquema integrado que valida el inventario.
 2. Actualizar o eliminar los archivos v2 existentes.
 3. Mantener solamente `cluster_name`, `replication`, `nodes` y `access_groups`.
 4. No reintroducir sedes, tags de sede ni mapas peer→sede como condición funcional.

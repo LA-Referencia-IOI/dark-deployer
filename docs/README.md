@@ -29,9 +29,8 @@ son derivados y no fuentes de configuración.
 ## Estado actual que debe reflejar la documentación
 
 - `dark-deployer` contiene el runtime blockchain y la orquestación Compose.
-- `deployment-topology.json` es la fuente de infraestructura del despliegue;
-  no se debe presentar `storage-topology.json` ni
-  `deployment-inventory.json` como fuentes activas.
+- `deployment-topology.json` es la única fuente de infraestructura e inventario
+  del despliegue; no existen archivos auxiliares de inventario o de storage.
 - La instalación productiva se divide en `apps`, `blockchain-a`,
   `blockchain-b` y dos `storage-node`.
 - El minter ejecuta API, Metadata Worker, Replication Worker y Chain Worker.

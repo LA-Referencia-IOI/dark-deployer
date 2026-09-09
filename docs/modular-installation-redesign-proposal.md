@@ -41,8 +41,8 @@ El repositorio ya contiene trabajo valioso hacia la separación por roles:
 
 - `install.py` reconoce `apps`, `blockchain` y `storage-node`.
 - `dark_deployer/deployment.py` genera bundles públicos por host a partir de
-  `deployment-inventory.json`.
-- `storage-topology.example.json` usa un esquema v3 mínimo y permite derivar
+  un inventario separado.
+- El archivo de storage separado usa un esquema mínimo y permite derivar
   endpoints IPFS a partir de direcciones privadas.
 - Las redes Docker actuales ya distinguen `dark-apps`, `dark-blockchain`,
   redes locales `dark-storage-<node>` y una red `dark-backbone` para la
@@ -52,9 +52,9 @@ Sin embargo, esas piezas no forman todavía un único modelo operativo.
 
 | Área | Situación actual | Consecuencia |
 | --- | --- | --- |
-| Fuente de infraestructura | La información está repartida entre `.env`, `deployment-inventory.json`, `storage-topology.json`, `.env.integration` y archivos generados. | No hay una fuente inequívoca que describa toda una sede. |
+| Fuente de infraestructura | La información estaba repartida entre `.env`, inventarios separados, `.env.integration` y archivos generados. | No había una fuente inequívoca que describiera toda una sede. |
 | Cardinalidad | El validador de inventario exige exactamente 1 host blockchain, 1 apps y 2 storage. | No se puede expresar de forma natural `N` nodos IPFS ni separar el bootstrap de los validadores. |
-| IPFS | El código valida topología v3, pero los archivos `storage-topology.json` y `storage-topology.developer-ha.json` presentes usan v2. | Un archivo aparentemente válido puede ser ignorado, fallar en preflight o inducir a editar el formato equivocado. |
+| IPFS | Existían varios formatos de topología de storage con versiones divergentes. | Un archivo aparentemente válido podía ser ignorado, fallar en preflight o inducir a editar el formato equivocado. |
 | Instalación | `install_profile()` sigue siendo una secuencia global fija: blockchain, librería, admin, IPFS, Store, resolver, minter y dashboard. | El orden describe una instalación monolítica aunque se ejecute solo una parte. |
 | Handoffs | `.env.integration` mezcla estado público de blockchain y de Store API; el instalador la lee y a veces la reescribe. | Es difícil saber qué host es productor de cada dato y cuándo un archivo quedó obsoleto. |
 | Dirección de servicios | Coexisten DNS Docker, `localhost`, IPs VPN, `RPC_URL`, `*_PUBLIC_URL` y aliases de backbone. | Se pueden generar endpoints correctos para developer pero inválidos en producción, o viceversa. |
@@ -349,8 +349,8 @@ debe ser una tabla independiente editada a mano.
 
 ## Modelo de topología canónica propuesto
 
-Se propone sustituir la pareja `deployment-inventory.json` +
-`storage-topology.json` por un único `deployment-topology.json`, schema v1.
+Se propone sustituir los inventarios separados por un único
+`deployment-topology.json`, schema v1.
 El renderizador puede generar una vista mínima exclusiva para Store API, pero
 esta no es una fuente editable.
 
@@ -576,7 +576,8 @@ etapa” que pertenece a una secuencia monolítica.
   derivación. `deployment.py` puede convertirse temporalmente en adaptador.
 - Sustituir las restricciones de exactamente cuatro hosts y dos storage nodes
   por cardinalidades declarativas.
-- Fusionar el inventario y la topología de storage. Retirar el esquema v2 y
+- Fusionar el inventario y la topología de storage. Retirar los esquemas
+  separados y
   los archivos v2 del repositorio; mantener un único ejemplo válido.
 - Introducir `chain-state.json` como artefacto explícito, separado de los
   valores de configuración del host.

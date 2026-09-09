@@ -10,9 +10,7 @@ Linux remotos. No cambia código ni propone todavía una migración ejecutable.
 
 **Convención de nombres:** aquí, “inventario de despliegue” e
 `deployment-topology.json` significan exactamente el mismo artefacto. Ese es
-el nombre de archivo canónico. `deployment-inventory.json` y
-`storage-topology.json` aparecen solo como nombres históricos que no deben
-volver a ser fuentes independientes.
+el único nombre de archivo válido; no se mantienen inventarios auxiliares.
 
 ## Conclusión ejecutiva
 

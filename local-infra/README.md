@@ -33,6 +33,7 @@ para recuperarlo: `LIMA_HOME=/Volumes/Test/dark-lab/.lima limactl start dark-sto
 Los discos de las VMs no se borran al parar. `lima-down.sh` solo detiene las
 VMs; no hay ningún comando de destrucción incluido.
 
-El fichero `storage-topology.json` sigue siendo una plantilla conceptual; debe
+La topología de almacenamiento está integrada en `deployment-topology.json`;
+la antigua plantilla conceptual ya no debe
 actualizarse con las direcciones reales de `dark-storage-a` y `dark-storage-b`
 antes de usarlo como entrada para validación/renderizado.

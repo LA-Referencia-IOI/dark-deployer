@@ -245,7 +245,7 @@ Its responsibilities are:
 - report storage readiness;
 - hide IPFS/Cluster details from minter and resolver.
 
-The minter/resolver should not call IPFS or IPFS Cluster directly because that would spread storage topology knowledge across services. Store API provides one application boundary:
+The minter/resolver should not call IPFS or IPFS Cluster directly because that would spread infrastructure knowledge across services. Store API provides one application boundary:
 
 ```text
 Minter/Resolver -> Store API -> IPFS/Cluster
@@ -394,7 +394,7 @@ The recommended behavior is ordered primary + failover:
 - expose active node and node health in `/health`;
 - assume all configured nodes are peers of the same IPFS Cluster.
 
-This avoids leaking the full storage topology into minter/resolver while still allowing Store API to survive a local IPFS/Cluster entrypoint failure.
+This avoids leaking the full storage infrastructure into minter/resolver while still allowing Store API to survive a local IPFS/Cluster entrypoint failure.
 
 ## Failure modes
 

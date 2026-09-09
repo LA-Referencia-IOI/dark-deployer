@@ -9,7 +9,7 @@ replicación entre sí.
 
 La topología de producción se escribe una sola vez en la sección `storage` de
 `deployment-topology.json`. El instalador distribuye ese mismo archivo; no
-crea ni acepta un `storage-topology.json` paralelo en producción:
+crea ni acepta un archivo de topología de storage paralelo en producción:
 
 ```json
 {

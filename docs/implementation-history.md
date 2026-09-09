@@ -8,14 +8,14 @@ y [`ipfs-architecture.md`](ipfs-architecture.md).
 
 Los documentos de propuesta, diagnóstico y verificación fechados se conservan
 como evidencia de decisiones y pruebas. Si contienen nombres antiguos como
-`dark-env`, `storage-topology.json`, Recovery Worker o cuotas históricas,
+`dark-env`, archivos separados de topología de storage, Recovery Worker o cuotas históricas,
 deben interpretarse dentro de su fecha y no como configuración vigente.
 
 Este documento resume los cambios acumulados durante la actualización de la plataforma dARK y sirve como guía para leer los commits temáticos de los componentes.
 
 ## Deployer y topología
 
-El repositorio padre concentra la configuración por ramas, la generación de entornos y la topología de almacenamiento. La topología compartida es la fuente de verdad para los peers IPFS/Cluster; los entornos conservan únicamente el perfil, el selector local y los secretos. El instalador valida selectores, peers, direcciones y el mínimo de réplicas, genera `.env.integration` y aplica las ramas configuradas con fallback controlado a `main`.
+El repositorio padre concentra la configuración por ramas, la generación de entornos y el inventario `deployment-topology.json`. Ese inventario es la fuente de verdad para hosts, peers IPFS/Cluster y réplicas; los entornos conservan únicamente el perfil, el selector local y los secretos. El instalador valida selectores, peers, direcciones y el mínimo de réplicas, genera `.env.integration` y aplica las ramas configuradas con fallback controlado a `main`.
 
 La documentación consolidada cubre operación del instalador, despliegue de producción, arquitectura IPFS, resolución de timeouts y el contrato de configuración. Los artefactos de ejecución locales, notebooks generados y directorios de build no forman parte de estos commits.
 

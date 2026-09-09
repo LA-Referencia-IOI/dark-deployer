@@ -3,7 +3,7 @@
 > **Nota de vigencia.** Este documento conserva el diagnóstico que condujo al
 > diseño actual. La fuente operativa de topología es ahora
 > `deployment-topology.json`; las menciones históricas a
-> `storage-topology.json` describen el incidente y no una configuración que
+> Los archivos históricos de topología describen el incidente y no una configuración que
 > deba editarse.
 
 Documento operativo actualizado el 4 de septiembre de 2026. Distingue la evidencia observada en el entorno Docker local de los cambios aplicados y de las tareas aún pendientes antes de producción.
