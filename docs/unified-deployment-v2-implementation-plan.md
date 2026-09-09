@@ -13,6 +13,11 @@ simple, HA local y cinco hosts validan en las pruebas automatizadas. Todavía
 no ejecuta una instalación validada de extremo a extremo; las secciones 5 a 12
 siguen siendo trabajo pendiente y son la fuente de verdad para continuar.
 
+El primer entregable documental de la migración también está disponible en
+[`deployment-v2-variable-map.md`](deployment-v2-variable-map.md): separa
+infraestructura, tuning, secretos y resultados generados, y enumera los huecos
+que aún impiden retirar `.env` e `install.py`.
+
 La segunda fase está iniciada: el bundle contiene `compose.yaml` independiente
 por grupo, entornos públicos, configuración de endpoints Store API y los
 entrypoints/variables derivados para Kubo y Cluster. `apply` crea una red
@@ -30,6 +35,17 @@ ejecución local usa también `data_root` y `secrets_root` de staging; por ello 
 operador debe provisionar explícitamente los archivos de prueba bajo esa ruta
 antes de invocar `apply`. Esta validación evita que un Compose parcialmente
 configurado llegue a arrancar.
+
+`secrets-init` ya crea para un entorno greenfield los secretos que no definen
+identidad de cadena: contraseña PostgreSQL del minter, su archivo privado de
+runtime, swarm key y secreto Cluster. Rechaza sobrescribir archivos. La master
+wallet y los firmantes de aplicación siguen siendo precondiciones explícitas,
+porque regenerarlos automáticamente rompería la continuidad de la cadena.
+
+El Compose de apps ya modela `minter-migrate` como job de perfil `setup`: el
+runner arranca PostgreSQL, espera su healthcheck y ejecuta Alembic una vez antes
+de iniciar API y workers. La migración Laravel, el despliegue idempotente de
+contratos y el handoff de sus direcciones siguen pendientes.
 
 Solo pasó pruebas estructurales y `docker compose config`; no usarlo aún para
 reemplazar la instalación actual. Faltan la generación e importación completa

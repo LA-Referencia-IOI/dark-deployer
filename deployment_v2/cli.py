@@ -12,12 +12,13 @@ from .planner import build_plan
 from .render import render_plan
 from .runner import ApplyError, apply
 from .artifacts import ArtifactError, write_chain_bootstrap, write_static_nodes
+from .secrets import SecretError, initialize_greenfield_secrets
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "apply", "chain-bootstrap", "chain-static-nodes"):
+    for name in ("validate", "plan", "render", "preflight", "apply", "chain-bootstrap", "chain-static-nodes", "secrets-init"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
@@ -31,6 +32,10 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--artifact-root", required=True, type=Path)
             command.add_argument("--public-keys", required=True, type=Path,
                                  help="JSON object mapping validator01..validator04 and rpc01 to public keys")
+        if name == "secrets-init":
+            command.add_argument("--output", required=True, type=Path,
+                                 help="empty secure directory to provision on the destination host")
+            command.add_argument("--overwrite", action="store_true")
     return parser
 
 
@@ -76,9 +81,14 @@ def main() -> None:
             destination = write_static_nodes(args.artifact_root, public_keys)
             print(f"[OK] Wrote static-node lists to {destination}")
             return
+        if args.action == "secrets-init":
+            created = initialize_greenfield_secrets(plan, args.output, overwrite=args.overwrite)
+            print(f"[OK] Created {len(created)} generated secret file(s) under {args.output}")
+            print("[INFO] Provision master-wallet and signer secrets separately; they are intentionally not generated.")
+            return
         rendered = render_plan(plan, args.output)
         print(f"[OK] Rendered public plan at {rendered}")
-    except (InventoryError, ExecutionError, ApplyError, ArtifactError, ValueError) as exc:
+    except (InventoryError, ExecutionError, ApplyError, ArtifactError, SecretError, ValueError) as exc:
         raise SystemExit(f"[ERROR] {exc}") from exc
 
 

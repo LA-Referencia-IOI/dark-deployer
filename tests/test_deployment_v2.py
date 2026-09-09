@@ -8,6 +8,7 @@ import yaml
 
 from deployment_v2.inventory import InventoryError, load_inventory
 from deployment_v2.artifacts import ArtifactError, static_nodes, write_chain_bootstrap
+from deployment_v2.secrets import SecretError, initialize_greenfield_secrets
 from deployment_v2.executor import CommandResult, run_preflight
 from deployment_v2.model import Machine, SshSettings
 from deployment_v2.planner import build_plan
@@ -42,6 +43,16 @@ class DeploymentV2Tests(unittest.TestCase):
             document["storage"]["replication"]["target_replicas"] = 3
             path.write_text(json.dumps(document))
             with self.assertRaisesRegex(InventoryError, "target_replicas"):
+                load_inventory(path)
+
+    def test_rejects_unknown_nested_fields(self):
+        source = ROOT / "examples" / "deployment-v2" / "local-ha.json"
+        document = json.loads(source.read_text())
+        document["storage"]["legacy_endpoint_list"] = ["http://old.example"]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "bad.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "storage contains unknown"):
                 load_inventory(path)
 
     def test_render_produces_public_group_configs_without_secret_values(self):
@@ -85,6 +96,19 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertTrue(any(peer.endswith("@10.20.30.20:30307") for peer in peers["validator01"]))
             with self.assertRaisesRegex(ArtifactError, "public keys"):
                 static_nodes(context, {"validator01": keys["validator01"]})
+
+    def test_greenfield_secret_init_generates_runtime_files_without_wallet(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "secrets"
+            created = initialize_greenfield_secrets(plan, output)
+            self.assertEqual(len(created), 4)
+            self.assertEqual((output / "ipfs" / "cluster.secret").stat().st_mode & 0o777, 0o600)
+            runtime = (output / "runtime" / "apps" / "minter.private.env").read_text()
+            self.assertIn("DATABASE_URL=postgresql://dark:", runtime)
+            self.assertFalse((output / "blockchain" / "master-wallet").exists())
+            with self.assertRaises(SecretError):
+                initialize_greenfield_secrets(plan, output)
 
 
 if __name__ == "__main__":

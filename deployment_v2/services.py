@@ -44,17 +44,22 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
     data = f"{machine.data_root}/{plan.deployment_id}/apps"
     bind = "127.0.0.1" if machine.execution == "local" else machine.private_address
     minter_build = _build(components, "services/dark-core-minter-api/Dockerfile")
+    # `required: false` keeps `docker compose config` usable for a public
+    # bundle.  The runner separately requires the file before `apply` starts
+    # any apps service, so this never weakens runtime secret validation.
+    minter_env = ["./env/minter.env", {"path": _secret_file(plan, machine.id, "minter-runtime-env"), "required": False}]
     common = {"restart": "unless-stopped", "networks": [network]}
     services = {
         "blockchain-rpc": {**common, "image": plan.raw["blockchain"]["besu_image"], "profiles": ["rpc"], "ports": [f"{bind}:8545:8545"], "volumes": [f"{data}/blockchain/rpc01:/data", f"{components}/blockchain/config:/config:ro"]},
-        "postgres": {**common, "image": "postgres:15-alpine", "environment": {"POSTGRES_USER": "dark", "POSTGRES_PASSWORD_FILE": "/run/secrets/minter-db-password", "POSTGRES_DB": "minter"}, "volumes": [f"{data}/minter/postgres:/var/lib/postgresql/data"], "secrets": ["minter-db-password"]},
+        "postgres": {**common, "image": "postgres:15-alpine", "environment": {"POSTGRES_USER": "dark", "POSTGRES_PASSWORD_FILE": "/run/secrets/minter-db-password", "POSTGRES_DB": "minter"}, "volumes": [f"{data}/minter/postgres:/var/lib/postgresql/data"], "secrets": ["minter-db-password"], "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U dark -d minter"], "interval": "3s", "timeout": "3s", "retries": 20}},
         "admin-api": {**common, "build": _build(components, "services/dark-core-admin-api/Dockerfile"), "env_file": ["./env/admin-api.env"], "ports": [f"{bind}:8000:8000"]},
         "resolver-api": {**common, "build": _build(components, "services/dark-core-resolver-api/Dockerfile"), "env_file": ["./env/resolver-api.env"], "ports": [f"{bind}:8002:8002"]},
         "store-api": {**common, "build": _build(components, "services/dark-store-api/Dockerfile"), "env_file": ["./env/store-api.env"], "ports": [f"{bind}:8003:8003"], "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]},
-        "minter-api": {**common, "build": minter_build, "env_file": ["./env/minter.env"], "ports": [f"{bind}:8001:8001"], "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
-        "minter-metadata-worker": {**common, "build": minter_build, "command": ["metadata-worker"], "env_file": ["./env/minter.env"], "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
-        "minter-replication-worker": {**common, "build": minter_build, "command": ["replication-worker"], "env_file": ["./env/minter.env"], "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
-        "minter-chain-worker": {**common, "build": minter_build, "command": ["chain-worker"], "env_file": ["./env/minter.env"], "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
+        "minter-api": {**common, "build": minter_build, "env_file": minter_env, "ports": [f"{bind}:8001:8001"], "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
+        "minter-migrate": {**common, "profiles": ["setup"], "build": minter_build, "command": ["migrate"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_healthy"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
+        "minter-metadata-worker": {**common, "build": minter_build, "command": ["metadata-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
+        "minter-replication-worker": {**common, "build": minter_build, "command": ["replication-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
+        "minter-chain-worker": {**common, "build": minter_build, "command": ["chain-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "dashboard-mysql": {**common, "image": "mysql:8.0", "env_file": ["./env/dashboard-db.env"], "volumes": [f"{data}/dashboard/mysql:/var/lib/mysql"]},
         "dashboard-redis": {**common, "image": "redis:7-alpine", "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{data}/dashboard/redis:/data"]},
         "dashboard": {**common, "image": "ambientum/php:8.0-nginx", "env_file": ["./env/dashboard.env"], "ports": [f"{bind}:8081:8080"], "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},

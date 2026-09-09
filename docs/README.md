@@ -43,6 +43,8 @@ son derivados y no fuentes de configuración.
 ## Documentos históricos o de trabajo
 
 Plan de implementación pendiente: [despliegue unificado v2](unified-deployment-v2-implementation-plan.md).
+El [mapa de variables v2](deployment-v2-variable-map.md) registra la migración
+desde la configuración heredada hacia el inventario único.
 Define el inventario v2 y la ejecución local/SSH propuesta; aún no es una guía
 operativa de la versión instalada.
 

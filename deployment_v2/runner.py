@@ -93,7 +93,11 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
             continue
         required_path = Path(machine.secrets_root) / definition["path"]
         _require(executor.run(("test", "-r", str(required_path))), f"required secret {secret_id} is readable on {machine.id}")
-    _require(executor.run(("docker", "compose", "--project-name", f"{plan.deployment_id}-{group.id}", "-f", str(destination / "compose.yaml"), "up", "-d", "--build"), timeout=1800.0), f"apply group {group.id}")
+    compose = ("docker", "compose", "--project-name", f"{plan.deployment_id}-{group.id}", "-f", str(destination / "compose.yaml"))
+    if group.kind == "apps":
+        _require(executor.run((*compose, "up", "-d", "--build", "postgres"), timeout=1800.0), f"start PostgreSQL for {group.id}")
+        _require(executor.run((*compose, "run", "--rm", "minter-migrate"), timeout=1800.0), f"run Alembic migration for {group.id}")
+    _require(executor.run((*compose, "up", "-d", "--build"), timeout=1800.0), f"apply group {group.id}")
 
 
 def apply(plan: DeploymentPlan, project_root: Path) -> Path:
