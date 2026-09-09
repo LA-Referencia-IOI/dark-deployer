@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 from deployment_v2.inventory import InventoryError, load_inventory
 from deployment_v2.executor import CommandResult, run_preflight
 from deployment_v2.model import Machine, SshSettings
@@ -49,6 +51,11 @@ class DeploymentV2Tests(unittest.TestCase):
             apps = json.loads((output / "groups" / "apps" / "group.json").read_text())
             self.assertEqual(apps["machine"]["execution"], "local")
             self.assertIn("components", apps)
+            apps_compose = yaml.safe_load((output / "groups" / "apps" / "compose.yaml").read_text())
+            self.assertIn("minter-chain-worker", apps_compose["services"])
+            storage_a = yaml.safe_load((output / "groups" / "storage-a" / "compose.yaml").read_text())
+            storage_b = yaml.safe_load((output / "groups" / "storage-b" / "compose.yaml").read_text())
+            self.assertNotEqual(storage_a["services"]["cluster"]["ports"][0], storage_b["services"]["cluster"]["ports"][0])
 
     def test_preflight_is_read_only_and_reports_each_check(self):
         machine = Machine(

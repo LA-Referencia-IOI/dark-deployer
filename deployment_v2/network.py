@@ -42,7 +42,12 @@ def derive_endpoints(machines: tuple[Machine, ...], groups: tuple[Group, ...]) -
     for group in groups:
         provider = by_machine[group.machine_id]
         if group.kind == "storage":
-            result.append(endpoint_for(f"cluster-{group.id}", provider, apps_machine, 9094))
+            colocated = sorted(
+                (candidate for candidate in groups if candidate.kind == "storage" and candidate.machine_id == provider.id),
+                key=lambda candidate: candidate.id,
+            )
+            port = 9094 if provider.id == apps_machine.id else 9094 + (colocated.index(group) * 3)
+            result.append(endpoint_for(f"cluster-{group.id}", provider, apps_machine, port))
         elif group.kind == "apps":
             result.append(endpoint_for("blockchain-rpc", provider, provider, 8545))
             for name, port in (("admin-api", 8000), ("minter-api", 8001), ("resolver-api", 8002), ("store-api", 8003), ("dashboard", 8081)):

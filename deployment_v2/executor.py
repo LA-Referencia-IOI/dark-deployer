@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import ipaddress
+import shlex
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -45,7 +45,16 @@ class SshExecutor(Executor):
         if ssh.known_hosts_file:
             command.extend(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
         command.append(f"{ssh.user}@{self.machine.management_address}")
-        command.extend(argv)
+        command.append(shlex.join(argv))
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        return CommandResult(tuple(command), completed.returncode, completed.stdout, completed.stderr)
+
+    def transfer(self, source: Path, destination: str, *, timeout: float = 300.0) -> CommandResult:
+        ssh = self.machine.ssh
+        command = ["rsync", "-az", "-e", shlex.join(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-i", ssh.private_key_file, "-p", str(ssh.port)])]
+        if ssh.known_hosts_file:
+            command[-1] += " " + shlex.join(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
+        command.extend([f"{source}/", f"{ssh.user}@{self.machine.management_address}:{destination}/"])
         completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         return CommandResult(tuple(command), completed.returncode, completed.stdout, completed.stderr)
 

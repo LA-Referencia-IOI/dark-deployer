@@ -10,12 +10,13 @@ from .inventory import InventoryError, load_inventory
 from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
+from .runner import ApplyError, apply
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight"):
+    for name in ("validate", "plan", "render", "preflight", "apply"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
@@ -48,9 +49,14 @@ def main() -> None:
                 for step in plan.steps:
                     print(f"{step.id}: {step.description}")
             return
+        if args.action == "apply":
+            project_root = Path(__file__).resolve().parents[1]
+            output = apply(plan, project_root)
+            print(f"[OK] Applied deployment from {output}")
+            return
         rendered = render_plan(plan, args.output)
         print(f"[OK] Rendered public plan at {rendered}")
-    except (InventoryError, ExecutionError, ValueError) as exc:
+    except (InventoryError, ExecutionError, ApplyError, ValueError) as exc:
         raise SystemExit(f"[ERROR] {exc}") from exc
 
 

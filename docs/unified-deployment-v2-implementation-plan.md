@@ -10,8 +10,16 @@ inventario v2, resuelven grupos/máquinas, asignan subredes Docker de forma
 determinista, derivan endpoints y generan un plan y bundle público. También
 existe `preflight` de solo lectura con executor local/SSH. Los ejemplos local
 simple, HA local y cinco hosts validan en las pruebas automatizadas. Todavía
-no genera Compose final ni ejecuta `apply`; las secciones 5 a 12 siguen siendo
-trabajo pendiente y son la fuente de verdad para continuar.
+no ejecuta una instalación validada de extremo a extremo; las secciones 5 a 12
+siguen siendo trabajo pendiente y son la fuente de verdad para continuar.
+
+La segunda fase está iniciada: el bundle contiene `compose.yaml` independiente
+por grupo, entornos públicos y configuración de endpoints. `apply` crea una
+red bridge por máquina, prepara rutas, transfiere fuentes públicas/bundle por
+SSH y ejecuta Compose, guardando un journal. Solo pasó pruebas estructurales y
+`docker compose config`; no usarlo aún para reemplazar la instalación actual.
+Faltan la generación completa de configuración Besu/IPFS, los secretos, jobs
+de contratos/migraciones, health checks, reanudación y una prueba Docker real.
 
 ## 1. Resultado obligatorio y límites
 
