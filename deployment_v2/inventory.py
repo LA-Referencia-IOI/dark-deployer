@@ -234,6 +234,12 @@ def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
         raise _error("at least one storage group is required")
     blockchain = _object(raw["blockchain"], "blockchain")
     _only_keys(blockchain, "blockchain", {"chain_id", "besu_image", "nodes", "qbft", "artifact"})
+    artifact = _object(blockchain.get("artifact", {}), "blockchain.artifact")
+    if artifact:
+        _only_keys(artifact, "blockchain.artifact", {"path"})
+        artifact_path = _string(artifact.get("path"), "blockchain.artifact.path")
+        if Path(artifact_path).is_absolute() or ".." in Path(artifact_path).parts:
+            raise _error("blockchain.artifact.path must be relative to secrets_root")
     nodes = _object(blockchain.get("nodes"), "blockchain.nodes")
     validators = []
     rpc = []

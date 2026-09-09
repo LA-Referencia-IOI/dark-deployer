@@ -7,7 +7,7 @@ from unittest import mock
 import yaml
 
 from deployment_v2.inventory import InventoryError, load_inventory
-from deployment_v2.artifacts import ArtifactError, static_nodes, write_chain_bootstrap
+from deployment_v2.artifacts import ArtifactError, export_chain_role, static_nodes, write_chain_bootstrap
 from deployment_v2.secrets import SecretError, initialize_greenfield_secrets
 from deployment_v2.executor import CommandResult, run_preflight
 from deployment_v2.model import Machine, SshSettings
@@ -109,6 +109,23 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertFalse((output / "blockchain" / "master-wallet").exists())
             with self.assertRaises(SecretError):
                 initialize_greenfield_secrets(plan, output)
+
+    def test_chain_role_export_contains_only_assigned_node_material(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "chain"
+            root.mkdir()
+            (root / "genesis.json").write_text("{}\n")
+            for node in ("validator01", "validator02", "validator03", "validator04", "rpc01"):
+                node_dir = root / "nodes" / node
+                node_dir.mkdir(parents=True)
+                (node_dir / "nodekey").write_text(node)
+                (node_dir / "key.pub").write_text(node)
+                static = root / "static-nodes"
+                static.mkdir(exist_ok=True)
+                (static / f"{node}.json").write_text("[]\n")
+            exported = export_chain_role(root, "validators-a", Path(temporary) / "role")
+            self.assertTrue((exported / "nodes" / "validator01" / "nodekey").exists())
+            self.assertFalse((exported / "nodes" / "validator03").exists())
 
 
 if __name__ == "__main__":

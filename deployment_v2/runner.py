@@ -93,6 +93,25 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
             continue
         required_path = Path(machine.secrets_root) / definition["path"]
         _require(executor.run(("test", "-r", str(required_path))), f"required secret {secret_id} is readable on {machine.id}")
+    if group.kind in {"apps", "validators"}:
+        role = "rpc" if group.kind == "apps" else group.id
+        artifact_definition = plan.raw["blockchain"].get("artifact", {})
+        artifact_path = artifact_definition.get("path")
+        if not artifact_path:
+            raise ApplyError("blockchain.artifact.path is required to apply Besu groups")
+        source = Path(machine.secrets_root) / artifact_path
+        target = Path(machine.data_root) / plan.deployment_id / "blockchain"
+        _require(executor.run(("test", "-r", str(source / "genesis.json"))), f"chain artifact genesis is readable for {role} on {machine.id}")
+        _require(executor.run(("mkdir", "-p", str(target / "config"))), f"prepare chain config on {machine.id}")
+        _require(executor.run(("cp", str(source / "genesis.json"), str(target / "config" / "genesis.json"))), f"install chain genesis for {role} on {machine.id}")
+        _require(executor.run(("cp", str(Path(machine.workspace_root) / "blockchain" / "config" / "besu-config.toml"), str(target / "config" / "besu-config.toml"))), f"install Besu config for {role} on {machine.id}")
+        for node in group.members:
+            node_source = source / "nodes" / node
+            node_target = target / node
+            _require(executor.run(("test", "-r", str(node_source / "nodekey"))), f"chain key is readable for {node} on {machine.id}")
+            _require(executor.run(("mkdir", "-p", str(node_target))), f"prepare chain node {node} on {machine.id}")
+            for filename in ("nodekey", "key.pub", "static-nodes.json"):
+                _require(executor.run(("cp", str(node_source / filename), str(node_target / filename))), f"install {filename} for {node} on {machine.id}")
     compose = ("docker", "compose", "--project-name", f"{plan.deployment_id}-{group.id}", "-f", str(destination / "compose.yaml"))
     if group.kind == "apps":
         _require(executor.run((*compose, "up", "-d", "--build", "postgres"), timeout=1800.0), f"start PostgreSQL for {group.id}")

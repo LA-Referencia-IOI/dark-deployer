@@ -47,6 +47,21 @@ runner arranca PostgreSQL, espera su healthcheck y ejecuta Alembic una vez antes
 de iniciar API y workers. La migración Laravel, el despliegue idempotente de
 contratos y el handoff de sus direcciones siguen pendientes.
 
+`chain-init` crea, bajo un directorio de salida explícito, genesis QBFT, cuatro
+claves de validadores, una clave RPC no validadora y static nodes derivados de
+las IP privadas del inventario. `chain-export` separa ese artefacto en los
+paquetes mínimos `rpc`, `validators-a` y `validators-b`. No se ejecutó contra
+Docker ni se incorporó aún al runner; falta su prueba de integración y la
+importación idempotente en cada host.
+
+El runner ya consume `blockchain.artifact.path` relativo al `secrets_root` de
+cada máquina. Antes de iniciar un grupo Besu copia el genesis, la configuración
+base, la clave del nodo y sus static nodes al data root del deployment. Una
+máquina local puede usar el artefacto completo; en hosts separados se debe
+provisionar el paquete mínimo exportado para cada rol. Falta probar este flujo
+en una red Docker nueva y añadir la comprobación de hashes para evitar una
+sustitución accidental de genesis o claves.
+
 Solo pasó pruebas estructurales y `docker compose config`; no usarlo aún para
 reemplazar la instalación actual. Faltan la generación e importación completa
 de identidades/genesis Besu, jobs de contratos/migraciones, health checks,

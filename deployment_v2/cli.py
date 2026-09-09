@@ -11,14 +11,14 @@ from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
 from .runner import ApplyError, apply
-from .artifacts import ArtifactError, write_chain_bootstrap, write_static_nodes
+from .artifacts import ArtifactError, export_chain_role, initialize_chain, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "apply", "chain-bootstrap", "chain-static-nodes", "secrets-init"):
+    for name in ("validate", "plan", "render", "preflight", "apply", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "secrets-init"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
@@ -36,6 +36,13 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--output", required=True, type=Path,
                                  help="empty secure directory to provision on the destination host")
             command.add_argument("--overwrite", action="store_true")
+        if name == "chain-init":
+            command.add_argument("--output", required=True, type=Path)
+            command.add_argument("--master-wallet-address", required=True)
+        if name == "chain-export":
+            command.add_argument("--artifact-root", required=True, type=Path)
+            command.add_argument("--role", required=True, choices=("rpc", "validators-a", "validators-b"))
+            command.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -85,6 +92,14 @@ def main() -> None:
             created = initialize_greenfield_secrets(plan, args.output, overwrite=args.overwrite)
             print(f"[OK] Created {len(created)} generated secret file(s) under {args.output}")
             print("[INFO] Provision master-wallet and signer secrets separately; they are intentionally not generated.")
+            return
+        if args.action == "chain-init":
+            artifact_root = initialize_chain(plan, args.output, args.master_wallet_address)
+            print(f"[OK] Created private QBFT artifact at {artifact_root}")
+            return
+        if args.action == "chain-export":
+            exported = export_chain_role(args.artifact_root, args.role, args.output)
+            print(f"[OK] Exported {args.role} chain artifact to {exported}")
             return
         rendered = render_plan(plan, args.output)
         print(f"[OK] Rendered public plan at {rendered}")

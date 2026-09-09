@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 from .model import DeploymentPlan
@@ -101,4 +103,86 @@ def write_static_nodes(artifact_root: Path, public_keys: dict[str, str]) -> Path
     destination.mkdir(exist_ok=True)
     for node, peers in static_nodes(context, public_keys).items():
         _write_json(destination / f"{node}.json", peers)
+    return destination
+
+
+def initialize_chain(plan: DeploymentPlan, output: Path, master_wallet_address: str) -> Path:
+    """Generate a private greenfield QBFT artifact through the pinned Besu image.
+
+    The caller supplies the public wallet address only. Node private keys are
+    created directly below the explicit output directory and must be delivered
+    to their assigned host out of band.
+    """
+    write_chain_bootstrap(plan, output, master_wallet_address)
+    config = output / "qbft-config.json"
+    generated = output / "generated"
+    command = (
+        "docker", "run", "--rm", "-v", f"{output}:/work", "--user", f"{os.getuid()}:{os.getgid()}",
+        plan.raw["blockchain"]["besu_image"], "operator", "generate-blockchain-config",
+        "--config-file=/work/qbft-config.json", "--to=/work/generated", "--private-key-file-name=nodekey",
+    )
+    completed = subprocess.run(command, capture_output=True, text=True)
+    if completed.returncode:
+        raise ArtifactError(completed.stderr.strip() or "Besu failed to generate QBFT artifacts")
+    key_dirs = sorted((generated / "keys").glob("0x*"))
+    if len(key_dirs) != 4:
+        raise ArtifactError(f"Besu generated {len(key_dirs)} validator keys; expected 4")
+    genesis = generated / "genesis.json"
+    if not genesis.exists():
+        raise ArtifactError("Besu did not produce genesis.json")
+    public_keys: dict[str, str] = {}
+    for node, key_dir in zip(_VALIDATORS, key_dirs, strict=True):
+        destination = output / "nodes" / node
+        destination.mkdir(parents=True, exist_ok=True)
+        for name, mode in (("nodekey", 0o600), ("key.pub", 0o644)):
+            value = (key_dir / name).read_text().strip() + "\n"
+            target = destination / name
+            target.write_text(value)
+            target.chmod(mode)
+        public_keys[node] = (destination / "key.pub").read_text().strip().removeprefix("0x")
+    # Generate the non-validator peer with the same pinned Besu utility.
+    rpc = output / "nodes" / "rpc01"
+    rpc.mkdir(parents=True, exist_ok=True)
+    rpc_key = rpc / "nodekey"
+    rpc_key.write_text(__import__("secrets").token_hex(32) + "\n")
+    rpc_key.chmod(0o600)
+    exported = subprocess.run(
+        ("docker", "run", "--rm", "-v", f"{rpc}:/data", plan.raw["blockchain"]["besu_image"], "public-key", "export", "--node-private-key-file=/data/nodekey", "--to=/data/key.pub"),
+        capture_output=True, text=True,
+    )
+    if exported.returncode:
+        raise ArtifactError(exported.stderr.strip() or "Besu failed to export the RPC public key")
+    public_keys["rpc01"] = (rpc / "key.pub").read_text().strip().removeprefix("0x")
+    (output / "genesis.json").write_bytes(genesis.read_bytes())
+    static_root = write_static_nodes(output, public_keys)
+    for node in _NODES:
+        destination = output / "nodes" / node / "static-nodes.json"
+        destination.write_bytes((static_root / f"{node}.json").read_bytes())
+        destination.chmod(0o644)
+    return output
+
+
+def export_chain_role(artifact_root: Path, role: str, destination: Path) -> Path:
+    """Export only the private node material needed by one runtime role."""
+    assignments = {"rpc": ("rpc01",), "validators-a": ("validator01", "validator02"), "validators-b": ("validator03", "validator04")}
+    if role not in assignments:
+        raise ArtifactError("role must be rpc, validators-a or validators-b")
+    if destination.exists() and any(destination.iterdir()):
+        raise ArtifactError(f"role artifact output must be empty: {destination}")
+    destination.mkdir(parents=True, exist_ok=True)
+    genesis = artifact_root / "genesis.json"
+    if not genesis.exists():
+        raise ArtifactError("chain artifact genesis.json is missing")
+    (destination / "genesis.json").write_bytes(genesis.read_bytes())
+    for node in assignments[role]:
+        source = artifact_root / "nodes" / node
+        static = artifact_root / "static-nodes" / f"{node}.json"
+        if not source.exists() or not static.exists():
+            raise ArtifactError(f"chain artifact missing material for {node}")
+        target = destination / "nodes" / node
+        target.mkdir(parents=True, exist_ok=True)
+        for name, mode in (("nodekey", 0o600), ("key.pub", 0o644)):
+            (target / name).write_bytes((source / name).read_bytes())
+            (target / name).chmod(mode)
+        (target / "static-nodes.json").write_bytes(static.read_bytes())
     return destination

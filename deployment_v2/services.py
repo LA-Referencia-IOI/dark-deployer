@@ -50,7 +50,7 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
     minter_env = ["./env/minter.env", {"path": _secret_file(plan, machine.id, "minter-runtime-env"), "required": False}]
     common = {"restart": "unless-stopped", "networks": [network]}
     services = {
-        "blockchain-rpc": {**common, "image": plan.raw["blockchain"]["besu_image"], "profiles": ["rpc"], "ports": [f"{bind}:8545:8545"], "volumes": [f"{data}/blockchain/rpc01:/data", f"{components}/blockchain/config:/config:ro"]},
+        "blockchain-rpc": {**common, "image": plan.raw["blockchain"]["besu_image"], "profiles": ["rpc"], "ports": [f"{bind}:8545:8545"], "volumes": [f"{data}/blockchain/rpc01:/data", f"{data}/blockchain/config:/config:ro"]},
         "postgres": {**common, "image": "postgres:15-alpine", "environment": {"POSTGRES_USER": "dark", "POSTGRES_PASSWORD_FILE": "/run/secrets/minter-db-password", "POSTGRES_DB": "minter"}, "volumes": [f"{data}/minter/postgres:/var/lib/postgresql/data"], "secrets": ["minter-db-password"], "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U dark -d minter"], "interval": "3s", "timeout": "3s", "retries": 20}},
         "admin-api": {**common, "build": _build(components, "services/dark-core-admin-api/Dockerfile"), "env_file": ["./env/admin-api.env"], "ports": [f"{bind}:8000:8000"]},
         "resolver-api": {**common, "build": _build(components, "services/dark-core-resolver-api/Dockerfile"), "env_file": ["./env/resolver-api.env"], "ports": [f"{bind}:8002:8002"]},
@@ -81,7 +81,7 @@ def _validators(plan: DeploymentPlan, group: Group) -> dict:
     node_order = ["validator01", "validator02", "validator03", "validator04"]
     for node in group.members:
         port = base_port + node_order.index(node)
-        services[node] = {"image": plan.raw["blockchain"]["besu_image"], "restart": "unless-stopped", "volumes": [f"{workspace}/blockchain/config:/config:ro", f"{data}/{node}:/data"], "command": ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/data/nodekey", f"--p2p-port={port}", "--rpc-http-enabled=false"], "ports": [f"{machine.private_address}:{port}:{port}/tcp", f"{machine.private_address}:{port}:{port}/udp"], "networks": [network]}
+        services[node] = {"image": plan.raw["blockchain"]["besu_image"], "restart": "unless-stopped", "volumes": [f"{data}/config:/config:ro", f"{data}/{node}:/data"], "command": ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/data/nodekey", f"--p2p-port={port}", "--rpc-http-enabled=false"], "ports": [f"{machine.private_address}:{port}:{port}/tcp", f"{machine.private_address}:{port}:{port}/udp"], "networks": [network]}
     if group.explorer:
         services["explorer"] = {"image": "nginx:alpine", "restart": "unless-stopped", "ports": [f"{machine.private_address}:25000:80"], "networks": [network]}
     return {"name": f"{plan.deployment_id}-{group.id}", "services": services, "networks": {network: {"name": network, "external": True}}}
