@@ -3,6 +3,11 @@
 Fecha de observación: 2026-09-08. Este documento describe el comportamiento
 observado durante una carga masiva y no cambia la implementación.
 
+**Nota de vigencia:** los hallazgos de polling continuo y `next_action_at=NULL`
+son históricos. La implementación actual agenda cada ARK con primer pin a
+15 s/1 min/5 min y durabilidad a 5 min/15 min/1 h; consulte
+`docs/publication-latency-control.md` para la política vigente.
+
 ## Conclusión ejecutiva
 
 El cuello de botella principal está en la visibilidad inicial de los pins en
@@ -27,9 +32,12 @@ con CIDs únicos, no había errores permanentes y la durabilidad quedaba bloquea
 solo por backlog crítico. La hipótesis de polling continuo de Cluster deja de
 ser la explicación principal del retraso actual.
 
-El retraso vigente se concentra en Chain: páginas de 20 operaciones tardan
-25--45 s, con unos 2.900 ARKs listos, txpool sin congestión y reinicios `Killed`
-en validadores. Este hallazgo se detalla en `docs/chain-throughput-analysis.md`.
+El retraso observado entonces se concentraba en Chain: páginas de 20
+operaciones tardaban 25--45 s. La configuración posterior separó página y
+ventana RPC: Chain reclama 100 ARKs y envía como máximo dos ventanas
+secuenciales de 50. La prueba limpia del 9 de septiembre avanzó 1.185 ARKs sin
+errores permanentes; este resultado actualizado se detalla en
+`docs/chain-throughput-analysis.md`.
 
 ## Evidencia del monitor
 

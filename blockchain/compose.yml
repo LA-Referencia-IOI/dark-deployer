@@ -25,7 +25,7 @@ services:
         ipv4_address: 172.31.0.11
     volumes:
       - ./config:/config:ro
-      - ./nodes/validator01/data:/data
+      - ${BLOCKCHAIN_DATA_ROOT:-./nodes}/validator01:/data
     command:
       - --config-file=/config/besu-config.toml
       - --genesis-file=/config/genesis.json
@@ -59,7 +59,7 @@ services:
         ipv4_address: 172.31.0.12
     volumes:
       - ./config:/config:ro
-      - ./nodes/validator02/data:/data
+      - ${BLOCKCHAIN_DATA_ROOT:-./nodes}/validator02:/data
     command:
       - --config-file=/config/besu-config.toml
       - --genesis-file=/config/genesis.json
@@ -85,7 +85,7 @@ services:
         ipv4_address: 172.31.0.21
     volumes:
       - ./config:/config:ro
-      - ./nodes/validator03/data:/data
+      - ${BLOCKCHAIN_DATA_ROOT:-./nodes}/validator03:/data
     command:
       - --config-file=/config/besu-config.toml
       - --genesis-file=/config/genesis.json
@@ -111,7 +111,7 @@ services:
         ipv4_address: 172.31.0.22
     volumes:
       - ./config:/config:ro
-      - ./nodes/validator04/data:/data
+      - ${BLOCKCHAIN_DATA_ROOT:-./nodes}/validator04:/data
     command:
       - --config-file=/config/besu-config.toml
       - --genesis-file=/config/genesis.json
@@ -139,7 +139,7 @@ services:
         ipv4_address: 172.31.0.31
     volumes:
       - ./config:/config:ro
-      - ./nodes/rpc01/data:/data
+      - ${BLOCKCHAIN_DATA_ROOT:-./nodes}/rpc01:/data
     command:
       - --config-file=/config/besu-config.toml
       - --genesis-file=/config/genesis.json

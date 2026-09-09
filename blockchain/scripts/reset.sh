@@ -32,11 +32,12 @@ for project in dark-apps dark-bc-a dark-bc-b; do
 done
 
 echo -e "${YELLOW}Wiping node data...${NC}"
-for node in nodes/validator01 nodes/validator02 nodes/validator03 nodes/validator04 nodes/rpc01; do
-  if [ -d "$SCRIPT_DIR/$node/data" ]; then
-    rm -rf "${SCRIPT_DIR:?}/$node/data"
-    mkdir -p "$SCRIPT_DIR/$node/data"
-    echo "  Cleared: $node/data"
+NODES_DIR="${BLOCKCHAIN_DATA_ROOT:-$SCRIPT_DIR/nodes}"
+for node in "$NODES_DIR/validator01" "$NODES_DIR/validator02" "$NODES_DIR/validator03" "$NODES_DIR/validator04" "$NODES_DIR/rpc01"; do
+  if [ -d "$node" ]; then
+    rm -rf "${node:?}"
+    mkdir -p "$node"
+    echo "  Cleared: $node"
   fi
 done
 

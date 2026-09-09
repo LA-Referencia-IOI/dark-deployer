@@ -15,9 +15,10 @@ transacciones disponibles. Ese valor es el ritmo de producción de bloques,
 no una garantía de que cada transacción confirme en dos segundos.
 
 El Chain Worker no publica una transacción por ARK de forma aislada. Reclama
-una página, agrupa las operaciones por autoridad y llama a
-`dark-core-lib.publish_ark_operations()` con una ventana de nonces secuenciales.
-El tamaño máximo por ciclo y el tamaño de esa ventana son actualmente 20.
+una página de hasta 100 ARKs, agrupa las operaciones por autoridad y llama a
+`dark-core-lib.publish_ark_operations()` con ventanas secuenciales de hasta 50.
+Una página completa se envía como, como máximo, dos llamadas de 50 por
+autoridad.
 Además, el worker consulta la capacidad de la cadena y puede reducir o volver
 aumentar gradualmente el tamaño efectivo.
 
@@ -94,11 +95,15 @@ cada escritura confirmada. La confirmación se basa en los receipts.
 
 ## Cómo se determina el tamaño de página
 
-El valor configurado (`CHAIN_WORKER_PAGE_SIZE=20`) es simultáneamente:
+El valor configurado (`CHAIN_WORKER_PAGE_SIZE=100`) es el límite de ARKs
+reclamados por ciclo. La ventana RPC se controla separadamente con
+`CHAIN_WORKER_RPC_BATCH_SIZE=50`:
 
-- el límite de ARKs reclamados por ciclo;
-- el tamaño máximo de la ventana de transacciones en Core Lib;
+- la página máxima consultada en PostgreSQL;
 - el `max_page_size` usado para consultar capacidad.
+
+La ventana máxima de transacciones por autoridad es 50 y se ejecuta de forma
+secuencial dentro de la página.
 
 Con el ajuste adaptativo activo, el worker mantiene un tamaño efectivo separado
 del máximo configurado. El comportamiento es:
@@ -113,7 +118,8 @@ del máximo configurado. El comportamiento es:
 La configuración relevante está en `dark-core-minter-api/.env.example`:
 
 ```text
-CHAIN_WORKER_PAGE_SIZE=20
+CHAIN_WORKER_PAGE_SIZE=100
+CHAIN_WORKER_RPC_BATCH_SIZE=50
 CHAIN_WORKER_ADAPTIVE_PAGE_ENABLED=true
 CHAIN_WORKER_MIN_PAGE_SIZE=1
 CHAIN_WORKER_HEALTHY_CYCLES_BEFORE_GROWING=3
@@ -138,12 +144,12 @@ Los umbrales se derivan del máximo solicitado:
 - txpool sobre pause watermark: estado `congested` y página 0;
 - sin congestión: recomienda el máximo solicitado.
 
-Por tanto, con `max_page_size=20`, la recomendación saludable es 20, la
-congestión moderada reduce a 10 y la congestión crítica pausa el worker. Esta
+Por tanto, con `max_page_size=100`, la recomendación saludable es 100, la
+congestión moderada reduce a 50 y la congestión crítica pausa el worker. Esta
 lógica no mide directamente gas usado, gas disponible por bloque ni tiempo
 individual de receipt.
 
-## Reevaluación posterior a los cambios (2026-09-08)
+## Reevaluación posterior a los cambios (2026-09-09)
 
 Las optimizaciones de Availability y Replication ya están activas: las
 observaciones de Cluster se agrupan por CID, se respeta `next_action_at` y la
@@ -151,21 +157,22 @@ durabilidad cede prioridad al primer pin. En las muestras actuales Store API
 devuelve resultados batch y no hay fallos permanentes; el cuello ya no parece
 ser el polling de IPFS.
 
-El Chain Worker permanece sin errores, pero sus ciclos de 20 ARKs tardan entre
-25 y 45 segundos y quedan unos 2.900 ARKs listos para publicar. El txpool no
+El Chain Worker permanece sin errores. La prueba limpia registró páginas de 100
+divididas en dos envíos secuenciales de 50 y avanzó 1.185 ARKs sin errores
+permanentes. El txpool no
 está saturado (`localCount=20`, `remoteCount=0`), mientras que los validadores
 02 y 03 se reiniciaron durante la carga y sus logs contienen `Killed`. También
 se observaron picos de CPU de aproximadamente 90--136% y producción de bloques
 irregular, con rondas QBFT prolongadas.
 
-La capacidad máxima sigue fijada en 20: el tamaño de página, la ventana de
-Core Lib y el `max_page_size` de capacidad comparten ese límite. Con una red
-estable, es el siguiente límite a evaluar; con validadores inestables, subirlo
-solo aumentaría transacciones pendientes y latencia de receipts.
+La capacidad máxima de la página es 100 y la ventana RPC es 50. El txpool fue
+limpiado antes de la prueba porque contenía transacciones antiguas cuyo gas ya
+no podía pagar la cuenta; esa condición bloqueaba el nonce inicial y no era un
+problema de paginación.
 
 Orden recomendado: estabilizar memoria/CPU/I/O y reinicios de Besu, verificar
-quorum y cadencia QBFT cercana a seis segundos, y solo después probar ventanas
-20→40→60 midiendo receipts, nonces, txpool y bloques. No se recomienda relajar
+quorum y cadencia QBFT cercana a seis segundos, y medir ventanas 50→100
+observando receipts, nonces, txpool y bloques. No se recomienda relajar
 la confirmación de Chain ni modificar Store/Replication mientras la evidencia
 apunte a la red blockchain.
 
@@ -174,14 +181,13 @@ apunte a la red blockchain.
 En la última consulta del entorno limpio:
 
 - Chain estaba `working`;
-- el último ciclo procesó y avanzó 20 ARKs en aproximadamente 3,37 s;
+- el último ciclo procesó y avanzó hasta 100 ARKs usando dos ventanas de 50;
 - había 1.201 ARKs listos para Chain;
 - no había errores ni congestión reportada;
 - RPC y los dos peers de storage estaban saludables;
 - el bloque avanzaba normalmente.
 
-Ese resultado equivale aproximadamente a 5,9 ARKs/s en ese ciclo. No permite
-concluir todavía que la cadena esté al límite: el tiempo incluye firma,
+El tiempo incluye firma,
 envío, espera secuencial de receipts y persistencia del worker, no solo la
 producción QBFT de bloques.
 

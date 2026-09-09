@@ -271,8 +271,13 @@ def load_deployment_topology(path: Path, project_root: Path) -> dict:
         if vpn_address in seen_addresses:
             raise DeploymentError(f"duplicate host VPN address {vpn_address!r}")
         seen_addresses.add(vpn_address)
+        if role in {"apps", "blockchain-a", "blockchain-b"}:
+            _absolute_path(host.get("blockchain_data_root"), f"{field}.blockchain_data_root")
         if role == "storage-node":
             node_id = _identifier(host.get("storage_node_id"), f"{field}.storage_node_id")
+            storage_data_root = _absolute_path(
+                host.get("storage_data_root"), f"{field}.storage_data_root"
+            )
             try:
                 topology.node(node_id)
             except StorageTopologyError as exc:
@@ -385,11 +390,13 @@ def _host_env(
         "PRODUCTION_DEPLOYMENT_TOPOLOGY_SHA256": sha256_file(Path(inventory["_topology_path"])),
         "PRODUCTION_STORAGE_ACCESS_GROUP": host.get("storage_access_group", "") if role == "apps" else "",
         "PRODUCTION_STORAGE_NODE_ID": host.get("storage_node_id", "") if role == "storage-node" else "",
+        "PRODUCTION_STORAGE_DATA_ROOT": host.get("storage_data_root", "/srv/dark/storage") if role == "storage-node" else "",
         "PRODUCTION_IPFS_SWARM_KEY_FILE": inventory["storage"]["swarm_key_target"],
         "PRODUCTION_IPFS_CLUSTER_SECRET_FILE": inventory["storage"]["cluster_secret_target"],
         "PRODUCTION_BLOCKCHAIN_HOST": "",
         "BLOCKCHAIN_RUNTIME_ROLE": dark_env_role,
         "BLOCKCHAIN_RUNTIME_CHAIN_ARTIFACT_DIR": inventory["blockchain"]["chain_artifact_target"] if dark_env_role else "",
+        "BLOCKCHAIN_DATA_ROOT": host.get("blockchain_data_root", "/srv/dark/blockchain") if role in {"apps", "blockchain-a", "blockchain-b"} else "",
         "BESU_IMAGE": _string(inventory["blockchain"].get("besu_image"), "blockchain.besu_image"),
         "BLOCKCHAIN_BACKBONE_IPS": backbone_ips,
         "PRODUCTION_STORE_API_URL": "http://store-api:8003",

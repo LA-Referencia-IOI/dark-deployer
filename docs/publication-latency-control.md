@@ -12,16 +12,15 @@ Availability. Un ARK recién ingresado usa `READY` y se observa de inmediato;
 un ARK en `WAITING` siempre tiene una fecha concreta. Las esperas normales no
 son errores ni incrementan los intentos:
 
-| Estado de Cluster | Inicio | Tope |
-| --- | ---: | ---: |
-| `pinning` | 2 s | 10 s |
-| `initial_visibility` | 3 s | 20 s |
-| `queued` | 5 s | 30 s |
+| Fase | Primera revisión | Segunda | Revisiones posteriores |
+| --- | ---: | ---: | ---: |
+| Primer pin, antes de Chain | 15 s | 1 min | 5 min |
+| Durabilidad, después de Chain | 5 min | 15 min | 1 h |
 
-El incremento es exponencial, con jitter determinista de ±10% por ARK. Se
-reinicia cuando cambia el estado observado o aumenta el número de copias
-confirmadas. Así se evita que páginas enteras vuelvan a consultar de inmediato
-los mismos CIDs.
+La cadencia se guarda por ARK en `next_action_at`. Los estados `queued`,
+`pinning` e `initial_visibility` no son fallos: Cluster ya posee la asignación
+y el minter únicamente vuelve a auditarla cuando corresponde. Un cambio de
+estado o el aumento de copias confirmadas reinicia la secuencia de esa fase.
 
 ## Capacidad y prioridad
 
@@ -35,6 +34,24 @@ los mismos CIDs.
   ARKs afectados se reprograman; los demás pueden avanzar.
 - Cuando Availability supera 2.000 ARKs, Metadata reduce su concurrencia de 4
   a 2. Vuelve a 4 al bajar de ese umbral.
+
+La durabilidad está deliberadamente limitada a 10 ARKs/20 CIDs por ronda. Si
+Cluster ya tiene la asignación objetivo, el ciclo no vuelve a solicitar el pin:
+solo agenda la siguiente auditoría de cinco, quince o sesenta minutos.
+`queued`, `pinning` e `initial_visibility` son espera normal, no fallos.
+
+Al activar esta política en una base que ya contenía esperas de la estrategia
+anterior, los ARKs de durabilidad vencidos se reprograman una sola vez para la
+auditoría horaria, con una dispersión corta por identificador. No se modifican
+sus CIDs, asignaciones de Cluster ni estados públicos.
+
+## Chain: página y ventanas RPC
+
+Chain reclama hasta 100 ARKs por ciclo, pero para cada autoridad los divide en
+ventanas secuenciales de 50 (`CHAIN_WORKER_RPC_BATCH_SIZE`). Una página completa
+genera dos envíos de 50; la segunda ventana sólo comienza después de preparar
+la primera, manteniendo el orden de nonces y evitando competencia entre
+transacciones de la misma cuenta.
 
 ## Operación
 

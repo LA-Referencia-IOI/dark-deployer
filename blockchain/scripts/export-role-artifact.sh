@@ -17,7 +17,7 @@ test -f "$ROOT_DIR/config/genesis.json" || { echo "genesis.json is missing; run 
 mkdir -p "$DESTINATION/config" "$DESTINATION/nodes"
 install -m 0644 "$ROOT_DIR/config/genesis.json" "$DESTINATION/config/genesis.json"
 for node in "${nodes[@]}"; do
-  source_dir="$ROOT_DIR/nodes/$node/data"
+  source_dir="${BLOCKCHAIN_DATA_ROOT:-$ROOT_DIR/nodes}/$node"
   test -f "$source_dir/nodekey" || { echo "node key missing for $node" >&2; exit 1; }
   mkdir -p "$DESTINATION/nodes/$node/data"
   install -m 0600 "$source_dir/nodekey" "$DESTINATION/nodes/$node/data/nodekey"

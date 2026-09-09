@@ -9,7 +9,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$SCRIPT_DIR/config"
-NODES_DIR="$SCRIPT_DIR/nodes"
 
 # Host bundles write the non-secret runtime selection here. Developers may
 # copy .env.example to .env.runtime.
@@ -19,6 +18,8 @@ if [ -f "$RUNTIME_ENV" ]; then
   source "$RUNTIME_ENV"
   set +a
 fi
+
+NODES_DIR="${BLOCKCHAIN_DATA_ROOT:-$SCRIPT_DIR/nodes}"
 
 BESU_IMAGE="${BESU_IMAGE:-hyperledger/besu:26.6.1}"
 CHAIN_ID="${CHAIN_ID:-2025}"
@@ -80,6 +81,10 @@ if [ ! -f "$CONFIG_DIR/genesis.json" ] && [ "$BLOCKCHAIN_RUNTIME_ROLE" != "all" 
 fi
 
 if [ -f "$CONFIG_DIR/genesis.json" ]; then
+  for node in "${NODES[@]}"; do
+    test -f "$NODES_DIR/$node/nodekey" || error "genesis.json exists but $NODES_DIR/$node/nodekey is missing; active data root is incomplete"
+    test -f "$NODES_DIR/$node/static-nodes.json" || error "genesis.json exists but $NODES_DIR/$node/static-nodes.json is missing; active data root is incomplete"
+  done
   warn "genesis.json already exists — setup already ran."
   warn "To start fresh: ./scripts/reset.sh && ./setup.sh"
   exit 0
@@ -90,7 +95,7 @@ fi
 # =============================================================================
 log "Creating node data directories..."
 for node in "${NODES[@]}"; do
-  mkdir -p "$NODES_DIR/$node/data"
+  mkdir -p "$NODES_DIR/$node"
 done
 ok "Directories created"
 
@@ -184,7 +189,7 @@ for i in "${!VALIDATOR_NODES[@]}"; do
   key_dir="${KEY_DIRS[$i]}"
   address=$(basename "$key_dir")
 
-  DATA_DIR="$NODES_DIR/$node/data"
+  DATA_DIR="$NODES_DIR/$node"
   cp "$key_dir/nodekey"  "$DATA_DIR/nodekey"
   cp "$key_dir/key.pub"  "$DATA_DIR/nodekey.pub"
 
@@ -197,7 +202,7 @@ done
 
 # RPC is deliberately not a validator. Generate only its libp2p node key and
 # derive the public key used in static-nodes.json.
-RPC_DATA_DIR="$NODES_DIR/rpc01/data"
+RPC_DATA_DIR="$NODES_DIR/rpc01"
 mkdir -p "$RPC_DATA_DIR"
 openssl rand -hex 32 > "$RPC_DATA_DIR/nodekey"
 docker run --rm \
@@ -220,7 +225,7 @@ log "Generating static-nodes.json (fixed IPs, per node)..."
 
 for i in "${!NODES[@]}"; do
   node="${NODES[$i]}"
-  DATA_DIR="$NODES_DIR/$node/data"
+  DATA_DIR="$NODES_DIR/$node"
 
   # Build JSON array of peers (excluding self)
   PEERS="[]"

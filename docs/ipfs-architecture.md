@@ -153,11 +153,11 @@ conteos globales ni espera replicación.
 `ReplicationReconciliationWorker` es el único responsable de observar y
 reparar réplicas. Consulta ambos CIDs mediante `POST /v1/status/batch`, en
 páginas de hasta 100 ARKs y lotes de hasta 200 CIDs. Availability se procesa
-antes que durabilidad y los espacios libres de la página se reasignan a
-durabilidad. Las esperas normales se vuelven a observar en la siguiente ronda
-global y se registran como `CLUSTER_QUEUED`, `CLUSTER_PINNING`,
+antes que durabilidad. Las esperas normales se programan por ARK mediante
+`next_action_at`: primer pin a `15s → 1min → 5min`, y durabilidad a
+`5min → 15min → 1h`. Se registran como `CLUSTER_QUEUED`, `CLUSTER_PINNING`,
 `INITIAL_VISIBILITY` o `REPLICA_TARGET`, no como errores. Solo los fallos
-técnicos de Store API usan una espera temporizada.
+técnicos de Store API usan una espera de error.
 
 Solo se repara ante evidencia real de error o ausencia de pin; nunca mientras
 el CID esté `pin_queued` o `pinning`. Usa heartbeat, PID y advisory lock por
@@ -183,3 +183,14 @@ provisionar sus secretos/volúmenes y ejecutar `storage reconcile`. No hay una
 topología por sede ni una migración automática de esquemas anteriores.
 
 Referencias: [arquitectura CRDT de IPFS Cluster](https://ipfscluster.io/documentation/deployment/architecture/), [pinning y factores de replicación](https://ipfscluster.io/documentation/guides/pinning/), [Kubo en Docker](https://docs.ipfs.tech/install/run-ipfs-inside-docker/).
+### Persistencia en el host
+
+Kubo y IPFS Cluster usan bind mounts, no volúmenes Docker anónimos. Cada host
+declara `storage_data_root` para su nodo en `deployment-topology.json`; el
+instalador valida que sea una ruta absoluta, crea `<root>/<storage_node_id>/ipfs`,
+`export` y `cluster` si faltan y genera `STORAGE_DATA_ROOT` en el entorno del
+peer. En developer la ruta se genera bajo `.generated/storage/data`; en
+producción se recomienda un filesystem dedicado, por ejemplo
+`/srv/dark/storage`. Nunca se comparte el mismo subdirectorio entre peers.
+Besu sigue el mismo patrón con `blockchain_data_root` en los hosts de red y un
+directorio independiente por nodo.

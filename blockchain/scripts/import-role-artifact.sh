@@ -19,9 +19,10 @@ install -m 0644 "$ARTIFACT_DIR/config/genesis.json" "$ROOT_DIR/config/genesis.js
 for node in "${nodes[@]}"; do
   source_dir="$ARTIFACT_DIR/nodes/$node/data"
   test -f "$source_dir/nodekey" || { echo "artifact node key missing for $node" >&2; exit 1; }
-  mkdir -p "$ROOT_DIR/nodes/$node/data"
-  install -m 0600 "$source_dir/nodekey" "$ROOT_DIR/nodes/$node/data/nodekey"
-  install -m 0644 "$source_dir/nodekey.pub" "$ROOT_DIR/nodes/$node/data/nodekey.pub"
-  install -m 0644 "$source_dir/static-nodes.json" "$ROOT_DIR/nodes/$node/data/static-nodes.json"
+  node_dir="${BLOCKCHAIN_DATA_ROOT:-$ROOT_DIR/nodes}/$node"
+  mkdir -p "$node_dir"
+  install -m 0600 "$source_dir/nodekey" "$node_dir/nodekey"
+  install -m 0644 "$source_dir/nodekey.pub" "$node_dir/nodekey.pub"
+  install -m 0644 "$source_dir/static-nodes.json" "$node_dir/static-nodes.json"
 done
 echo "Imported $ROLE chain artifact"

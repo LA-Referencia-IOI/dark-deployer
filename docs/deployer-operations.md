@@ -179,14 +179,15 @@ For the required DARK 2 `2MM` shoulder format and its minter-code assignment
 rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).
 
 The Minter runs three workers alongside the API: metadata persistence, IPFS
-replication reconciliation, and chain publication. The reconciler uses a page size of
-`100`, status batches of up to `200` unique CIDs, and a two-second global idle
-sleep. The initial pin is `1/1`; after publication, maintenance promotes it to
-the topology target (normally `2`) only when metadata and first-pin work are
-clear. The installer derives these values from the shared topology and writes
-the generated Minter environment. There are no normal per-ARK recheck timers
-or quota split in the current workflow; `queued` and `pinning` are ordinary
-transitional states.
+replication reconciliation, and chain publication. The reconciler uses a page
+size of `100`, status batches of up to `200` unique CIDs, and a two-second
+global idle poll only to detect newly arrived work. The initial pin is `1/1`;
+after publication, maintenance promotes it to the topology target (normally
+`2`) only when metadata and first-pin work are clear. First-pin audits use
+`15s → 1min → 5min`; durability audits use `5min → 15min → 1h`. A scheduled
+ARK does not cause a Cluster request before its `next_action_at`. The installer
+derives these values from the shared topology and writes the generated Minter
+environment. `queued` and `pinning` are ordinary transitional states.
 
 ## 7. Compose ownership and runtime lifecycle
 
@@ -245,3 +246,18 @@ Unit tests do not replace a real Docker deployment test. Before promotion,
 exercise developer, sandbox and production topologies with the component
 branches configured in `.env` and retain those branch assignments with the
 deployment record.
+### Directorios persistentes de storage
+
+La topología es la fuente de verdad para la persistencia IPFS. Cada host con
+rol `storage-node` debe incluir `storage_data_root` (ruta absoluta). El
+instalador crea la ruta y sus subdirectorios por peer antes de iniciar Compose;
+no hay que declarar volúmenes Docker ni editar los `.env.node` a mano. Los
+datos existentes deben copiarse al árbol correspondiente antes de cambiar una
+ruta. Las rutas de claves siguen siendo independientes y nunca se almacenan en
+la topología.
+
+La misma regla aplica a Besu: los hosts `apps`, `blockchain-a` y
+`blockchain-b` declaran `blockchain_data_root`. El instalador crea un
+subdirectorio por nodo (`rpc01`, `validator01`…`validator04`) y Compose lo
+monta en `/data`. Así, cambiar o respaldar la cadena consiste en operar sobre
+el filesystem del host, no sobre volúmenes Docker implícitos.

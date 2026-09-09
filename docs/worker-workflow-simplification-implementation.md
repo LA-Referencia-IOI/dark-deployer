@@ -1,7 +1,7 @@
 # Implementación de la simplificación del workflow del minter
 
-**Fecha:** 2026-09-07  
-**Estado:** cambios implementados; falta recrear el entorno y ejecutar la verificación en una base nueva.
+**Fecha:** 2026-09-09
+**Estado:** implementado y verificado en el entorno developer actual.
 
 ## Alcance
 
@@ -34,8 +34,9 @@ normales y no provocan reparaciones. Store API expone esos conteos y ofrece
 `POST /v1/status/batch`, que el replication worker usa para consultar L1 y L2
 en una sola ronda acotada.
 
-La disponibilidad y la durabilidad tienen cadencias independientes y backoff
-acotado. Las reparaciones requieren gracia y cooldown, y solo se ejecutan ante
+La disponibilidad y la durabilidad tienen cadencias independientes y explícitas:
+primer pin a `15s → 1min → 5min`, y durabilidad a `5min → 15min → 1h`.
+Las reparaciones requieren gracia y cooldown, y solo se ejecutan ante
 ausencia confirmada o error de Cluster. El heartbeat persiste `next_wake_at`,
 los ciclos informan observados/avanzados/en espera/reparados/fallidos y el
 status completo marca posibles ciclos sin progreso. Store API también invalida
@@ -63,6 +64,11 @@ Las etapas siguen siendo `NONE`, `METADATA`, `AVAILABILITY`, `CHAIN`,
 - `processing_wait_reason`: catálogo numérico con motivos como
   `cluster_pinning`, `initial_visibility`, `replica_target`,
   `storage_backoff`, `rpc_backoff` y `chain_confirmation`.
+
+`REPLICATION_IDLE_SLEEP_SECONDS` solo despierta el proceso para detectar nuevas
+entradas. No autoriza una consulta remota: cada ARK debe haber alcanzado su
+`next_action_at`. La durabilidad limita cada ronda a 10 ARKs/20 CIDs y no vuelve
+a enviar una promoción cuando Cluster ya tiene la asignación objetivo.
 
 Los catálogos de etapas, estados, motivos de espera y errores son tablas SQL
 sembradas por `0001_initial_schema.py`. La aplicación utiliza los códigos

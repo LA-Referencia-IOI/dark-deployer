@@ -120,7 +120,9 @@ Este problema es independiente de Store API e IPFS Cluster.
 ### Operación y capacidad
 
 - Medir p50, p95 y p99 de `POST /v1/store` durante ingestas pequeña, mediana y masiva.
-- Evaluar páginas de 100 y concurrencia 4; durante recuperación de cola probar páginas de 10–20 y concurrencia 1–2.
+- La configuración vigente usa páginas de 100 para Chain y Replication; la
+  ventana RPC de Chain es 50 y el mantenimiento de Replication se limita a 10
+  ARKs/20 CIDs cada cinco segundos para no competir con el primer pin.
 - Registrar edad del elemento más antiguo, tamaño de cola, latencia de Store API y errores por capa.
 - Revisar backoff para evitar que una caída de Cluster genere una tormenta de reintentos.
 - Definir tasa máxima de ingesta por sitio y estrategia de pausa/reanudación.

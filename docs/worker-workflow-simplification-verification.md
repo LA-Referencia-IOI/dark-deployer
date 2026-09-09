@@ -82,7 +82,9 @@ For every worker, verify the following interpretation:
 
 - `workload.<worker>.ready`: can be attempted on the next cycle.
 - `workload.<worker>.waiting`: a normal scheduled recheck; it is not an error.
-- `next_action_at`: earliest scheduled recheck across that worker's waits.
+- `next_action_at`: earliest scheduled recheck across that worker's waits. For
+  Replication, first-pin checks use 15 seconds, 1 minute and then 5 minutes;
+  durability checks use 5 minutes, 15 minutes and then hourly.
 - `waiting_reasons`: why the records wait (for example `cluster_pinning`,
   `initial_visibility`, `replica_target`, `storage_backoff`, or `rpc_backoff`).
 - `workload.<worker>.failed`: records which need operator review.

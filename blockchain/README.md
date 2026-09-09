@@ -1,5 +1,11 @@
 # dARK blockchain runtime
 
+Besu state is stored in the host bind-mount root from `BLOCKCHAIN_DATA_ROOT`.
+Each node uses `<root>/<node>` as its complete `/data` directory; keys,
+`static-nodes.json` and the database must be in that directory. The deployer
+creates and validates this layout before Compose starts. It never falls back
+silently to the historical `nodes/<node>/data` layout.
+
 This directory is the versioned Besu runtime used by the deployer. It replaces
 the former external blockchain runtime repository.
 

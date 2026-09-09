@@ -31,18 +31,18 @@ Store API devuelve un CID tan pronto Cluster acepta el contenido localmente,
 pero replication vuelve a consultar el pin global y exige que **ambos CIDs**
 tengan al menos `publish_after_replicas` pines en estado `pinned`.
 
-En la configuración observada, las cadencias nominales son:
+En la configuración vigente, las cadencias nominales son:
 
 | Worker | Página | Concurrencia | Espera general | Revisión del registro |
 | --- | ---: | ---: | ---: | ---: |
 | Metadata | 100 | 4 | 2 s | backoff de error, normalmente 1 min para un retry catalogado |
-| Replication | 50 | 2 | 30 s | disponibilidad 10–60 s; objetivo de réplica 300–1800 s |
-| Chain | 20, adaptativa | controlada por capacidad | 5 s | backoff RPC/errores según resultado |
+| Replication | 100 | 2 | 2 s para detectar entradas | primer pin 15 s→1 min→5 min; durabilidad 5 min→15 min→1 h |
+| Chain | 100, adaptativa | controlada por capacidad | 5 s | ventanas RPC de 50; backoff RPC/errores |
 
-La espera de replication es la fuente más probable de la percepción de
-lentitud. Un registro puede ser observado cada 10 segundos al comienzo de
-availability y cada 5 minutos al esperar el objetivo de réplicas; el valor
-crece hasta 30 minutos. El worker puede mostrar `RUNNING` o `SLEEPING` sin que
+La espera de replication es intencionalmente más larga después de que Cluster
+acepta una asignación. Un registro se revisa a los 15 segundos, un minuto y
+cinco minutos durante availability; después de Chain se revisa a los cinco
+minutos, quince minutos y cada hora. El worker puede mostrar `RUNNING` o `SLEEPING` sin que
 eso signifique error: el estado del proceso y el estado de la cola son campos
 independientes.
 
@@ -845,22 +845,21 @@ siguen dependiendo del catálogo de códigos estructurados.
 
 ## Estado vigente de implementación
 
-La implementación vigente aplica el scheduler continuo descrito arriba. No se
-usan cuotas separadas ni temporizadores normales por ARK; los nombres de
-cuotas y backoff que aparecen en las secciones históricas no son parámetros
-activos.
+La implementación vigente usa un scheduler ligero y una agenda persistida por
+ARK. No se usan cuotas separadas de availability/durabilidad, pero sí se limita
+el mantenimiento a 10 ARKs/20 CIDs por ronda.
 
 - `REPLICATION_WORKER_PAGE_SIZE` queda en 100 por defecto.
 - Availability se selecciona siempre primero; Replication completa los
   lugares libres de la página únicamente cuando availability tiene menos de
   100 registros.
-- La selección usa `next_action_at IS NULL OR <= now`, de modo que los estados
-  normales `queued` y `pinning` vuelven a entrar en el ciclo sin temporizadores
-  individuales.
+- La selección usa `next_action_at IS NULL OR <= now`; los estados normales
+  `queued` y `pinning` vuelven a entrar solo cuando vence su agenda individual.
 - La prioridad se ordena por `next_action_at`,
   `replication_checked_at ASC NULLS FIRST`, creación e identificador.
-- `queued`, `pinning` e `initial_visibility` dejan `next_action_at` en `NULL`;
-  solo los fallos técnicos conservan un retry temporizado.
+- `queued`, `pinning` e `initial_visibility` se programan a 15 s, 1 min y
+  después 5 min. `REPLICA_TARGET` se programa a 5 min, 15 min y después cada
+  hora. Solo los fallos técnicos conservan además un retry de error.
 - Se conserva el batch de hasta 200 CIDs, el lock individual y la comprobación
   de CIDs antes de persistir.
 - El payload local continúa retenido hasta alcanzar `target_replicas`.
@@ -893,10 +892,11 @@ pin real de L1 y L2. Solo entonces libera `CHAIN`. Tras la publicación, la
 misma etapa de replication espera `target_replicas` antes de purgar los payloads
 locales.
 
-`queued`, `pinning` e `initial_visibility` son espera normal y dejan
-`next_action_at` en `NULL`; el worker vuelve a observarlos según su ciclo e
-`REPLICATION_IDLE_SLEEP_SECONDS`. Los intervalos históricos de recheck no
-constituyen una agenda estricta para esos estados.
+`queued`, `pinning` e `initial_visibility` son espera normal y ahora tienen una
+agenda por ARK en `next_action_at`: 15 segundos, 1 minuto y después 5 minutos.
+Tras Chain, `REPLICA_TARGET` se audita a los 5 minutos, 15 minutos y después
+cada hora. `REPLICATION_IDLE_SLEEP_SECONDS` solo sirve para detectar nuevas
+entradas cuando no hay un ARK vencido; no sustituye la agenda persistida.
 
 ## Modelo vigente de dos fases
 
