@@ -847,7 +847,7 @@ siguen dependiendo del catálogo de códigos estructurados.
 
 La implementación vigente usa un scheduler ligero y una agenda persistida por
 ARK. No se usan cuotas separadas de availability/durabilidad, pero sí se limita
-el mantenimiento a 10 ARKs/20 CIDs por ronda.
+el mantenimiento a 50 ARKs/100 CIDs por ronda.
 
 - `REPLICATION_WORKER_PAGE_SIZE` queda en 100 por defecto.
 - Availability se selecciona siempre primero; Replication completa los
@@ -872,8 +872,54 @@ el mantenimiento a 10 ARKs/20 CIDs por ronda.
   ```
 
 La prueba Docker con Cluster real sigue siendo necesaria para medir el tiempo
-real de `queued/pinning → pinned`. El límite de ejecución está en el pin
-tracker de cada peer: la configuración actual parte de
+real de `queued/pinning → pinned`.
+
+### Evidencia de la ejecución del 9 de septiembre de 2026
+
+Durante la ejecución con `REPLICATION_PROMOTION_BATCH_SIZE=100` y
+`STORE_PROMOTION_CONCURRENCY=4`, el worker procesó páginas de 50 ARKs y 100
+CIDs en una sola consulta batch. Los ciclos registraron, por ejemplo:
+
+```text
+arks=50 unique_cids=100 batches=1 promotions=100/100 advanced=0 waiting=50
+```
+
+`promotions=100/100` significa que Store API aceptó las solicitudes de
+promoción. No significa que los 100 CIDs ya tengan el objetivo final de
+réplicas. La confirmación se obtiene únicamente observando el `peer_map` de
+Cluster.
+
+La comprobación directa de un ARK observado recientemente mostró:
+
+```text
+developer-storage-1: pinned
+developer-storage-2: remote
+allocations: solo developer-storage-1
+```
+
+El estado `remote` no se cuenta como una copia confirmada. Por tanto, el CID
+tiene una réplica efectiva y el ARK permanece correctamente en `REPLICATION`.
+En la misma muestra, el otro CID del ARK sí tenía ambos peers en `pinned`, lo
+que confirma que la consulta y el conteo distinguen estados reales por CID.
+
+Los contadores persistidos en PostgreSQL durante la muestra fueron:
+
+- 11.012 ARKs con L1=1 y L2=1.
+- 0 ARKs con L1=2 y L2=2.
+- 0 errores permanentes en `GET /api/v1/worker/errors`.
+
+El worker acumulaba fallos técnicos transitorios en sus contadores de ciclo,
+pero no se tradujeron en registros permanentes. La interpretación correcta es
+que Cluster acepta las promociones y continúa asignando pins; el cuello de
+botella observado está en que el segundo peer todavía aparece como `remote`,
+`queued` o `pinning`, no en la capacidad de enviar la solicitud.
+
+La observabilidad debe separar explícitamente tres métricas: promociones
+aceptadas por Store API, pins `pinned` confirmados por Cluster y ARKs avanzados
+por el worker. Mezclarlas produce la falsa impresión de que una promoción
+aceptada ya completó la durabilidad.
+
+El límite de ejecución está en el pin tracker de cada peer: la configuración actual parte de
 `CLUSTER_PINTRACKER_CONCURRENTPINS=20`. El valor debe compararse con el
 predeterminado 10 bajo carga sostenida y conservarse solo si mejora el tiempo
 hasta el primer pin sin saturar Kubo, disco o Cluster.
@@ -909,3 +955,44 @@ trabajo pendiente en `METADATA` ni ningún ARK con primer pin pendiente en
 `AVAILABILITY`. Esa operación eleva el pin existente a
 `replication-max=target_replicas`; no vuelve a subir el payload. La purga se
 produce únicamente cuando ambos CIDs alcanzan ese objetivo.
+# Optimización de promociones y ciclos ociosos (2026-09-09)
+
+La durabilidad no añade estado de promoción por ARK. PostgreSQL conserva el
+estado funcional y `next_action_at`; IPFS Cluster sigue siendo la fuente de
+verdad para asignaciones y pins. En cada página el reconciliador observa los
+CIDs una sola vez, deduplica la muestra y solo solicita promoción cuando
+`assigned_replicas < target_replicas`. Los estados `remote`, `queued` y
+`pinning` no son fallos ni justifican repetir una promoción si Cluster ya tiene
+asignado el objetivo.
+
+El presupuesto de promoción se regula con la misma muestra del ciclo: 100 CIDs
+en condiciones normales, 50 cuando al menos 50 % está `queued` o `pinning`, y
+20 cuando esa presión alcanza 80 %. Después de presión alta vuelve a 100 tras
+tres muestras consecutivas por debajo de 25 %. Availability conserva prioridad
+absoluta y la regulación solo afecta la durabilidad posterior a Chain.
+
+El Store API devuelve un resultado independiente por CID:
+`promotion_requested`, `already_allocated` o `promotion_failed`. El minter le
+entrega la asignación observada en el batch anterior, evitando una segunda
+consulta a Cluster. Los fallos técnicos del ciclo se publican como
+`transient_deferred`; los errores permanentes continúan únicamente en el estado
+del ARK.
+
+El heartbeat de Replication persiste solo cuatro agregados del último ciclo:
+promociones aceptadas, CIDs confirmados, CIDs pendientes y latencia total de
+batch. Metadata y Chain reducen consultas vacías: intervalo mínimo al comienzo,
+5 segundos después de tres ciclos vacíos y 10 segundos después de diez; al
+encontrar trabajo restauran inmediatamente el intervalo mínimo.
+
+Configuración:
+
+```env
+REPLICATION_PROMOTION_PRESSURE_HIGH_PERCENT=80
+REPLICATION_PROMOTION_PRESSURE_MEDIUM_PERCENT=50
+REPLICATION_PROMOTION_MIN_BATCH_SIZE=20
+WORKER_MAX_IDLE_SLEEP_SECONDS=10
+```
+
+La validación de carga limpia con 11.000 ARKs debe hacerse después de recrear la
+base, porque los cuatro agregados forman parte de `0001_initial_schema.py` y no
+se proporciona una migración para instalaciones anteriores.

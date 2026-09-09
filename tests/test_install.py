@@ -222,7 +222,7 @@ class IntegrationTests(unittest.TestCase):
         env = {
             "TYPE": "production",
             "SIGNER_MODE": "shared",
-            "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            "MASTER_WALLET_KEY_FILE": str(key_path),
             "RPC_URL": "http://localhost:8545",
             "CHAIN_ID": "2025",
         }
@@ -284,7 +284,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(generated["REPLICATION_WORKER_CONCURRENCY"], "3")
         self.assertEqual(generated["REPLICATION_PUBLISH_AFTER_REPLICAS"], "1")
         self.assertEqual(generated["REPLICATION_TARGET_REPLICAS"], "2")
-        self.assertEqual(generated["REPLICATION_WORKER_SLEEP_SECONDS"], "30")
+        self.assertEqual(generated["REPLICATION_IDLE_SLEEP_SECONDS"], "2")
         self.assertEqual(generated["REPLICATION_WORKER_STORAGE_RETRY_SECONDS"], "10")
         self.assertEqual(
             generated["REPLICATION_WORKER_RUNTIME_NAME"],
@@ -626,7 +626,7 @@ class ValidationTests(unittest.TestCase):
                 "PRODUCTION_STORE_API_URL": "https://store.example",
                 "PRODUCTION_STORAGE_ACCESS_GROUP": "apps-a",
                 "SIGNER_MODE": "shared",
-                "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            "MASTER_WALLET_KEY_FILE": str(key_path),
             }
             deployment = json.loads((PROJECT_ROOT / "deployment-topology.example.json").read_text())
             storage = deployment["storage"]
@@ -671,7 +671,7 @@ class ValidationTests(unittest.TestCase):
             env = {
                 "TYPE": "production",
                 "SIGNER_MODE": "shared",
-                "PLATFORM_PRIVATE_KEY_FILE": str(key_path),
+            "MASTER_WALLET_KEY_FILE": str(key_path),
             }
 
             installer.prepare_blockchain_runtime_platform_wallet(str(target), env)

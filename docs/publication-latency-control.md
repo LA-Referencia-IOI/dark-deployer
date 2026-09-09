@@ -35,7 +35,7 @@ estado o el aumento de copias confirmadas reinicia la secuencia de esa fase.
 - Cuando Availability supera 2.000 ARKs, Metadata reduce su concurrencia de 4
   a 2. Vuelve a 4 al bajar de ese umbral.
 
-La durabilidad está deliberadamente limitada a 10 ARKs/20 CIDs por ronda. Si
+La durabilidad está deliberadamente limitada a 50 ARKs/100 CIDs por ronda. Si
 Cluster ya tiene la asignación objetivo, el ciclo no vuelve a solicitar el pin:
 solo agenda la siguiente auditoría de cinco, quince o sesenta minutos.
 `queued`, `pinning` e `initial_visibility` son espera normal, no fallos.

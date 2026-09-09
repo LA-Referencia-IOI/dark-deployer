@@ -194,3 +194,8 @@ producción se recomienda un filesystem dedicado, por ejemplo
 `/srv/dark/storage`. Nunca se comparte el mismo subdirectorio entre peers.
 Besu sigue el mismo patrón con `blockchain_data_root` en los hosts de red y un
 directorio independiente por nodo.
+Durante mantenimiento, una asignación ya aceptada por Cluster no se vuelve a
+pedir aunque sus peers aparezcan todavía como `remote`, `queued` o `pinning`.
+Solo `assigned_replicas < target_replicas` genera una promoción. La presión de
+pins de la página observada limita el siguiente lote a 100, 50 o 20 CIDs; no se
+recorre el pinset global ni se persiste un estado adicional por ARK.

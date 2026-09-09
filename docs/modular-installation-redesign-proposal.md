@@ -149,7 +149,7 @@ manual controlada sin cambiar las direcciones ni el modelo de roles.
 | Fuente | Responsabilidad | Ejemplos | No contiene |
 | --- | --- | --- | --- |
 | `deployment-topology.json` | Fuente canónica de infraestructura, release y método de entrega. | Hosts, roles, IPs privadas, DNS, usuario SSH, puerto, referencia a clave, ramas, secretos requeridos. | Contenido de claves, `.env` por componente, aliases Docker, estado efímero. |
-| `secrets/` externo o gestor de secretos | Material sensible por controlador/host. | `ssh_private_key`, `platform.key`, swarm key, Cluster secret. | Topología ni valores de runtime no sensibles. |
+| `secrets/` externo o gestor de secretos | Material sensible por controlador/host. | `ssh_private_key`, `master-wallet.key`, swarm key, Cluster secret. | Topología ni valores de runtime no sensibles. |
 | bundle renderizado | Vista verificable por host. | `.env.public`, runtime IPFS, política de firewall, manifiesto. | Secreto y decisiones de hosts no necesarios para ese rol. |
 | `.env` de componente | Runtime generado, local al componente. | `RPC_URL`, bind, endpoint Store. | Selección manual de host, credenciales SSH, IPs de otros roles repetidas. |
 | `.env.example` del repositorio | Defaults de desarrollo y documentación de parámetros. | flags locales seguros. | Datos de un despliegue real. |

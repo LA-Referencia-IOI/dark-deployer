@@ -81,6 +81,15 @@ if [ ! -f "$CONFIG_DIR/genesis.json" ] && [ "$BLOCKCHAIN_RUNTIME_ROLE" != "all" 
 fi
 
 if [ -f "$CONFIG_DIR/genesis.json" ]; then
+  # A developer reset may leave the shared genesis while the configured bind
+  # mount was recreated empty. Treat that exact state as an incomplete local
+  # runtime and regenerate it; never do this for role-specific production
+  # artifacts or a directory containing node data.
+  if [ "${BLOCKCHAIN_RUNTIME_ROLE:-all}" = "all" ] && \
+     ! find "$NODES_DIR" -mindepth 2 -type f -print -quit 2>/dev/null | grep -q .; then
+    log "Existing genesis has no node data in the active root; regenerating developer runtime..."
+    rm -f "$CONFIG_DIR/genesis.json"
+  else
   for node in "${NODES[@]}"; do
     test -f "$NODES_DIR/$node/nodekey" || error "genesis.json exists but $NODES_DIR/$node/nodekey is missing; active data root is incomplete"
     test -f "$NODES_DIR/$node/static-nodes.json" || error "genesis.json exists but $NODES_DIR/$node/static-nodes.json is missing; active data root is incomplete"
@@ -88,6 +97,7 @@ if [ -f "$CONFIG_DIR/genesis.json" ]; then
   warn "genesis.json already exists — setup already ran."
   warn "To start fresh: ./scripts/reset.sh && ./setup.sh"
   exit 0
+  fi
 fi
 
 # =============================================================================

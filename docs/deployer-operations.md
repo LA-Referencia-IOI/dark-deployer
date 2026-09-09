@@ -64,7 +64,7 @@ The installer keeps operator configuration separate from deployment state:
 | --- | --- | --- |
 | `.env` | Profile, topology, repository URLs, setup options | Normal source |
 | `.env.integration` | Public deployed state: RPC, chain, contracts, ABI and Store API | Authoritative for apps-only and remote handoffs |
-| `PLATFORM_PRIVATE_KEY_FILE` | Shared Production V1 signer, provisioned outside the deployer | Authoritative in `SIGNER_MODE=shared` |
+| `MASTER_WALLET_KEY_FILE` | Shared master-wallet signer, provisioned outside the deployer | Authoritative in `SIGNER_MODE=shared` |
 | `.env.integration.secrets` | Legacy Admin and Minter signer handoff | Backward compatibility only |
 | `*_PRIVATE_KEY_FILE` | Raw secret mounted by an external secret manager | Preferred over legacy master fallback |
 
@@ -90,7 +90,7 @@ Secret files contain the raw hexadecimal key, optionally prefixed with `0x`.
 Relative paths are resolved from the deployer repository root.
 
 `MASTER_PRIVATE_KEY` remains a compatibility fallback. Production V1 instead
-requires `SIGNER_MODE=shared` and one absolute `PLATFORM_PRIVATE_KEY_FILE` with
+requires `SIGNER_MODE=shared` and one absolute `MASTER_WALLET_KEY_FILE` with
 mode `0600`. The installer derives the public platform address and resolves the
 deployer, Admin and Minter roles from that one file.
 

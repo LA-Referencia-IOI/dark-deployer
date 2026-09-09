@@ -13,7 +13,7 @@
   },
   "chain_id": 2025,
   "network": {"trust_boundary": "vpn", "vpn_cidr": "10.20.30.0/24", "trusted_minter_clients": ["10.20.30.50/32"]},
-  "signing": {"mode": "shared", "platform_key_target": "/opt/dark-deployer/secrets/platform.key"},
+  "signing": {"mode": "shared", "master_wallet_key_target": "/opt/dark-deployer/secrets/master-wallet.key"},
   "blockchain": {"besu_image": "hyperledger/besu:26.6.1", "chain_artifact_target": "/opt/dark-deployer/secrets/chain-artifact"},
   "storage": {
     "cluster_name": "dark-site-a",

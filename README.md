@@ -213,7 +213,7 @@ A blockchain-only installation generates:
 - `.env.integration`: RPC URL, chain ID, contract addresses and ABIs;
 - `DARK_PLATFORM_ADDRESS`, when `SIGNER_MODE=shared` is active.
 
-Production uses one externally provisioned `PLATFORM_PRIVATE_KEY_FILE` on
+Production uses one externally provisioned `MASTER_WALLET_KEY_FILE` on
 Blockchain and Apps. The private key is not placed in either handoff file.
 Copy only the public `.env.integration` from Blockchain to Apps. Storage
 nodes need neither blockchain handoff nor the platform signer.

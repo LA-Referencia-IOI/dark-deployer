@@ -218,7 +218,7 @@ def load_deployment_topology(path: Path, project_root: Path) -> dict:
     signing = inventory.get("signing")
     if not isinstance(signing, dict) or signing.get("mode") != "shared":
         raise DeploymentError("signing.mode must be 'shared'")
-    _absolute_path(signing.get("platform_key_target"), "signing.platform_key_target")
+    _absolute_path(signing.get("master_wallet_key_target"), "signing.master_wallet_key_target")
 
     blockchain = inventory.get("blockchain")
     if not isinstance(blockchain, dict):
@@ -381,7 +381,7 @@ def _host_env(
         "DEPLOYMENT_ID": inventory["deployment_id"],
         "DEPLOYER_BRANCH": repository_env["DEPLOYER_BRANCH"],
         "SIGNER_MODE": "shared",
-        "PLATFORM_PRIVATE_KEY_FILE": inventory["signing"]["platform_key_target"],
+        "MASTER_WALLET_KEY_FILE": inventory["signing"]["master_wallet_key_target"],
         "PLATFORM_ADDRESS": "",
         "RPC_URL": endpoints["rpc"],
         "RPC_PUBLIC_URL": endpoints["rpc"],
@@ -489,7 +489,7 @@ def render_deployment(topology_path: Path, output_dir: Path, project_root: Path)
                 "topology": "../../shared/deployment-topology.json",
             },
             "secrets": {
-                "platform_key": inventory["signing"]["platform_key_target"],
+                "master_wallet_key": inventory["signing"]["master_wallet_key_target"],
                 "ipfs_swarm_key": inventory["storage"]["swarm_key_target"],
                 "ipfs_cluster_secret": inventory["storage"]["cluster_secret_target"],
             },
@@ -500,7 +500,7 @@ def render_deployment(topology_path: Path, output_dir: Path, project_root: Path)
 
 1. Verify the deployer checkout uses branch `{deployer_branch}`.
 2. Copy the public bundle to each host; do not add secrets to this directory.
-3. Provision the platform key on Apps with mode 0600.
+3. Provision the master-wallet key on Apps with mode 0600.
 4. Securely distribute the generated dARK blockchain runtime artifact: genesis and the
    selected node key material only to each matching node host.
 5. Provision both IPFS secrets on both storage hosts with mode 0600.
@@ -567,7 +567,7 @@ def validate_host_bundle(path: Path, require_secrets: bool = True) -> dict:
     if require_secrets:
         role = config["host"]["role"]
         required_names = (
-            {"platform_key"} if role == "apps" else
+            {"master_wallet_key"} if role == "apps" else
             {"ipfs_swarm_key", "ipfs_cluster_secret"}
         )
         for name in required_names:

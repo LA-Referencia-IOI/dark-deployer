@@ -731,18 +731,18 @@ def get_role_private_key(env: dict, role: str) -> str:
     """Resolve a role key from a direct value, mounted file, or legacy master key."""
     signer_mode = env.get("SIGNER_MODE", "legacy").strip().lower() or "legacy"
     if signer_mode == "shared":
-        platform_file = env.get("PLATFORM_PRIVATE_KEY_FILE", "").strip()
+        platform_file = env.get("MASTER_WALLET_KEY_FILE", "").strip()
         if not platform_file:
-            print("[ERROR] SIGNER_MODE=shared requires PLATFORM_PRIVATE_KEY_FILE.")
+            print("[ERROR] SIGNER_MODE=shared requires MASTER_WALLET_KEY_FILE.")
             sys.exit(1)
         secret_path = Path(platform_file)
         if not secret_path.is_absolute():
-            print("[ERROR] PLATFORM_PRIVATE_KEY_FILE must be an absolute path.")
+            print("[ERROR] MASTER_WALLET_KEY_FILE must be an absolute path.")
             sys.exit(1)
         try:
             return secret_path.read_text().strip()
         except OSError as exc:
-            print(f"[ERROR] Cannot read PLATFORM_PRIVATE_KEY_FILE: {exc}")
+            print(f"[ERROR] Cannot read MASTER_WALLET_KEY_FILE: {exc}")
             sys.exit(1)
 
     role_key = f"{role.upper()}_PRIVATE_KEY"
@@ -761,8 +761,20 @@ def get_role_private_key(env: dict, role: str) -> str:
             print(f"[ERROR] Cannot read secret file for {role_key}: {exc}")
             sys.exit(1)
 
-    # MASTER_PRIVATE_KEY remains a compatibility fallback for existing installs.
-    return env.get("MASTER_PRIVATE_KEY", "").strip()
+    configured = env.get("MASTER_PRIVATE_KEY", "").strip()
+    if configured:
+        return configured
+
+    # A developer blockchain setup creates this ignored credential file.  Use it
+    # as a local-only fallback so a clean install does not require copying a
+    # private key into .env.  Production never reads this path: it must provide
+    # MASTER_WALLET_KEY_FILE explicitly.
+    if env.get("TYPE", "developer").strip().lower() == "developer":
+        wallet_file = PROJECT_ROOT / "blockchain" / "master-wallet.txt"
+        wallet_info = extract_wallet_info(str(wallet_file))
+        return wallet_info.get("MASTER_PRIVATE_KEY", "").strip()
+
+    return ""
 
 
 def private_key_identity(private_key: str) -> tuple[str, str]:
@@ -797,7 +809,7 @@ def prepare_blockchain_runtime_platform_wallet(target_dir: str, env: dict) -> No
     configured = env.get("PLATFORM_ADDRESS", "").strip()
     if configured and configured.lower() != address.lower():
         print(
-            "[ERROR] PLATFORM_ADDRESS does not match PLATFORM_PRIVATE_KEY_FILE "
+            "[ERROR] PLATFORM_ADDRESS does not match MASTER_WALLET_KEY_FILE "
             f"({configured} != {address})."
         )
         sys.exit(1)
@@ -1659,7 +1671,7 @@ def _generate_root_env_integration_blockchain(env: dict) -> None:
         f"[OK] Generated root '.env.integration' with blockchain connection vars{abi_note}.\n"
         "     Copy this public file to each apps server.\n"
         + (
-            "     The platform signer remains in PLATFORM_PRIVATE_KEY_FILE; no secret handoff was generated."
+            "     The master wallet signer remains in MASTER_WALLET_KEY_FILE; no secret handoff was generated."
             if shared_signer
             else "     Copy '.env.integration.secrets' only to an apps server that must sign transactions."
         )
@@ -2008,17 +2020,29 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "REPLICATION_WORKER_CONCURRENCY",
             template_env.get("REPLICATION_WORKER_CONCURRENCY", "2"),
         ).strip(),
-        "REPLICATION_WORKER_SLEEP_SECONDS": env.get(
-            "REPLICATION_WORKER_SLEEP_SECONDS",
-            template_env.get("REPLICATION_WORKER_SLEEP_SECONDS", "2"),
-        ).strip(),
         "REPLICATION_STATUS_BATCH_SIZE": env.get(
             "REPLICATION_STATUS_BATCH_SIZE",
             template_env.get("REPLICATION_STATUS_BATCH_SIZE", "200"),
         ).strip(),
         "REPLICATION_PROMOTION_BATCH_SIZE": env.get(
             "REPLICATION_PROMOTION_BATCH_SIZE",
-            template_env.get("REPLICATION_PROMOTION_BATCH_SIZE", "20"),
+            template_env.get("REPLICATION_PROMOTION_BATCH_SIZE", "100"),
+        ).strip(),
+        "REPLICATION_PROMOTION_PRESSURE_HIGH_PERCENT": env.get(
+            "REPLICATION_PROMOTION_PRESSURE_HIGH_PERCENT",
+            template_env.get("REPLICATION_PROMOTION_PRESSURE_HIGH_PERCENT", "80"),
+        ).strip(),
+        "REPLICATION_PROMOTION_PRESSURE_MEDIUM_PERCENT": env.get(
+            "REPLICATION_PROMOTION_PRESSURE_MEDIUM_PERCENT",
+            template_env.get("REPLICATION_PROMOTION_PRESSURE_MEDIUM_PERCENT", "50"),
+        ).strip(),
+        "REPLICATION_PROMOTION_MIN_BATCH_SIZE": env.get(
+            "REPLICATION_PROMOTION_MIN_BATCH_SIZE",
+            template_env.get("REPLICATION_PROMOTION_MIN_BATCH_SIZE", "20"),
+        ).strip(),
+        "WORKER_MAX_IDLE_SLEEP_SECONDS": env.get(
+            "WORKER_MAX_IDLE_SLEEP_SECONDS",
+            template_env.get("WORKER_MAX_IDLE_SLEEP_SECONDS", "10"),
         ).strip(),
         "REPLICATION_MAINTENANCE_CYCLE_SECONDS": env.get(
             "REPLICATION_MAINTENANCE_CYCLE_SECONDS",
@@ -2182,7 +2206,7 @@ def generate_store_api_env_integration(store_api_path: Path, env: dict) -> None:
         ).strip(),
         "STORE_ADD_CONCURRENCY": env.get("STORE_ADD_CONCURRENCY", template_env.get("STORE_ADD_CONCURRENCY", "4")).strip(),
         "STORE_STATUS_CONCURRENCY": env.get("STORE_STATUS_CONCURRENCY", template_env.get("STORE_STATUS_CONCURRENCY", "6")).strip(),
-        "STORE_PROMOTION_CONCURRENCY": env.get("STORE_PROMOTION_CONCURRENCY", template_env.get("STORE_PROMOTION_CONCURRENCY", "1")).strip(),
+        "STORE_PROMOTION_CONCURRENCY": env.get("STORE_PROMOTION_CONCURRENCY", template_env.get("STORE_PROMOTION_CONCURRENCY", "4")).strip(),
     }
 
     runtime = configured_storage_runtime(prefix, env)
@@ -3395,19 +3419,19 @@ def validate_shared_platform_signer(env: dict, profile: str) -> None:
         sys.exit(1)
     if mode != "shared":
         return
-    raw_path = env.get("PLATFORM_PRIVATE_KEY_FILE", "").strip()
+    raw_path = env.get("MASTER_WALLET_KEY_FILE", "").strip()
     if not raw_path or not Path(raw_path).is_absolute():
-        print("[ERROR] PLATFORM_PRIVATE_KEY_FILE must be an absolute path.")
+        print("[ERROR] MASTER_WALLET_KEY_FILE must be an absolute path.")
         sys.exit(1)
     path = Path(raw_path)
     try:
         mode_bits = path.stat().st_mode & 0o777
     except OSError as exc:
-        print(f"[ERROR] PLATFORM_PRIVATE_KEY_FILE is unavailable: {exc}")
+        print(f"[ERROR] MASTER_WALLET_KEY_FILE is unavailable: {exc}")
         sys.exit(1)
     if mode_bits & 0o077:
         print(
-            "[ERROR] PLATFORM_PRIVATE_KEY_FILE must not grant group/world access "
+            "[ERROR] MASTER_WALLET_KEY_FILE must not grant group/world access "
             f"(mode {mode_bits:04o})."
         )
         sys.exit(1)
@@ -3418,7 +3442,7 @@ def validate_shared_platform_signer(env: dict, profile: str) -> None:
     if configured_address and configured_address.lower() != derived_address.lower():
         print(
             "[ERROR] PLATFORM_ADDRESS from the public handoff does not match "
-            "PLATFORM_PRIVATE_KEY_FILE."
+            "MASTER_WALLET_KEY_FILE."
         )
         sys.exit(1)
     env["PLATFORM_ADDRESS"] = derived_address

@@ -67,7 +67,7 @@ Las etapas siguen siendo `NONE`, `METADATA`, `AVAILABILITY`, `CHAIN`,
 
 `REPLICATION_IDLE_SLEEP_SECONDS` solo despierta el proceso para detectar nuevas
 entradas. No autoriza una consulta remota: cada ARK debe haber alcanzado su
-`next_action_at`. La durabilidad limita cada ronda a 10 ARKs/20 CIDs y no vuelve
+`next_action_at`. La durabilidad limita cada ronda a 50 ARKs/100 CIDs y no vuelve
 a enviar una promoción cuando Cluster ya tiene la asignación objetivo.
 
 Los catálogos de etapas, estados, motivos de espera y errores son tablas SQL
