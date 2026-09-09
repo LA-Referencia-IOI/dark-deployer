@@ -14,12 +14,27 @@ no ejecuta una instalación validada de extremo a extremo; las secciones 5 a 12
 siguen siendo trabajo pendiente y son la fuente de verdad para continuar.
 
 La segunda fase está iniciada: el bundle contiene `compose.yaml` independiente
-por grupo, entornos públicos y configuración de endpoints. `apply` crea una
-red bridge por máquina, prepara rutas, transfiere fuentes públicas/bundle por
-SSH y ejecuta Compose, guardando un journal. Solo pasó pruebas estructurales y
-`docker compose config`; no usarlo aún para reemplazar la instalación actual.
-Faltan la generación completa de configuración Besu/IPFS, los secretos, jobs
-de contratos/migraciones, health checks, reanudación y una prueba Docker real.
+por grupo, entornos públicos, configuración de endpoints Store API y los
+entrypoints/variables derivados para Kubo y Cluster. `apply` crea una red
+bridge por máquina, prepara rutas, transfiere fuentes públicas/bundle por SSH y
+ejecuta Compose, guardando un journal. En local crea un workspace de staging
+bajo `.generated/deployment-v2/<id>/local/`, por lo que no escribe las rutas de
+producción declaradas en el inventario. `chain-bootstrap` genera contexto QBFT
+público y `chain-static-nodes` deriva enodes desde las claves públicas
+generadas fuera del repositorio. Los secretos se definen por referencia
+relativa a `secrets_root`, nunca se incorporan al bundle.
+
+Antes de aplicar cada grupo, el runner ejecuta el preflight de Docker/rutas y
+comprueba que sean legibles los secretos declarados para el tipo de grupo. Una
+ejecución local usa también `data_root` y `secrets_root` de staging; por ello el
+operador debe provisionar explícitamente los archivos de prueba bajo esa ruta
+antes de invocar `apply`. Esta validación evita que un Compose parcialmente
+configurado llegue a arrancar.
+
+Solo pasó pruebas estructurales y `docker compose config`; no usarlo aún para
+reemplazar la instalación actual. Faltan la generación e importación completa
+de identidades/genesis Besu, jobs de contratos/migraciones, health checks,
+reanudación y una prueba Docker real.
 
 ## 1. Resultado obligatorio y límites
 

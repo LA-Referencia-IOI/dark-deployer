@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
-from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_executor
+from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_executor, run_preflight
 from .model import DeploymentPlan, Group
 from .render import render_plan
 from .state import record, run_root, write_status
@@ -43,6 +44,37 @@ def _local_prepare(machine, project_root: Path, run_dir: Path, group_dir: Path) 
     return destination
 
 
+def _local_stage_sources(machine, project_root: Path, run_dir: Path) -> Path:
+    """Stage public source trees below the run directory for a local daemon.
+
+    Inventory paths describe destination servers.  A controller invoking a
+    local simulation must not need permission to create those production-like
+    paths (for example `/srv/dark`).
+    """
+    source_root = run_dir / "local" / machine.id / "sources"
+    for source in _source_paths(project_root):
+        shutil.copytree(source, source_root / source.name, dirs_exist_ok=True)
+    return source_root
+
+
+def _effective_plan_for_apply(plan: DeploymentPlan, project_root: Path, run_dir: Path) -> DeploymentPlan:
+    """Use staged paths only for local machines; remote paths remain declared."""
+    machines = []
+    for machine in plan.machines:
+        if isinstance(resolve_executor(machine), LocalExecutor):
+            local_root = run_dir / "local" / machine.id
+            workspace = _local_stage_sources(machine, project_root, run_dir)
+            machines.append(replace(
+                machine,
+                workspace_root=str(workspace),
+                data_root=str(local_root / "data"),
+                secrets_root=str(local_root / "secrets"),
+            ))
+        else:
+            machines.append(machine)
+    return replace(plan, machines=tuple(machines))
+
+
 def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir: Path, bundle: Path) -> None:
     machine = plan.machine(group.machine_id)
     executor = resolve_executor(machine)
@@ -56,6 +88,11 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
     if exists.returncode:
         _require(executor.run(("docker", "network", "create", "--driver", "bridge", "--subnet", plan.docker_subnets[machine.id], network)), f"create network {network}")
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id), str(Path(machine.secrets_root)))), f"prepare data paths on {machine.id}")
+    for secret_id, definition in plan.raw["secrets"].items():
+        if group.kind not in definition.get("consumers", []):
+            continue
+        required_path = Path(machine.secrets_root) / definition["path"]
+        _require(executor.run(("test", "-r", str(required_path))), f"required secret {secret_id} is readable on {machine.id}")
     _require(executor.run(("docker", "compose", "--project-name", f"{plan.deployment_id}-{group.id}", "-f", str(destination / "compose.yaml"), "up", "-d", "--build"), timeout=1800.0), f"apply group {group.id}")
 
 
@@ -65,15 +102,23 @@ def apply(plan: DeploymentPlan, project_root: Path) -> Path:
     bundle = root / "bundle"
     if bundle.exists():
         raise ApplyError(f"run directory already exists: {root}; use a future resume command")
-    render_plan(plan, bundle)
+    effective_plan = _effective_plan_for_apply(plan, project_root, root)
+    render_plan(effective_plan, bundle)
     status: dict[str, object] = {"deployment_id": plan.deployment_id, "state": "running", "groups": {}}
     write_status(root, status)
     try:
         for step in plan.steps:
+            if step.action == "preflight":
+                checks = run_preflight(effective_plan.machine(step.machine_id))
+                failed = [check["check"] for check in checks if not check["ok"]]
+                if failed:
+                    raise ApplyError(f"preflight failed on {step.machine_id}: " + ", ".join(failed))
+                record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id})
+                continue
             if step.action != "compose_apply":
                 continue
             record(root, {"step": step.id, "state": "started", "machine": step.machine_id, "group": step.group_id})
-            _apply_group(plan, plan.group(step.group_id), project_root, root, bundle)
+            _apply_group(effective_plan, effective_plan.group(step.group_id), project_root, root, bundle)
             status["groups"][step.group_id] = "applied"  # type: ignore[index]
             write_status(root, status)
             record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id, "group": step.group_id})

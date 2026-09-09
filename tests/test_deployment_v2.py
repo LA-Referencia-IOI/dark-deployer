@@ -7,6 +7,7 @@ from unittest import mock
 import yaml
 
 from deployment_v2.inventory import InventoryError, load_inventory
+from deployment_v2.artifacts import ArtifactError, static_nodes, write_chain_bootstrap
 from deployment_v2.executor import CommandResult, run_preflight
 from deployment_v2.model import Machine, SshSettings
 from deployment_v2.planner import build_plan
@@ -56,6 +57,9 @@ class DeploymentV2Tests(unittest.TestCase):
             storage_a = yaml.safe_load((output / "groups" / "storage-a" / "compose.yaml").read_text())
             storage_b = yaml.safe_load((output / "groups" / "storage-b" / "compose.yaml").read_text())
             self.assertNotEqual(storage_a["services"]["cluster"]["ports"][0], storage_b["services"]["cluster"]["ports"][0])
+            endpoints = json.loads((output / "groups" / "apps" / "config" / "storage-endpoints.json").read_text())
+            self.assertEqual(endpoints["version"], 1)
+            self.assertEqual({node["id"] for node in endpoints["nodes"]}, {"storage-a", "storage-b"})
 
     def test_preflight_is_read_only_and_reports_each_check(self):
         machine = Machine(
@@ -67,6 +71,20 @@ class DeploymentV2Tests(unittest.TestCase):
         self.assertEqual([item["check"] for item in results], ["docker", "compose", "workspace_parent", "data_parent", "secrets_parent"])
         self.assertEqual(command.call_count, 5)
         self.assertTrue(all(item["ok"] for item in results))
+
+    def test_chain_bootstrap_is_public_and_static_nodes_use_derived_private_addresses(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "production-five-host.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = write_chain_bootstrap(plan, Path(temporary) / "chain", "0x" + "a" * 40)
+            context = json.loads((root / "chain-context.json").read_text())
+            self.assertEqual(context["chain_id"], 2025)
+            self.assertEqual(context["nodes"]["validator01"]["private_address"], "10.20.30.10")
+            keys = {node: f"{index:0128x}" for index, node in enumerate(("validator01", "validator02", "validator03", "validator04", "rpc01"), 1)}
+            peers = static_nodes(context, keys)
+            self.assertEqual(len(peers["validator01"]), 4)
+            self.assertTrue(any(peer.endswith("@10.20.30.20:30307") for peer in peers["validator01"]))
+            with self.assertRaisesRegex(ArtifactError, "public keys"):
+                static_nodes(context, {"validator01": keys["validator01"]})
 
 
 if __name__ == "__main__":

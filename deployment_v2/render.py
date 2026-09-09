@@ -93,8 +93,14 @@ def render_plan(plan: DeploymentPlan, output: Path) -> Path:
             manifest[str(target_env.relative_to(output))] = _sha256(target_env)
         config_root = target / "config"
         config_root.mkdir()
+        storage_nodes = []
+        for storage_group in (candidate for candidate in plan.groups if candidate.kind == "storage"):
+            node_id = storage_group.members[0]
+            cluster = next(endpoint for endpoint in plan.endpoints if endpoint.service == f"cluster-{storage_group.id}")
+            ipfs = next(endpoint for endpoint in plan.endpoints if endpoint.service == f"ipfs-{node_id}")
+            storage_nodes.append({"id": node_id, "ipfs_api_url": ipfs.url, "cluster_api_url": cluster.url})
         storage_config = config_root / "storage-endpoints.json"
-        storage_config.write_text(_json({"endpoints": [endpoint.url for endpoint in plan.endpoints if endpoint.service.startswith("cluster-")]}))
+        storage_config.write_text(_json({"version": 1, "nodes": storage_nodes}))
         manifest[str(storage_config.relative_to(output))] = _sha256(storage_config)
     (output / "manifest.json").write_text(_json({"version": 2, "files": manifest}))
     return output

@@ -11,18 +11,26 @@ from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
 from .runner import ApplyError, apply
+from .artifacts import ArtifactError, write_chain_bootstrap, write_static_nodes
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "apply"):
+    for name in ("validate", "plan", "render", "preflight", "apply", "chain-bootstrap", "chain-static-nodes"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
             command.add_argument("--json", action="store_true")
         if name == "render":
             command.add_argument("--output", required=True, type=Path)
+        if name == "chain-bootstrap":
+            command.add_argument("--output", required=True, type=Path)
+            command.add_argument("--master-wallet-address", required=True)
+        if name == "chain-static-nodes":
+            command.add_argument("--artifact-root", required=True, type=Path)
+            command.add_argument("--public-keys", required=True, type=Path,
+                                 help="JSON object mapping validator01..validator04 and rpc01 to public keys")
     return parser
 
 
@@ -54,9 +62,23 @@ def main() -> None:
             output = apply(plan, project_root)
             print(f"[OK] Applied deployment from {output}")
             return
+        if args.action == "chain-bootstrap":
+            artifact_root = write_chain_bootstrap(plan, args.output, args.master_wallet_address)
+            print(f"[OK] Wrote public chain bootstrap inputs to {artifact_root}")
+            return
+        if args.action == "chain-static-nodes":
+            try:
+                public_keys = json.loads(args.public_keys.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"invalid --public-keys JSON: {exc}") from exc
+            if not isinstance(public_keys, dict):
+                raise ValueError("--public-keys must contain a JSON object")
+            destination = write_static_nodes(args.artifact_root, public_keys)
+            print(f"[OK] Wrote static-node lists to {destination}")
+            return
         rendered = render_plan(plan, args.output)
         print(f"[OK] Rendered public plan at {rendered}")
-    except (InventoryError, ExecutionError, ApplyError, ValueError) as exc:
+    except (InventoryError, ExecutionError, ApplyError, ArtifactError, ValueError) as exc:
         raise SystemExit(f"[ERROR] {exc}") from exc
 
 

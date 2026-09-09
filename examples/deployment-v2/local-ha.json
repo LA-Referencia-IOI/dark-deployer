@@ -33,5 +33,12 @@
     "dashboard-web": {"repository_url": "git@github.com:LA-Referencia-IOI/dashboard-web.git"},
     "dark-ipfs": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-ipfs.git"}
   },
-  "settings": {}, "secrets": {}, "exposure": {}
+  "settings": {},
+  "secrets": {
+    "master-wallet": {"path": "blockchain/master-wallet", "consumers": ["apps", "chain-bootstrap"]},
+    "ipfs-swarm-key": {"path": "ipfs/swarm.key", "consumers": ["storage"]},
+    "ipfs-cluster-secret": {"path": "ipfs/cluster.secret", "consumers": ["storage"]},
+    "minter-db-password": {"path": "minter/db-password", "consumers": ["apps"]}
+  },
+  "exposure": {}
 }

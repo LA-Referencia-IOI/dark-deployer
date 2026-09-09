@@ -240,3 +240,14 @@ def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
     for component, definition in components.items():
         definition = _object(definition, f"components.{component}")
         _string(definition.get("repository_url"), f"components.{component}.repository_url")
+
+    secrets = _object(raw["secrets"], "secrets")
+    for secret_id, definition in secrets.items():
+        _identifier(secret_id, f"secrets.{secret_id}")
+        definition = _object(definition, f"secrets.{secret_id}")
+        relative = _string(definition.get("path"), f"secrets.{secret_id}.path")
+        if Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise _error(f"secrets.{secret_id}.path must be a safe path relative to secrets_root")
+        consumers = definition.get("consumers", [])
+        if not isinstance(consumers, list) or not all(isinstance(item, str) for item in consumers):
+            raise _error(f"secrets.{secret_id}.consumers must be a string list")
