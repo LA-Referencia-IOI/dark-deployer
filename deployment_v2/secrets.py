@@ -53,6 +53,24 @@ def initialize_greenfield_secrets(plan: DeploymentPlan, output: Path, *, overwri
             runtime = output / known[runtime_id]["path"]
             _write_private(runtime, f"DATABASE_URL=postgresql://dark:{password}@postgres/minter\n", overwrite=overwrite)
             created.append(runtime)
+    dashboard_id = "dashboard-runtime-env"
+    if dashboard_id in known:
+        password = secrets.token_urlsafe(32)
+        app_key = "base64:" + __import__("base64").b64encode(secrets.token_bytes(32)).decode("ascii")
+        dashboard_runtime = output / known[dashboard_id]["path"]
+        _write_private(
+            dashboard_runtime,
+            "\n".join((
+                f"APP_KEY={app_key}",
+                f"DB_PASSWORD={password}",
+                f"MYSQL_PASSWORD={password}",
+                f"MYSQL_ROOT_PASSWORD={secrets.token_urlsafe(32)}",
+                "REDIS_PASSWORD=null",
+                "",
+            )),
+            overwrite=overwrite,
+        )
+        created.append(dashboard_runtime)
     if "ipfs-swarm-key" in known:
         path = output / known["ipfs-swarm-key"]["path"]
         _write_private(path, "/key/swarm/psk/1.0.0/\n/base16/\n" + secrets.token_hex(32) + "\n", overwrite=overwrite)

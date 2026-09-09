@@ -24,7 +24,7 @@ def _require(result, description: str) -> None:
 
 def _source_paths(project_root: Path) -> tuple[Path, ...]:
     """Public sources required by generated Compose; private/generated state stays out."""
-    return tuple(path for path in (project_root / "components", project_root / "blockchain") if path.exists())
+    return tuple(path for path in (project_root / "components", project_root / "blockchain", project_root / "deployment_v2") if path.exists())
 
 
 def _remote_prepare(executor: SshExecutor, machine, project_root: Path, run_dir: Path, group_dir: Path) -> Path:
@@ -114,8 +114,12 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
                 _require(executor.run(("cp", str(node_source / filename), str(node_target / filename))), f"install {filename} for {node} on {machine.id}")
     compose = ("docker", "compose", "--project-name", f"{plan.deployment_id}-{group.id}", "-f", str(destination / "compose.yaml"))
     if group.kind == "apps":
+        _require(executor.run((*compose, "--profile", "rpc", "up", "-d", "blockchain-rpc"), timeout=1800.0), f"start RPC for {group.id}")
+        _require(executor.run((*compose, "run", "--rm", "contracts-deploy"), timeout=1800.0), f"deploy or verify contracts for {group.id}")
         _require(executor.run((*compose, "up", "-d", "--build", "postgres"), timeout=1800.0), f"start PostgreSQL for {group.id}")
         _require(executor.run((*compose, "run", "--rm", "minter-migrate"), timeout=1800.0), f"run Alembic migration for {group.id}")
+        _require(executor.run((*compose, "up", "-d", "dashboard-mysql"), timeout=1800.0), f"start dashboard MySQL for {group.id}")
+        _require(executor.run((*compose, "run", "--rm", "dashboard-migrate"), timeout=1800.0), f"run Laravel migration for {group.id}")
     _require(executor.run((*compose, "up", "-d", "--build"), timeout=1800.0), f"apply group {group.id}")
 
 

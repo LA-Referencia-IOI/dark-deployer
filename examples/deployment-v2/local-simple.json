@@ -11,10 +11,12 @@
   "settings": {},
   "secrets": {
     "master-wallet": {"path": "blockchain/master-wallet", "consumers": ["apps", "chain-bootstrap"]},
+    "contract-signer": {"path": "blockchain/contract-signer", "consumers": ["apps"]},
     "ipfs-swarm-key": {"path": "ipfs/swarm.key", "consumers": ["storage"]},
     "ipfs-cluster-secret": {"path": "ipfs/cluster.secret", "consumers": ["storage"]},
     "minter-db-password": {"path": "minter/db-password", "consumers": ["apps"]},
     "minter-runtime-env": {"path": "runtime/apps/minter.private.env", "consumers": ["apps"]}
+    ,"dashboard-runtime-env": {"path": "runtime/apps/dashboard.private.env", "consumers": ["apps"]}
   },
   "exposure": {}
 }

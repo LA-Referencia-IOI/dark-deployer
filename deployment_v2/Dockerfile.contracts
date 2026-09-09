@@ -1,0 +1,7 @@
+FROM python:3.10-slim
+
+WORKDIR /runner
+RUN pip install --no-cache-dir 'web3>=6.20,<7'
+COPY deployment_v2/contracts.py /runner/contracts.py
+COPY components/blockchain/dark-dapp/dARK_dapp/compiled /contracts
+ENTRYPOINT ["python", "/runner/contracts.py"]

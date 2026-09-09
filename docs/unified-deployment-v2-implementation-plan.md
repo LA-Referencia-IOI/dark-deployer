@@ -62,6 +62,27 @@ provisionar el paquete mínimo exportado para cada rol. Falta probar este flujo
 en una red Docker nueva y añadir la comprobación de hashes para evitar una
 sustitución accidental de genesis o claves.
 
+El renderer ya emite entornos públicos diferenciados para Store, Minter, Admin,
+Resolver y Dashboard. Deriva RPC, Store API, chain ID, política de réplica y
+endpoints Docker internos; no acepta esos valores repetidos en `.env`. Aún no
+materializa las direcciones de contratos, firmantes ni las credenciales
+MySQL/Laravel, que deben llegar desde jobs y secretos privados.
+
+El mismo mecanismo ya modela Dashboard: `secrets-init` genera el entorno
+privado de Laravel/MySQL, el runner espera el healthcheck de MySQL y ejecuta
+`dashboard-migrate` antes de iniciar el contenedor web. La ejecución Docker
+real sigue pendiente, por lo que esta descripción no sustituye una prueba de
+compatibilidad de la imagen PHP/Laravel.
+
+El job `contracts-deploy` ya compila una imagen mínima con los artefactos
+versionados de Authority y dARK. Lee un firmante desde `secrets_root`, espera
+un RPC con el chain ID del inventario y escribe `handoff.json` más
+`contracts.env` en el data root de apps. Si encuentra un handoff previo,
+comprueba código on-chain y se niega a redesplegar si la evidencia no coincide.
+Admin, Resolver y Minter cargan ese entorno generado. Falta ejecutar una
+prueba de cadena limpia y comparar ABI/bytecode con el proceso de compilación
+actual antes de declararlo sustituto de `dark-dapp/deploy.py`.
+
 Solo pasó pruebas estructurales y `docker compose config`; no usarlo aún para
 reemplazar la instalación actual. Faltan la generación e importación completa
 de identidades/genesis Besu, jobs de contratos/migraciones, health checks,
