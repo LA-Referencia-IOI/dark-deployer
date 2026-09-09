@@ -149,6 +149,7 @@ noid_provider_config.ini
 
 
 .devtime.json
+dark-runtime-monitor.jsonl
 dARK_dapp/compiled/
 
 components/
