@@ -1,5 +1,8 @@
 # Diagnóstico temporal: `detail=full`, retención y reconciliación
 
+> **Diagnóstico fechado.** Los números y conclusiones corresponden a la
+> ejecución indicada en este documento. No representan una métrica en vivo.
+
 > **Histórico, reemplazado.** Este documento analiza el workflow previo con
 > recovery automático; la referencia vigente es la
 > [implementación de simplificación](worker-workflow-simplification-implementation.md).

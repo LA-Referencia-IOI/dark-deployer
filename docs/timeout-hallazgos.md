@@ -1,12 +1,20 @@
 # Hallazgos de timeouts y disponibilidad de publicación
 
+> **Nota de vigencia.** Este documento conserva el diagnóstico que condujo al
+> diseño actual. La fuente operativa de topología es ahora
+> `deployment-topology.json`; las menciones históricas a
+> `storage-topology.json` describen el incidente y no una configuración que
+> deba editarse.
+
 Documento operativo actualizado el 4 de septiembre de 2026. Distingue la evidencia observada en el entorno Docker local de los cambios aplicados y de las tareas aún pendientes antes de producción.
 
 ## Resumen actual
 
 La causa principal de los timeouts observados fue eliminada: Store API ya no mantiene abierta la solicitud mientras espera que IPFS Cluster confirme el primer pin. Tras aceptar el contenido, Cluster devuelve el CID y Store API lo retorna inmediatamente al minter.
 
-La política de replicación se simplificó. `storage-topology.json` (schema v3) es la fuente de verdad y solo define nodos, pools de acceso y:
+La política de replicación se simplificó. La sección `storage` de
+`deployment-topology.json` (schema v3) es la fuente de verdad y solo define
+nodos, pools de acceso y:
 
 ```json
 {
@@ -23,7 +31,7 @@ El estado de un CID se calcula contando los elementos de `peer_map` de Cluster q
 
 | Área | Cambio |
 | --- | --- |
-| Topología | `storage-topology.json` v3 valida nodos, IPs, grupos de acceso y los umbrales de publicación/objetivo. |
+| Topología | `deployment-topology.json` v3 valida nodos, IPs, grupos de acceso y los umbrales de publicación/objetivo. |
 | Configuración | El instalador genera para Store API solo el documento de endpoints del grupo seleccionado y propaga los umbrales al minter. |
 | Escritura | `POST /v1/store` usa Cluster REST `POST /add?local=true` y devuelve el CID sin esperar un pin. |
 | Estado | Store API informa `total_replicas` y `checked_at`; el minter aplica la política. |

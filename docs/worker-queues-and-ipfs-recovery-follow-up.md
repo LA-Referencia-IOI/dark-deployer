@@ -1,5 +1,9 @@
 # Colas de workers, pinning asíncrono y recuperación
 
+> **Estado: análisis histórico.** El Recovery Worker descrito aquí no existe
+> en la implementación vigente. Las decisiones aplicadas se encuentran en
+> [`worker-cycle-evidence.md`](worker-cycle-evidence.md).
+
 > **Histórico, reemplazado.** Este diagnóstico describe el modelo retirado de
 > `PENDING`/`RECOVERABLE` y recovery automático. La referencia vigente es la
 > [implementación de simplificación](worker-workflow-simplification-implementation.md),

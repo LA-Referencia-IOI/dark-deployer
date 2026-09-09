@@ -1,5 +1,16 @@
 # Historial de consolidación de la plataforma
 
+Este archivo es el registro histórico del repositorio padre. No es una guía
+operativa. Para instrucciones actuales consulte [`README.md`](README.md),
+[`deployer-operations.md`](deployer-operations.md),
+[`production-single-site-four-server-installation.md`](production-single-site-four-server-installation.md)
+y [`ipfs-architecture.md`](ipfs-architecture.md).
+
+Los documentos de propuesta, diagnóstico y verificación fechados se conservan
+como evidencia de decisiones y pruebas. Si contienen nombres antiguos como
+`dark-env`, `storage-topology.json`, Recovery Worker o cuotas históricas,
+deben interpretarse dentro de su fecha y no como configuración vigente.
+
 Este documento resume los cambios acumulados durante la actualización de la plataforma dARK y sirve como guía para leer los commits temáticos de los componentes.
 
 ## Deployer y topología

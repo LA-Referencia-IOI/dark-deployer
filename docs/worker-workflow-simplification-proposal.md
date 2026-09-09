@@ -1,5 +1,9 @@
 # Propuesta de simplificación del workflow de publicación
 
+> **Estado: histórico.** La propuesta fue implementada y posteriormente
+> simplificada. La referencia actual es [`worker-cycle-evidence.md`](worker-cycle-evidence.md);
+> este documento conserva únicamente el razonamiento original.
+
 **Estado:** implementado pendiente de recreación y verificación en una base nueva
 
 **Fecha:** 2026-09-07

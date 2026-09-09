@@ -124,14 +124,8 @@ servers and two IPFS servers on one VPN, see
 For a reproducible local lab that simulates those four Linux servers in
 Docker, see [local-infra/README.md](local-infra/README.md).
 
-For the proposed next-generation installer — modular roles, one canonical
-topology, arbitrary IPFS nodes and host-specific bundles — see the detailed
-[modular installation redesign proposal](docs/modular-installation-redesign-proposal.md).
-
-The minter worker workflow and its fresh-database verification handoff are
-documented in [the simplification proposal](docs/worker-workflow-simplification-proposal.md),
-[the implementation record](docs/worker-workflow-simplification-implementation.md),
-and [the verification procedure](docs/worker-workflow-simplification-verification.md).
+The complete documentation map, including the distinction between current
+guides and historical analyses, is in [docs/README.md](docs/README.md).
 For code-based evidence of the Metadata → Replication → Chain cycle, timing,
 state transitions and Store API pin semantics, see [Worker cycle evidence](docs/worker-cycle-evidence.md).
 

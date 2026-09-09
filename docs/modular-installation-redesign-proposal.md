@@ -1,5 +1,11 @@
 # Propuesta: instalador modular por servidor y topología canónica
 
+> **Estado: propuesta superada.** La topología canónica y los bundles por host
+> ya están implementados en `deployment-topology.json` y en `dark-deployer`.
+> Este archivo se conserva como historial de decisiones; para operar el
+> sistema use [`deployer-operations.md`](deployer-operations.md) y
+> [`production-single-site-four-server-installation.md`](production-single-site-four-server-installation.md).
+
 ## Propósito y alcance
 
 Este documento propone una evolución del instalador de dARK para que una

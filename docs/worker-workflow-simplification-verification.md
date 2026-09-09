@@ -1,5 +1,9 @@
 # Handoff: recreate and verify the simplified minter workflow
 
+> **Estado: procedimiento histórico de verificación.** Úselo como evidencia
+> de pruebas anteriores; para la operación actual prevalecen el código de
+> `main` y [`worker-cycle-evidence.md`](worker-cycle-evidence.md).
+
 This document is intentionally a handoff procedure. The implementation changes
 the initial schema and has **no database compatibility path**. Do not execute
 these commands against a database that must be retained.

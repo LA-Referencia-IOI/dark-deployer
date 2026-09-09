@@ -1,5 +1,12 @@
 # Análisis de topología de redes por sede
 
+> **Documento histórico de transición.** La arquitectura vigente se describe
+> en [`decoupled-infrastructure.md`](decoupled-infrastructure.md),
+> [`ipfs-architecture.md`](ipfs-architecture.md) y el índice de
+> [`docs/README.md`](README.md). Las referencias a `dark-env`,
+> `storage-topology.json` o a la estructura anterior del instalador que quedan
+> más abajo son evidencia de la evolución y no instrucciones de instalación.
+
 Documento de referencia para la conectividad de una sede. La simulación
 developer ya implementa las redes separadas descritas aquí; en producción el
 backbone corresponde a la VPN privada, no a un bridge Docker compartido.

@@ -60,22 +60,24 @@ con Store APIs remotas; Cluster propaga globalmente por la red privada.
 
 ### Primera sede de producción
 
-La forma productiva actual tiene cuatro servidores en una VPN/LAN privada:
+La forma productiva actual tiene cinco hosts en una VPN/LAN privada:
 
 | Host | Rol | Servicios |
 | --- | --- | --- |
-| site-a-blockchain-1 | blockchain | Besu, contratos y explorador. |
-| site-a-apps-1 | apps | Admin, Minter, Worker, Resolver, Store API y dashboard. |
+| site-a-apps-1 | apps | RPC no validador, contratos, APIs y dashboard. |
+| site-a-blockchain-a | blockchain-a | Besu validator01/02. |
+| site-a-blockchain-b | blockchain-b | Besu validator03/04. |
 | site-a-storage-1 | storage-node | Un Kubo y un peer IPFS Cluster. |
 | site-a-storage-2 | storage-node | Un Kubo y un peer IPFS Cluster. |
 
-El inventario de ejemplo usa 10.20.30.10, .20, .31 y .32; son valores de
-documentación, no direcciones para copiar a otro entorno.
+El inventario de ejemplo usa 10.20.30.10 (apps), .20 (blockchain-a), .21
+(blockchain-b), .31 y .32 (storage); son valores de documentación, no
+direcciones para copiar a otro entorno.
 
 ~~~text
                      VPN / LAN privada
 
- Clientes ──> Apps ─────────────> Blockchain
+ Clientes ──> Apps/RPC ─────────> Blockchain A/B
                 │
                 ├───────────────> storage-1: Kubo + Cluster
                 └───────────────> storage-2: Kubo + Cluster
@@ -114,8 +116,8 @@ signer o coordinación de nonces.
 | Chain Worker | interno | Publica CIDs y URL en contratos. | PostgreSQL + blockchain. |
 | dark-core-resolver-api | 8002 | Resuelve ARKs y entrega metadata. | Sin base local. |
 | dark-store-api | 8003 | Fachada HTTP frente a IPFS/Cluster. | Sin base propia. |
-| Kubo | 5001 admin; 4001 swarm | Bloques IPFS, lectura e importación. | Volúmenes IPFS. |
-| IPFS Cluster | 9094/9095/9096 | Pinset CRDT, asignación y réplica. | Volúmenes Cluster. |
+| Kubo | 5001 admin; 4001 swarm | Bloques IPFS, lectura e importación. | Bind mount por nodo. |
+| IPFS Cluster | 9094/9095/9096 | Pinset CRDT, asignación y réplica. | Bind mount por nodo. |
 | dark-core-lib | biblioteca | SDK blockchain y abstracción de metadata. | Ninguno. |
 | Dashboard | 8081 | Administración y visibilidad operativa. | Servicios asociados. |
 

@@ -1,5 +1,10 @@
 # Propuesta para mejorar el rendimiento del Metadata Worker e IPFS
 
+> **Estado: histórico.** Las decisiones aplicadas se documentan en
+> [`publication-latency-control.md`](publication-latency-control.md) y
+> [`ipfs-architecture.md`](ipfs-architecture.md). No use esta propuesta como
+> configuración vigente.
+
 ## Estado de este documento
 
 Este es un análisis histórico de rendimiento. Su diseño de referencia fue

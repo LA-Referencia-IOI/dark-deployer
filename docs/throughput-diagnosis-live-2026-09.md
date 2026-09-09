@@ -1,5 +1,8 @@
 # Diagnóstico en vivo del throughput de publicación
 
+> **Evidencia histórica fechada.** Este documento registra una ejecución
+> concreta y no debe leerse como un estado actual permanente.
+
 Fecha de observación: 2026-09-08. Este documento describe el comportamiento
 observado durante una carga masiva y no cambia la implementación.
 

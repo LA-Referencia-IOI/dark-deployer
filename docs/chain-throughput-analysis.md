@@ -1,5 +1,10 @@
 # Análisis de throughput de blockchain, Core API y Chain Worker
 
+> **Documento de análisis.** Las cifras y recomendaciones están fechadas y no
+> sustituyen la configuración actual. Para el comportamiento operativo vigente
+> consulte [`dark-technical-reference.md`](dark-technical-reference.md) y
+> [`deployer-operations.md`](deployer-operations.md).
+
 Documento de referencia para evaluar el rendimiento de publicación de ARKs en
 la instalación developer actual. No propone cambios de código; su objetivo es
 dar a otro agente una base verificable para decidir si conviene aumentar la

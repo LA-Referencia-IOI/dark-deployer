@@ -1,5 +1,10 @@
 # Plano de Implementação — Infraestrutura Desacoplada (Sandbox / Production)
 
+> **Estado: histórico.** Este plan describe la transición que dio lugar a la
+> implementación actual. No es una guía de ejecución; consulte
+> [`deployer-operations.md`](deployer-operations.md) y
+> [`decoupled-infrastructure.md`](decoupled-infrastructure.md).
+
 > **Status: histórico / implementado.** Este documento preserva o plano que
 > orientou a implementação original. Não deve ser usado como runbook atual.
 > As instruções de storage também foram substituídas pelo cluster global em
