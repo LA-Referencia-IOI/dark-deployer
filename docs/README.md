@@ -42,6 +42,10 @@ son derivados y no fuentes de configuración.
 
 ## Documentos históricos o de trabajo
 
+Plan de implementación pendiente: [despliegue unificado v2](unified-deployment-v2-implementation-plan.md).
+Define el inventario v2 y la ejecución local/SSH propuesta; aún no es una guía
+operativa de la versión instalada.
+
 Los siguientes documentos conservan contexto útil, pero no deben usarse como
 instrucciones actuales sin contrastarlos con las referencias canónicas:
 

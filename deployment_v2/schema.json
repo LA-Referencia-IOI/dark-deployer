@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dARK deployment topology v2",
+  "type": "object",
+  "required": ["version", "deployment", "defaults", "networks", "machines", "groups", "blockchain", "storage", "components", "settings", "secrets", "exposure"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": 2},
+    "deployment": {"type": "object"},
+    "defaults": {"type": "object"},
+    "networks": {"type": "object"},
+    "machines": {"type": "object", "minProperties": 1},
+    "groups": {"type": "object", "minProperties": 1},
+    "blockchain": {"type": "object"},
+    "storage": {"type": "object"},
+    "components": {"type": "object"},
+    "settings": {"type": "object"},
+    "secrets": {"type": "object"},
+    "exposure": {"type": "object"}
+  }
+}

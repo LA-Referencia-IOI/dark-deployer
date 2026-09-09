@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "deployment": {"id": "dark-site-a", "private_network": "vpn"},
+  "defaults": {
+    "ssh": {"user": "dark", "port": 22, "private_key_file": "/opt/dark-controller/deploy.key", "known_hosts_file": "/opt/dark-controller/known_hosts"},
+    "paths": {"workspace_root": "/opt/dark", "data_root": "/srv/dark", "secrets_root": "/opt/dark/secrets"},
+    "docker": {"subnet_pool": "172.30.0.0/16", "subnet_prefix": 24}
+  },
+  "networks": {"vpn": {"kind": "vpn", "cidr": "10.20.30.0/24"}},
+  "machines": {
+    "apps-1": {"execution": "ssh", "management_address": "apps.internal.example", "addresses": {"vpn": "10.20.30.20"}},
+    "blockchain-a-1": {"execution": "ssh", "management_address": "blockchain-a.internal.example", "addresses": {"vpn": "10.20.30.10"}},
+    "blockchain-b-1": {"execution": "ssh", "management_address": "blockchain-b.internal.example", "addresses": {"vpn": "10.20.30.11"}},
+    "storage-1": {"execution": "ssh", "management_address": "storage-1.internal.example", "addresses": {"vpn": "10.20.30.31"}},
+    "storage-2": {"execution": "ssh", "management_address": "storage-2.internal.example", "addresses": {"vpn": "10.20.30.32"}}
+  },
+  "groups": {
+    "apps": {"kind": "apps", "machine": "apps-1", "members": ["rpc01"]},
+    "validators-a": {"kind": "validators", "machine": "blockchain-a-1", "members": ["validator01", "validator02"], "explorer": true},
+    "validators-b": {"kind": "validators", "machine": "blockchain-b-1", "members": ["validator03", "validator04"]},
+    "storage-a": {"kind": "storage", "machine": "storage-1", "members": ["storage-a"]},
+    "storage-b": {"kind": "storage", "machine": "storage-2", "members": ["storage-b"]}
+  },
+  "blockchain": {"chain_id": 2025, "besu_image": "hyperledger/besu:26.6.1", "nodes": {"rpc01": {"validator": false}, "validator01": {"validator": true}, "validator02": {"validator": true}, "validator03": {"validator": true}, "validator04": {"validator": true}}},
+  "storage": {"cluster_name": "dark-site-a", "nodes": ["storage-a", "storage-b"], "replication": {"publish_after_replicas": 1, "target_replicas": 2}},
+  "components": {
+    "dark-dapp": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-dapp.git"}, "dark-explorador": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-explorer.git"}, "dark-core-lib": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-core-lib.git"}, "dark-core-admin-api": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-core-admin-api.git"}, "dark-core-resolver-api": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-core-resolver-api.git"}, "dark-store-api": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-store-api.git"}, "dark-core-minter-api": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-core-minter-api.git"}, "dashboard-web": {"repository_url": "git@github.com:LA-Referencia-IOI/dashboard-web.git"}, "dark-ipfs": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-ipfs.git"}
+  },
+  "settings": {}, "secrets": {}, "exposure": {}
+}
