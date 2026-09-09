@@ -446,6 +446,106 @@ Los perfiles serían plantillas de inventario, no ramas paralelas del instalador
 - La instalación es reanudable por host y por etapa, sin repetir despliegues ya
   completados.
 
+## Dimensiones adicionales que el agente debe diseñar
+
+Antes de cambiar el instalador, el agente debería resolver explícitamente estas
+dimensiones. Son parte del comportamiento de un despliegue, aunque no estén
+representadas hoy por un único módulo.
+
+### Plan, simulación e idempotencia
+
+- `plan` debe mostrar cambios previstos sin crear directorios, clonar código ni
+  arrancar contenedores.
+- Cada operación debe ser idempotente: repetir `apply` no debe regenerar
+  identidades Besu, cambiar secretos ni duplicar redes.
+- El plan debe distinguir `create`, `update`, `keep`, `skip` y `blocked`, con
+  la razón de cada decisión.
+- Debe existir una confirmación explícita antes de acciones destructivas como
+  borrar contenedores, volúmenes o datos de cadena.
+
+### Capacidades y preflight por host
+
+El inventario describe lo que se desea, pero el host debe demostrar que puede
+ejecutarlo. El preflight local/SSH debería comprobar versión de Python, Docker,
+Compose, Git, arquitectura CPU, espacio libre, puertos disponibles, permisos
+de bind mounts, reloj sincronizado, resolución DNS y conectividad hacia las
+direcciones VPN necesarias. Un fallo debe indicar host, comprobación y acción
+correctiva antes de aplicar cambios parciales.
+
+### Artefactos y ciclo de vida
+
+- Separar fuentes de componentes, imágenes construidas, artefactos Besu,
+  archivos generados y datos persistentes.
+- Registrar hashes de inventario, Compose, genesis, imágenes y bundles
+  efectivamente aplicados.
+- Definir qué se genera una vez (identidades, genesis), qué se regenera
+  determinísticamente (entornos, static nodes) y qué nunca se copia
+  automáticamente (claves privadas y datos).
+- Definir retención y limpieza de bundles para que una actualización no elimine
+  artefactos necesarios para rollback.
+
+### Secretos y límites de confianza
+
+El agente debe especificar el origen de cada secreto, quién lo instala, cómo se
+verifica su modo/permisos y cómo se evita que aparezca en logs, manifiestos,
+errores o imágenes. Las operaciones `push` y `apply` deben transportar solo
+referencias públicas y validar que los secretos ya existen en el host destino.
+También debe quedar claro qué host puede recibir la clave de firma, las claves
+Besu, los secretos IPFS y las credenciales de cada API.
+
+### Redes, nombres y puertos
+
+El plan debe separar tres ámbitos: aliases Docker internos al host, direcciones
+de gestión SSH y direcciones VPN entre hosts. Para cada servicio conviene
+declarar `listen`, `advertise` y `allowed_clients`; no se deben reutilizar
+aliases Docker como direcciones de static nodes o endpoints remotos. La
+validación debe detectar colisiones de puertos y redes antes del arranque.
+
+### Dependencias, orden y concurrencia
+
+El instalador debe representar un grafo de dependencias, no solo una lista de
+pasos. Por ejemplo, validadores y RPC preceden contratos, APIs preceden
+dashboard y los peers IPFS deben estar disponibles antes de Store API. En un
+despliegue multiservidor, se debe decidir qué hosts pueden aplicarse en paralelo
+y qué barreras de salud son obligatorias entre fases.
+
+### Fallos, reanudación y rollback
+
+- Guardar estado por host, etapa, bundle y hash aplicado.
+- Permitir reanudar desde el primer fallo sin repetir etapas sanas.
+- Clasificar fallos recuperables (red, timeout, imagen aún no disponible) y no
+  recuperables (inventario inválido, genesis incompatible, secreto ausente).
+- Definir rollback de configuración sin borrar datos persistentes y un
+  procedimiento separado para rollback de imágenes o contratos.
+- Hacer que un fallo en un host deje el resto del despliegue en un estado
+  explícito (`partial`, `blocked` o `ready-to-resume`).
+
+### Observabilidad y auditoría
+
+Cada aplicación debe emitir un identificador de despliegue, host, etapa,
+comando resumido, duración, resultado y hash del bundle. El resumen final debe
+separar “configurado”, “arrancado”, “saludable” y “verificado”; un contenedor
+`Running` no basta como prueba de servicio operativo. Los mismos checks deben
+funcionar con transporte local y SSH.
+
+### Seguridad operacional
+
+El diseño debe limitar comandos remotos, evitar interpolación insegura de
+valores del inventario, usar listas de argumentos cuando sea posible y
+redactar credenciales de URLs. Debe documentar qué acciones requieren root,
+qué usuario ejecuta Docker y cómo se protege el socket Docker. También debe
+prever timeouts, reintentos acotados y cancelación limpia para no dejar locks o
+procesos huérfanos.
+
+### Pruebas de equivalencia
+
+El mismo inventario y plan deberían probarse con dos ejecutores: un ejecutor
+local y uno SSH contra un Linux de laboratorio. La aceptación debe comparar
+servicios, redes, variables derivadas, puertos, hashes y respuestas de health,
+no solo que `docker compose up` termine sin error. Deben existir fixtures para
+developer simple, developer HA, producción completa, host ausente, IP
+duplicada, secreto faltante y pérdida de conectividad durante `apply`.
+
 ## Riesgos que el siguiente agente debe resolver
 
 - Definir cómo se transporta el código de componentes al host remoto: clone en
