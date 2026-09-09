@@ -8,6 +8,12 @@ repositorio padre y los scripts de blockchain/storage. Sirve como base para
 unificar en el futuro la instalación local y la instalación en servidores
 Linux remotos. No cambia código ni propone todavía una migración ejecutable.
 
+**Convención de nombres:** aquí, “inventario de despliegue” e
+`deployment-topology.json` significan exactamente el mismo artefacto. Ese es
+el nombre de archivo canónico. `deployment-inventory.json` y
+`storage-topology.json` aparecen solo como nombres históricos que no deben
+volver a ser fuentes independientes.
+
 ## Conclusión ejecutiva
 
 El instalador actual ya tiene dos mecanismos parcialmente convergentes:
