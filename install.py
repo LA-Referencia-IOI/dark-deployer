@@ -242,6 +242,36 @@ def wait_for_rpc(
     sys.exit(1)
 
 
+def wait_for_qbft(rpc_url: str, timeout_seconds: int = 120) -> None:
+    """Require peer quorum and block production before deploying contracts."""
+    print(f"[INFO] Waiting for QBFT peers and block production at '{rpc_url}'...")
+    deadline = time.time() + timeout_seconds
+    previous_block: int | None = None
+    last = "QBFT has not reached quorum"
+    while time.time() < deadline:
+        try:
+            def rpc(method: str, params: list) -> dict:
+                request = urllib.request.Request(
+                    rpc_url,
+                    data=json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1}).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return json.loads(response.read().decode())
+            block = int(rpc("eth_blockNumber", []).get("result", "0x0"), 16)
+            peers = rpc("admin_peers", []).get("result", [])
+            if len(peers) >= 4 and previous_block is not None and block > previous_block:
+                print(f"[OK] QBFT quorum is healthy: {len(peers)} peers, block {block}.")
+                return
+            previous_block = block
+            last = f"peers={len(peers)}, block={block}"
+        except Exception as exc:
+            last = str(exc)
+        time.sleep(2)
+    print(f"[ERROR] QBFT did not reach quorum/block production within {timeout_seconds}s: {last}")
+    sys.exit(1)
+
+
 def wait_for_http_ready(
     url: str,
     service_name: str,
@@ -1363,12 +1393,32 @@ def install_blockchain(prefix: str, env: dict) -> None:
     if not runtime.is_dir():
         print("[ERROR] Internal blockchain runtime is missing.")
         sys.exit(1)
-    update_env_file(str(runtime / ".env.runtime"), {
+    blockchain_data_root = env.get("BLOCKCHAIN_DATA_ROOT", "").strip()
+    if not blockchain_data_root:
+        blockchain_data_root = str((PROJECT_ROOT / ".generated" / "blockchain" / "data").resolve())
+    data_root = Path(blockchain_data_root).expanduser()
+    if not data_root.is_absolute():
+        data_root = (PROJECT_ROOT / data_root).resolve()
+    node_names = {
+        "rpc": ("rpc01",), "validators-a": ("validator01", "validator02"),
+        "validators-b": ("validator03", "validator04"),
+        "all": ("rpc01", "validator01", "validator02", "validator03", "validator04"),
+    }[role]
+    for node_name in node_names:
+        (data_root / node_name).mkdir(parents=True, exist_ok=True)
+    blockchain_data_root = str(data_root)
+    runtime_env = {
         key: env[key] for key in (
             "CHAIN_ID", "BLOCKCHAIN_RUNTIME_ROLE", "BLOCKCHAIN_RUNTIME_CHAIN_ARTIFACT_DIR",
             "BLOCKCHAIN_BACKBONE_IPS", "BLOCKCHAIN_BIND_ADDRESS", "BESU_IMAGE"
         ) if env.get(key, "").strip()
-    })
+    }
+    runtime_env["BLOCKCHAIN_DATA_ROOT"] = blockchain_data_root
+    update_env_file(str(runtime / ".env.runtime"), runtime_env)
+    # Compose is invoked with the root .env for every role. Keep the same
+    # resolved bind-mount root there; otherwise Compose silently falls back to
+    # the legacy blockchain/nodes layout while setup.sh writes elsewhere.
+    update_env_file(str(PROJECT_ROOT / ".env"), {"BLOCKCHAIN_DATA_ROOT": blockchain_data_root})
     if role not in {"validators-a", "validators-b"}:
         prepare_blockchain_runtime_platform_wallet(str(runtime), env)
     run_shell("./setup.sh", cwd=str(runtime))
@@ -1411,6 +1461,7 @@ def install_blockchain(prefix: str, env: dict) -> None:
         central_compose(f"{profile_args} up -d --build{service}", project=project, compose_file=compose_file)
     if role in {"all", "rpc"}:
         wait_for_rpc(env.get("RPC_URL", "http://127.0.0.1:8545"), timeout_seconds=180)
+        wait_for_qbft(env.get("RPC_URL", "http://127.0.0.1:8545"), timeout_seconds=180)
 
     submodules: dict[str, str] = {}
     if role in {"all", "rpc"}:
@@ -1965,14 +2016,24 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
             "REPLICATION_STATUS_BATCH_SIZE",
             template_env.get("REPLICATION_STATUS_BATCH_SIZE", "200"),
         ).strip(),
+        "REPLICATION_PROMOTION_BATCH_SIZE": env.get(
+            "REPLICATION_PROMOTION_BATCH_SIZE",
+            template_env.get("REPLICATION_PROMOTION_BATCH_SIZE", "20"),
+        ).strip(),
+        "REPLICATION_MAINTENANCE_CYCLE_SECONDS": env.get(
+            "REPLICATION_MAINTENANCE_CYCLE_SECONDS",
+            template_env.get("REPLICATION_MAINTENANCE_CYCLE_SECONDS", "5"),
+        ).strip(),
         "REPLICATION_IDLE_SLEEP_SECONDS": env.get(
             "REPLICATION_IDLE_SLEEP_SECONDS",
             template_env.get("REPLICATION_IDLE_SLEEP_SECONDS", "2"),
         ).strip(),
-        "REPLICATION_PINNING_RECHECK_SECONDS": env.get("REPLICATION_PINNING_RECHECK_SECONDS", template_env.get("REPLICATION_PINNING_RECHECK_SECONDS", "2")).strip(),
-        "REPLICATION_QUEUED_RECHECK_SECONDS": env.get("REPLICATION_QUEUED_RECHECK_SECONDS", template_env.get("REPLICATION_QUEUED_RECHECK_SECONDS", "5")).strip(),
-        "REPLICATION_VISIBILITY_RECHECK_SECONDS": env.get("REPLICATION_VISIBILITY_RECHECK_SECONDS", template_env.get("REPLICATION_VISIBILITY_RECHECK_SECONDS", "3")).strip(),
-        "REPLICATION_MAX_RECHECK_SECONDS": env.get("REPLICATION_MAX_RECHECK_SECONDS", template_env.get("REPLICATION_MAX_RECHECK_SECONDS", "30")).strip(),
+        "REPLICATION_FIRST_PIN_RECHECK_SECONDS": env.get("REPLICATION_FIRST_PIN_RECHECK_SECONDS", template_env.get("REPLICATION_FIRST_PIN_RECHECK_SECONDS", "15")).strip(),
+        "REPLICATION_FIRST_PIN_SECOND_RECHECK_SECONDS": env.get("REPLICATION_FIRST_PIN_SECOND_RECHECK_SECONDS", template_env.get("REPLICATION_FIRST_PIN_SECOND_RECHECK_SECONDS", "60")).strip(),
+        "REPLICATION_FIRST_PIN_MAX_RECHECK_SECONDS": env.get("REPLICATION_FIRST_PIN_MAX_RECHECK_SECONDS", template_env.get("REPLICATION_FIRST_PIN_MAX_RECHECK_SECONDS", "300")).strip(),
+        "REPLICATION_DURABILITY_RECHECK_SECONDS": env.get("REPLICATION_DURABILITY_RECHECK_SECONDS", template_env.get("REPLICATION_DURABILITY_RECHECK_SECONDS", "300")).strip(),
+        "REPLICATION_DURABILITY_SECOND_RECHECK_SECONDS": env.get("REPLICATION_DURABILITY_SECOND_RECHECK_SECONDS", template_env.get("REPLICATION_DURABILITY_SECOND_RECHECK_SECONDS", "900")).strip(),
+        "REPLICATION_DURABILITY_MAX_RECHECK_SECONDS": env.get("REPLICATION_DURABILITY_MAX_RECHECK_SECONDS", template_env.get("REPLICATION_DURABILITY_MAX_RECHECK_SECONDS", "3600")).strip(),
         "REPLICATION_REPAIR_GRACE_SECONDS": env.get("REPLICATION_REPAIR_GRACE_SECONDS", template_env.get("REPLICATION_REPAIR_GRACE_SECONDS", "120")).strip(),
         "REPLICATION_REPAIR_COOLDOWN_SECONDS": env.get("REPLICATION_REPAIR_COOLDOWN_SECONDS", template_env.get("REPLICATION_REPAIR_COOLDOWN_SECONDS", "900")).strip(),
         "REPLICATION_WORKER_STORAGE_RETRY_SECONDS": env.get(
@@ -1989,7 +2050,11 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
         ).strip(),
         "CHAIN_WORKER_PAGE_SIZE": env.get(
             "CHAIN_WORKER_PAGE_SIZE",
-            template_env.get("CHAIN_WORKER_PAGE_SIZE", "20"),
+            template_env.get("CHAIN_WORKER_PAGE_SIZE", "100"),
+        ).strip(),
+        "CHAIN_WORKER_RPC_BATCH_SIZE": env.get(
+            "CHAIN_WORKER_RPC_BATCH_SIZE",
+            template_env.get("CHAIN_WORKER_RPC_BATCH_SIZE", "50"),
         ).strip(),
         "CHAIN_WORKER_SLEEP_SECONDS": env.get(
             "CHAIN_WORKER_SLEEP_SECONDS",
@@ -2885,6 +2950,17 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
             env[f"{prefix}_IPFS_SWARM_KEY_FILE"].strip(),
             env[f"{prefix}_IPFS_CLUSTER_SECRET_FILE"].strip(),
         )
+        # IPFS/Kubo and Cluster state lives on the host filesystem.  Use an
+        # absolute path so Compose never resolves it relative to an arbitrary
+        # working directory.  Production may override this with a dedicated
+        # mount point; developer data stays inside the generated runtime.
+        if prefix == "DEVELOPER":
+            storage_data_root = str((PROJECT_ROOT / ".generated" / "storage" / "data").resolve())
+        else:
+            storage_data_root = env.get(f"{prefix}_STORAGE_DATA_ROOT", "/srv/dark/storage").strip() or "/srv/dark/storage"
+        generated["STORAGE_DATA_ROOT"] = storage_data_root
+        for subdir in ("ipfs", "export", "cluster"):
+            (Path(storage_data_root) / node.id / subdir).mkdir(parents=True, exist_ok=True)
         if prefix == "DEVELOPER":
             remote_nodes = tuple(candidate for candidate in runtime.nodes if candidate != node)
             generated.update({
