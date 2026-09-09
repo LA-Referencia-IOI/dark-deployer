@@ -12,6 +12,7 @@ fase posterior; este índice cubre primero el repositorio padre y su instalador.
 | Arquitectura completa | [`dark-technical-reference.md`](dark-technical-reference.md) y [`DARK_2.0_ARCHITECTURE.md`](../DARK_2.0_ARCHITECTURE.md) |
 | APIs y contratos | [`DARK_2.0_API_REFERENCE.md`](../DARK_2.0_API_REFERENCE.md) |
 | Operación del instalador | [`deployer-operations.md`](deployer-operations.md) |
+| Análisis del instalador local/remoto y unificación propuesta | [`installer-local-remote-unification-analysis.md`](installer-local-remote-unification-analysis.md) |
 | Producción y bundles por host | [`production-single-site-four-server-installation.md`](production-single-site-four-server-installation.md) |
 | Topología física y redes | [`production-single-site-four-server-installation.md`](production-single-site-four-server-installation.md) y [`dark-technical-reference.md`](dark-technical-reference.md) |
 | IPFS, Cluster y Store API | [`ipfs-architecture.md`](ipfs-architecture.md) y [`ipfs-concepts-and-dark-store-api.md`](ipfs-concepts-and-dark-store-api.md) |
