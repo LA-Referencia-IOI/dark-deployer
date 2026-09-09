@@ -71,6 +71,11 @@ class DeploymentV2Tests(unittest.TestCase):
             endpoints = json.loads((output / "groups" / "apps" / "config" / "storage-endpoints.json").read_text())
             self.assertEqual(endpoints["version"], 1)
             self.assertEqual({node["id"] for node in endpoints["nodes"]}, {"storage-a", "storage-b"})
+            minter_env = (output / "groups" / "apps" / "env" / "minter.env").read_text()
+            self.assertIn("DARK_RPC_URL=http://blockchain-rpc:8545", minter_env)
+            self.assertIn("REPLICATION_TARGET_REPLICAS=2", minter_env)
+            dashboard_env = (output / "groups" / "apps" / "env" / "dashboard.env").read_text()
+            self.assertIn("MINTER_BASE_URL=http://minter-api:8001", dashboard_env)
 
     def test_preflight_is_read_only_and_reports_each_check(self):
         machine = Machine(
@@ -102,10 +107,11 @@ class DeploymentV2Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "secrets"
             created = initialize_greenfield_secrets(plan, output)
-            self.assertEqual(len(created), 4)
+            self.assertEqual(len(created), 5)
             self.assertEqual((output / "ipfs" / "cluster.secret").stat().st_mode & 0o777, 0o600)
             runtime = (output / "runtime" / "apps" / "minter.private.env").read_text()
             self.assertIn("DATABASE_URL=postgresql://dark:", runtime)
+            self.assertIn("APP_KEY=base64:", (output / "runtime" / "apps" / "dashboard.private.env").read_text())
             self.assertFalse((output / "blockchain" / "master-wallet").exists())
             with self.assertRaises(SecretError):
                 initialize_greenfield_secrets(plan, output)
