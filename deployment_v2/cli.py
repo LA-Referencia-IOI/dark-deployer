@@ -13,7 +13,7 @@ from .inventory import InventoryError, load_inventory
 from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
-from .runner import ApplyError, apply, push
+from .runner import ApplyError, apply, push, recreate_service
 from .artifacts import ArtifactError, export_chain_role, initialize_chain, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
@@ -24,7 +24,7 @@ from .acquire import AcquisitionError, acquire_components
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init"):
+    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "recreate", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
@@ -43,6 +43,10 @@ def _parser() -> argparse.ArgumentParser:
                                  help="existing complete chain artifact; otherwise generate one for a new local chain")
             command.add_argument("--skip-acquire", action="store_true",
                                  help="reuse existing component checkouts instead of cloning/updating them")
+        if name == "recreate":
+            command.add_argument("--group", required=True)
+            command.add_argument("--service", required=True)
+            command.add_argument("--build", action="store_true")
         if name == "chain-bootstrap":
             command.add_argument("--output", required=True, type=Path)
             command.add_argument("--master-wallet-address", required=True)
@@ -225,6 +229,11 @@ def main() -> None:
             return
         if args.action == "install":
             _install(args, plan)
+            return
+        if args.action == "recreate":
+            project_root = Path(__file__).resolve().parents[1]
+            recreate_service(plan, project_root, args.group, args.service, build=args.build)
+            print(f"[OK] Recreated service {args.service} in group {args.group}")
             return
         if args.action == "push":
             project_root = Path(__file__).resolve().parents[1]

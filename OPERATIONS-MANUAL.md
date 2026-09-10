@@ -124,6 +124,20 @@ Comprobar además manualmente:
 - Los tres workers del Minter vivos; no existe Recovery Worker.
 - Dashboard accesible y usando las APIs internas.
 
+Para actualizar o recrear un único servicio sin reiniciar el resto del grupo:
+
+```bash
+venv/bin/python deploy.py recreate \
+  --inventory examples/deployment-v2/local-ha.json \
+  --group apps \
+  --service dashboard \
+  --build
+```
+
+`--build` es opcional. El comando valida que el servicio pertenezca al grupo y
+ejecuta Compose únicamente para ese servicio; también funciona con grupos en
+hosts SSH.
+
 ## 7. Prueba funcional manual
 
 Abrir `notebooks/dark_platform_deposit_lifecycle.ipynb` y ejecutar sus celdas

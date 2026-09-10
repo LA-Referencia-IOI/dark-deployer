@@ -236,6 +236,35 @@ def push(plan: DeploymentPlan, project_root: Path) -> Path:
         raise ApplyError(str(exc)) from exc
 
 
+def recreate_service(plan: DeploymentPlan, project_root: Path, group_id: str, service: str, *, build: bool = False) -> None:
+    """Recreate one Compose service without touching other group services."""
+    root = run_root(project_root, plan.deployment_id)
+    if not (root / "status.json").exists():
+        raise ApplyError(f"no deployment run found: {root}; run install first")
+    effective = _effective_plan_for_apply(plan, project_root, root, stage_sources=False)
+    try:
+        group = effective.group(group_id)
+    except StopIteration as exc:
+        raise ApplyError(f"unknown deployment group: {group_id}") from exc
+    machine = effective.machine(group.machine_id)
+    executor = resolve_executor(machine)
+    directory = _group_directory_for_runtime(effective, group, root)
+    compose = ("docker", "compose", "--project-name", f"{plan.deployment_id}-{group.id}", "-f", str(directory / "compose.yaml"))
+    inspected = executor.run((*compose, "config", "--services"))
+    _require(inspected, f"inspect Compose services for {group_id}")
+    if service not in set(inspected.stdout.split()):
+        raise ApplyError(f"service {service!r} is not defined in group {group_id}")
+    command = (*compose, "up", "-d", "--force-recreate", *(('--build',) if build else ()), service)
+    _require(executor.run(command, timeout=1800.0), f"recreate {service} in {group_id}")
+
+
+def _group_directory_for_runtime(plan: DeploymentPlan, group: Group, root: Path) -> Path:
+    machine = plan.machine(group.machine_id)
+    if isinstance(resolve_executor(machine), SshExecutor):
+        return Path(machine.workspace_root) / ".generated" / "deployment-v2" / root.name / "groups" / group.id
+    return root / "local" / machine.id / "groups" / group.id
+
+
 def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resume: bool, defer_verification: bool = False) -> Path:
     """Internal apply implementation; caller owns the controller journal lock."""
     bundle = root / "bundle"
