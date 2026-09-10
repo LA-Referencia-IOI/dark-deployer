@@ -300,6 +300,11 @@ Detectar colisiones por máquina, bind IP y protocolo, incluyendo wildcard.
 Dos nodos storage en una máquina usan aliases distintos; publicar APIs solo
 si se necesitan probes externos y darles puertos únicos derivados.
 
+`exposure.services` ya es un contrato cerrado para RPC, APIs, dashboard y
+explorer: cada entrada declara `bind` (`loopback` o `private`) y puerto. El
+renderer no publica una API/UI sin esa entrada y el inventario rechaza dos
+exposiciones que pretendan usar el mismo bind y puerto en una máquina.
+
 ### 4.4 Grupos, blockchain, storage y tuning
 
 - `groups[id]`: `kind: apps|validators|storage`, `machine` y `members` (IDs de

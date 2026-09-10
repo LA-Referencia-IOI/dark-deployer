@@ -311,6 +311,25 @@ def _validate_exposure(raw: dict[str, Any], groups: list[Group]) -> None:
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise _error(f"exposure.services.{service}.port must be a TCP port")
     apps = next(group for group in groups if group.kind == "apps")
+    providers = {
+        "blockchain-rpc": apps.machine_id,
+        "admin-api": apps.machine_id,
+        "minter-api": apps.machine_id,
+        "resolver-api": apps.machine_id,
+        "store-api": apps.machine_id,
+        "dashboard": apps.machine_id,
+        "explorer": next(group.machine_id for group in groups if group.explorer),
+    }
+    used: dict[tuple[str, str, int], str] = {}
+    for service, definition in services.items():
+        key = (providers[service], str(definition["bind"]), int(definition["port"]))
+        prior = used.get(key)
+        if prior is not None:
+            raise _error(
+                f"exposure.services.{service} duplicates {prior} on "
+                f"{key[0]} {key[1]}:{key[2]}"
+            )
+        used[key] = service
     remote_explorer = any(group.explorer and group.machine_id != apps.machine_id for group in groups)
     if remote_explorer:
         rpc = services.get("blockchain-rpc")

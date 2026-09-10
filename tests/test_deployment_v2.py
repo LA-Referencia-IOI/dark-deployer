@@ -201,6 +201,11 @@ class DeploymentV2Tests(unittest.TestCase):
             path.write_text(json.dumps(remote))
             with self.assertRaisesRegex(InventoryError, "blockchain-rpc must bind private"):
                 load_inventory(path)
+            remote = json.loads((ROOT / "examples" / "deployment-v2" / "production-five-host.json").read_text())
+            remote["exposure"]["services"]["store-api"]["port"] = 8001
+            path.write_text(json.dumps(remote))
+            with self.assertRaisesRegex(InventoryError, "duplicates minter-api"):
+                load_inventory(path)
 
     def test_greenfield_secret_init_generates_runtime_files_without_wallet(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
