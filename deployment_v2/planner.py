@@ -38,6 +38,6 @@ def build_plan(inventory_path: Path) -> DeploymentPlan:
     steps.append(PlanStep("verify:deployment", apps.machine_id, apps.id, "verify", ("apply:apps", *storage_steps), "Verify chain, storage and application readiness"))
     return DeploymentPlan(
         deployment_id=raw["deployment"]["id"], inventory_path=inventory_path.resolve(),
-        machines=machines, groups=groups, networks=networks, endpoints=derive_endpoints(machines, groups),
+        machines=machines, groups=groups, networks=networks, endpoints=derive_endpoints(machines, groups, raw),
         docker_subnets=allocate_docker_subnets(machines, raw), steps=tuple(steps), raw=raw,
     )

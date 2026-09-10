@@ -36,5 +36,5 @@
     "minter-runtime-env": {"path": "runtime/apps/minter.private.env", "consumers": ["apps"]}
     ,"dashboard-runtime-env": {"path": "runtime/apps/dashboard.private.env", "consumers": ["apps"]}
   },
-  "exposure": {}
+  "exposure": {"services": {"blockchain-rpc": {"bind": "private", "port": 8545}, "admin-api": {"bind": "private", "port": 8000}, "minter-api": {"bind": "private", "port": 8001}, "resolver-api": {"bind": "private", "port": 8002}, "store-api": {"bind": "private", "port": 8003}, "dashboard": {"bind": "private", "port": 8081}, "explorer": {"bind": "private", "port": 25000}}}
 }

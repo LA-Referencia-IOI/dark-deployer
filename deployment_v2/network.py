@@ -9,6 +9,26 @@ from .model import Endpoint, Group, Machine
 
 
 _CHAIN_NODE_ORDER = ("validator01", "validator02", "validator03", "validator04", "rpc01")
+SERVICE_DEFAULT_PORTS = {
+    "blockchain-rpc": 8545, "admin-api": 8000, "minter-api": 8001,
+    "resolver-api": 8002, "store-api": 8003, "dashboard": 8081,
+    "explorer": 25000,
+}
+
+
+def exposed_service_port(raw: dict, service: str) -> int:
+    """Return the sole host port for an explicitly exposed service."""
+    definition = raw["exposure"]["services"].get(service)
+    if not definition:
+        return 0
+    return int(definition["port"])
+
+
+def exposure_bind_address(machine: Machine, raw: dict, service: str) -> str | None:
+    definition = raw["exposure"]["services"].get(service)
+    if not definition:
+        return None
+    return "127.0.0.1" if definition["bind"] == "loopback" else machine.private_address
 
 
 def allocate_docker_subnets(machines: tuple[Machine, ...], raw: dict) -> dict[str, str]:
@@ -37,7 +57,7 @@ def endpoint_for(service: str, provider_machine: Machine, consumer_machine: Mach
     return Endpoint(service, provider_machine.private_address, port, "private")
 
 
-def derive_endpoints(machines: tuple[Machine, ...], groups: tuple[Group, ...]) -> tuple[Endpoint, ...]:
+def derive_endpoints(machines: tuple[Machine, ...], groups: tuple[Group, ...], raw: dict) -> tuple[Endpoint, ...]:
     by_machine = {machine.id: machine for machine in machines}
     apps = next(group for group in groups if group.kind == "apps")
     apps_machine = by_machine[apps.machine_id]
@@ -55,9 +75,8 @@ def derive_endpoints(machines: tuple[Machine, ...], groups: tuple[Group, ...]) -
             ipfs_port = 5001 if provider.id == apps_machine.id else 5001 + slot
             result.append(endpoint_for(f"ipfs-{group.members[0]}", provider, apps_machine, ipfs_port))
         elif group.kind == "apps":
-            result.append(endpoint_for("blockchain-rpc", provider, provider, 8545))
-            for name, port in (("admin-api", 8000), ("minter-api", 8001), ("resolver-api", 8002), ("store-api", 8003), ("dashboard", 8081)):
-                result.append(endpoint_for(name, provider, provider, port))
+            for name in ("blockchain-rpc", "admin-api", "minter-api", "resolver-api", "store-api", "dashboard"):
+                result.append(endpoint_for(name, provider, provider, exposed_service_port(raw, name) or SERVICE_DEFAULT_PORTS[name]))
     return tuple(result)
 
 

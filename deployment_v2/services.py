@@ -7,7 +7,14 @@ the destination host; no generated Compose file includes legacy Compose files.
 from __future__ import annotations
 
 from .model import DeploymentPlan, Group
-from .network import chain_node_addresses, host_bind_address, storage_announce_address, storage_container_addresses
+from .network import (
+    chain_node_addresses,
+    exposure_bind_address,
+    exposed_service_port,
+    host_bind_address,
+    storage_announce_address,
+    storage_container_addresses,
+)
 
 
 def _network(plan: DeploymentPlan, group: Group) -> str:
@@ -24,6 +31,13 @@ def _secret_file(plan: DeploymentPlan, machine_id: str, secret_id: str) -> str:
     definition = plan.raw["secrets"].get(secret_id, {})
     relative_path = definition.get("path", secret_id)
     return f"{machine.secrets_root}/{relative_path}"
+
+
+def _exposed_ports(plan: DeploymentPlan, machine, service: str, container_port: int) -> list[str]:
+    """Publish a UI/API only when the inventory explicitly permits it."""
+    bind = exposure_bind_address(machine, plan.raw, service)
+    port = exposed_service_port(plan.raw, service)
+    return [f"{bind}:{port}:{container_port}"] if bind is not None and port else []
 
 
 def _storage_hosts(plan: DeploymentPlan, group: Group, service_prefix: str) -> list[str]:
@@ -45,7 +59,7 @@ def _rpc_url_for_group(plan: DeploymentPlan, group: Group) -> str:
     consumer = plan.machine(group.machine_id)
     if provider.id == consumer.id:
         return "http://blockchain-rpc:8545"
-    return f"http://{provider.private_address}:8545"
+    return f"http://{provider.private_address}:{exposed_service_port(plan.raw, 'blockchain-rpc')}"
 
 
 def _apps(plan: DeploymentPlan, group: Group) -> dict:
@@ -72,7 +86,7 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
             **common,
             "image": plan.raw["blockchain"]["besu_image"],
             "profiles": ["rpc"],
-            "ports": [f"{bind}:8545:8545", f"{bind}:30307:30307/tcp", f"{bind}:30307:30307/udp"],
+            "ports": [*_exposed_ports(plan, machine, "blockchain-rpc", 8545), f"{bind}:30307:30307/tcp", f"{bind}:30307:30307/udp"],
             "volumes": [f"{data}/blockchain/rpc01:/data", f"{data}/blockchain/config:/config:ro"],
             "command": [
                 "--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json",
@@ -83,10 +97,10 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
             "networks": {network: {"ipv4_address": node_addresses["rpc01"]}},
         },
         "postgres": {**common, "image": "postgres:15-alpine", "environment": {"POSTGRES_USER": "dark", "POSTGRES_PASSWORD_FILE": "/run/secrets/minter-db-password", "POSTGRES_DB": "minter"}, "volumes": [f"{data}/minter/postgres:/var/lib/postgresql/data"], "secrets": ["minter-db-password"], "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U dark -d minter"], "interval": "3s", "timeout": "3s", "retries": 20}},
-        "admin-api": {**common, "build": _build(components, "services/dark-core-admin-api/Dockerfile"), "env_file": admin_env, "ports": [f"{bind}:8000:8000"]},
-        "resolver-api": {**common, "build": _build(components, "services/dark-core-resolver-api/Dockerfile"), "env_file": resolver_env, "ports": [f"{bind}:8002:8002"]},
-        "store-api": {**common, "build": _build(components, "services/dark-store-api/Dockerfile"), "env_file": ["./env/store-api.env"], "ports": [f"{bind}:8003:8003"], "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]},
-        "minter-api": {**common, "build": minter_build, "env_file": minter_env, "ports": [f"{bind}:8001:8001"], "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
+        "admin-api": {**common, "build": _build(components, "services/dark-core-admin-api/Dockerfile"), "env_file": admin_env, "ports": _exposed_ports(plan, machine, "admin-api", 8000)},
+        "resolver-api": {**common, "build": _build(components, "services/dark-core-resolver-api/Dockerfile"), "env_file": resolver_env, "ports": _exposed_ports(plan, machine, "resolver-api", 8002)},
+        "store-api": {**common, "build": _build(components, "services/dark-store-api/Dockerfile"), "env_file": ["./env/store-api.env"], "ports": _exposed_ports(plan, machine, "store-api", 8003), "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]},
+        "minter-api": {**common, "build": minter_build, "env_file": minter_env, "ports": _exposed_ports(plan, machine, "minter-api", 8001), "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "minter-migrate": {**common, "profiles": ["setup"], "build": minter_build, "command": ["migrate"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_healthy"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "rpc-probe": {**common, "profiles": ["setup"], "build": contracts_build, "entrypoint": ["python"], "environment": {"DARK_RPC_URL": "http://blockchain-rpc:8545", "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]) }},
         "contracts-deploy": {**common, "profiles": ["setup"], "build": contracts_build, "environment": {"DARK_RPC_URL": "http://blockchain-rpc:8545", "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]), "CONTRACT_SIGNER_FILE": "/run/dark-secrets/contract-signer", "CONTRACT_HANDOFF_FILE": "/state/handoff.json", "CONTRACT_RUNTIME_ENV_FILE": "/state/contracts.env"}, "volumes": [f"{_secret_file(plan, machine.id, 'contract-signer')}:/run/dark-secrets/contract-signer:ro", f"{data}/contracts:/state"]},
@@ -95,7 +109,7 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
         "minter-chain-worker": {**common, "build": minter_build, "command": ["chain-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "dashboard-mysql": {**common, "image": "mysql:8.0", "env_file": dashboard_db_env, "volumes": [f"{data}/dashboard/mysql:/var/lib/mysql"], "healthcheck": {"test": ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$$MYSQL_ROOT_PASSWORD\""], "interval": "3s", "timeout": "3s", "retries": 20}},
         "dashboard-redis": {**common, "image": "redis:7-alpine", "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{data}/dashboard/redis:/data"]},
-        "dashboard": {**common, "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "ports": [f"{bind}:8081:8080"], "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},
+        "dashboard": {**common, "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "ports": _exposed_ports(plan, machine, "dashboard", 8080), "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},
         "dashboard-migrate": {**common, "profiles": ["setup"], "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "depends_on": {"dashboard-mysql": {"condition": "service_healthy"}}, "command": ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan migrate --force --seed && php artisan storage:link --force"], "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},
     }
     return {
@@ -121,7 +135,7 @@ def _validators(plan: DeploymentPlan, group: Group) -> dict:
         explorer_root = f"{machine.workspace_root}/components/blockchain/dark-explorador"
         services["explorer"] = {
             "build": _build(machine.workspace_root, "blockchain/dark-explorador/Dockerfile"),
-            "restart": "unless-stopped", "ports": [f"{bind}:25000:80"],
+            "restart": "unless-stopped", "ports": _exposed_ports(plan, machine, "explorer", 80),
             "environment": {"RPC_HTTP_URL": _rpc_url_for_group(plan, group)},
             "volumes": [
                 f"{explorer_root}/default.conf.template:/etc/nginx/templates/default.conf.template:ro",

@@ -26,6 +26,9 @@ REQUIRED_COMPONENTS = frozenset(
         "dashboard-web", "dark-ipfs",
     }
 )
+EXPOSABLE_SERVICES = frozenset(
+    {"blockchain-rpc", "admin-api", "minter-api", "resolver-api", "store-api", "dashboard", "explorer"}
+)
 
 
 def _load_schema() -> dict[str, Any]:
@@ -292,6 +295,29 @@ def _validate_settings(settings: dict[str, Any]) -> None:
         _positive_integer(store[field], f"settings.store.{field}")
 
 
+def _validate_exposure(raw: dict[str, Any], groups: list[Group]) -> None:
+    exposure = _object(raw["exposure"], "exposure")
+    _only_keys(exposure, "exposure", {"services"})
+    services = _object(exposure.get("services"), "exposure.services")
+    unknown = sorted(set(services).difference(EXPOSABLE_SERVICES))
+    if unknown:
+        raise _error("exposure.services has unknown service(s): " + ", ".join(unknown))
+    for service, definition in services.items():
+        definition = _object(definition, f"exposure.services.{service}")
+        _only_keys(definition, f"exposure.services.{service}", {"bind", "port"})
+        if definition.get("bind") not in {"loopback", "private"}:
+            raise _error(f"exposure.services.{service}.bind must be loopback or private")
+        port = definition.get("port")
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            raise _error(f"exposure.services.{service}.port must be a TCP port")
+    apps = next(group for group in groups if group.kind == "apps")
+    remote_explorer = any(group.explorer and group.machine_id != apps.machine_id for group in groups)
+    if remote_explorer:
+        rpc = services.get("blockchain-rpc")
+        if not isinstance(rpc, dict) or rpc.get("bind") != "private":
+            raise _error("exposure.services.blockchain-rpc must bind private when explorer is on another machine")
+
+
 def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
     apps = [group for group in groups if group.kind == "apps"]
     validator_groups = [group for group in groups if group.kind == "validators"]
@@ -351,6 +377,7 @@ def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
     if not isinstance(publish, int) or not isinstance(target, int) or not 1 <= publish <= target <= len(node_ids):
         raise _error("storage replication must satisfy 1 <= publish_after_replicas <= target_replicas <= storage nodes")
     _validate_settings(_object(raw["settings"], "settings"))
+    _validate_exposure(raw, groups)
     components = _object(raw["components"], "components")
     missing = REQUIRED_COMPONENTS.difference(components)
     if missing:

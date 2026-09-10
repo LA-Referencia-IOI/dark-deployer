@@ -1,6 +1,7 @@
 # Plan de implementación del despliegue unificado v2
 
-Estado: implementación incremental en curso; la instalación real v2 aún no está certificada.
+Estado: primera candidata estable para prueba Docker; la instalación real v2
+aún no está certificada.
 Fecha: 2026-09-10. Base: [análisis del instalador](installer-local-remote-unification-analysis.md).
 
 ## Estado de implementación
@@ -424,6 +425,69 @@ referenciados quedan en inventario. Entornos de servicios se generan; credencial
 se materializan en destino con modo restringido y nunca entran en manifiesto
 público. Conservar compatibilidad con la forma de consumir credenciales de cada
 aplicación; soportar archivo montado cuando exista y entorno privado cuando no.
+
+## 6.1 Handoff: prueba Docker limpia de la primera candidata estable
+
+Esta es la primera versión apta para que otro agente pruebe Docker. Hasta
+completar esta receta no se debe retirar `install.py`, modificar el inventario
+activo heredado ni declarar v2 como reemplazo de producción. La prueba debe
+usar un árbol de datos nuevo y el ejemplo HA; no reutilizar `.generated`,
+secretos, genesis ni volúmenes de una instalación previa.
+
+1. Confirmar Python 3.12, Docker Compose v2 y que los nueve checkouts de
+   `components/` estén en las ramas declaradas por
+   `examples/deployment-v2/local-ha.json`.
+2. Ejecutar solo comprobaciones no mutantes:
+
+   ```bash
+   venv/bin/python deploy.py validate --inventory examples/deployment-v2/local-ha.json
+   venv/bin/python deploy.py plan --inventory examples/deployment-v2/local-ha.json
+   venv/bin/python deploy.py preflight --inventory examples/deployment-v2/local-ha.json
+   ```
+
+3. Preparar una raíz nueva bajo
+   `.generated/deployment-v2/dark-local-ha/local/local/secrets`. Ejecutar
+   `secrets-init` con esa ruta como `--output`:
+
+   ```bash
+   venv/bin/python deploy.py secrets-init \
+     --inventory examples/deployment-v2/local-ha.json \
+     --output .generated/deployment-v2/dark-local-ha/local/local/secrets
+   ```
+
+   Provisionar después, con modo
+   `0600`, `blockchain/master-wallet` y `blockchain/contract-signer`. Para una
+   cadena greenfield ambos deben corresponder a la misma cuenta financiada por
+   el genesis; el comando nunca inventa ni reemplaza esa identidad.
+4. Con la dirección pública de esa cuenta, inicializar el artefacto QBFT en
+   `.../secrets/blockchain/role-artifact`:
+
+   ```bash
+   venv/bin/python deploy.py chain-init \
+     --inventory examples/deployment-v2/local-ha.json \
+     --output .generated/deployment-v2/dark-local-ha/local/local/secrets/blockchain/role-artifact \
+     --master-wallet-address 0x...
+   venv/bin/python deploy.py chain-verify \
+     --inventory examples/deployment-v2/local-ha.json \
+     --artifact-root .generated/deployment-v2/dark-local-ha/local/local/secrets/blockchain/role-artifact
+   ```
+
+5. En una máquina de prueba sin datos previos, ejecutar `deploy.py apply` una
+   única vez. No reejecutar tras un timeout: primero consultar
+   `deploy.py status` y después `deploy.py resume` si el journal identifica una
+   fase incompleta.
+6. Ejecutar `deploy.py verify`. La aceptación exige los cinco grupos Compose
+   en ejecución, chain ID `2025`, bloque RPC visible y liveness de Minter y
+   Store. Luego efectuar manualmente una reserva, persistencia y publicación
+   de un ARK para probar el flujo funcional completo.
+7. Repetir `deploy.py apply` sin cambiar inventario, fuentes ni secretos para
+   comprobar idempotencia: no se deben reemplazar identidades, genesis,
+   contratos, migraciones ni datos. Registrar comandos, hashes del manifiesto
+   QBFT y resultado en el informe de prueba.
+
+Si falla un paso, conservar `.generated/deployment-v2/<id>/status.json` y
+`journal.jsonl`; son la evidencia de diagnóstico. No borrar datos ni ejecutar
+un reset como parte de la reanudación.
 
 ## 7. Orden de aplicación y handoffs
 

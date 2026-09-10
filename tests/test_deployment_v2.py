@@ -185,6 +185,23 @@ class DeploymentV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(InventoryError, "metadata has incompatible"):
                 load_inventory(path)
 
+    def test_exposure_controls_host_ports_and_remote_explorer_needs_private_rpc(self):
+        document = json.loads((ROOT / "examples" / "deployment-v2" / "local-ha.json").read_text())
+        del document["exposure"]["services"]["store-api"]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "local.json"
+            path.write_text(json.dumps(document))
+            plan = build_plan(path)
+            rendered = render_plan(plan, Path(temporary) / "bundle")
+            apps = yaml.safe_load((rendered / "groups" / "apps" / "compose.yaml").read_text())
+            self.assertEqual(apps["services"]["store-api"]["ports"], [])
+
+            remote = json.loads((ROOT / "examples" / "deployment-v2" / "production-five-host.json").read_text())
+            remote["exposure"]["services"]["blockchain-rpc"]["bind"] = "loopback"
+            path.write_text(json.dumps(remote))
+            with self.assertRaisesRegex(InventoryError, "blockchain-rpc must bind private"):
+                load_inventory(path)
+
     def test_greenfield_secret_init_generates_runtime_files_without_wallet(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
         with tempfile.TemporaryDirectory() as temporary:
