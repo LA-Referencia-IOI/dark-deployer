@@ -275,6 +275,11 @@ def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
         definition = _object(definition, f"components.{component}")
         _only_keys(definition, f"components.{component}", {"repository_url", "branch"})
         _string(definition.get("repository_url"), f"components.{component}.repository_url")
+        branch = definition.get("branch")
+        if branch is not None:
+            branch = _string(branch, f"components.{component}.branch")
+            if branch.startswith("-") or ".." in branch or branch.endswith("/"):
+                raise _error(f"components.{component}.branch is not a safe Git branch name")
 
     secrets = _object(raw["secrets"], "secrets")
     for secret_id, definition in secrets.items():

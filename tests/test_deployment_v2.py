@@ -59,6 +59,16 @@ class DeploymentV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(InventoryError, "storage contains unknown"):
                 load_inventory(path)
 
+    def test_rejects_an_unsafe_component_branch(self):
+        source = ROOT / "examples" / "deployment-v2" / "local-ha.json"
+        document = json.loads(source.read_text())
+        document["components"]["dark-core-lib"]["branch"] = "../unexpected"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "bad.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "safe Git branch"):
+                load_inventory(path)
+
     def test_render_produces_public_group_configs_without_secret_values(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
         with tempfile.TemporaryDirectory() as temporary:

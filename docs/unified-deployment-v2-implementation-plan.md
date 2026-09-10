@@ -81,6 +81,10 @@ la evidencia exacta de lo enviado; la rama sigue siendo la referencia humana
 de entrega. La comparación estricta de URLs remotas y una política sobre trees
 sucios continúan pendientes de decisión operativa.
 
+Los tres ejemplos v2 fijan `branch: main` para los nueve componentes. Una
+topología puede declarar otra rama, pero no puede usar referencias ambiguas o
+inseguras (`..`, nombres que empiezan por `-` o terminan con `/`).
+
 El mismo mecanismo ya modela Dashboard: `secrets-init` genera el entorno
 privado de Laravel/MySQL, el runner espera el healthcheck de MySQL y ejecuta
 `dashboard-migrate` antes de iniciar el contenedor web. El job instala las
