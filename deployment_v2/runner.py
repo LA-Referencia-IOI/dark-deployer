@@ -306,6 +306,9 @@ def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resum
         status["sources"] = evidence
     write_status(root, status)
     try:
+        actionable = [step for step in plan.steps if step.action in {"compose_apply", "apps_bootstrap", "apps_runtime"}]
+        total_actionable = len(actionable)
+        progress_index = 0
         for step in plan.steps:
             if step.action == "preflight":
                 checks = run_preflight(effective_plan.machine(step.machine_id))
@@ -340,6 +343,9 @@ def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resum
                 record(root, {"step": step.id, "state": "skipped", "reason": "already_applied", "machine": step.machine_id, "group": step.group_id})
                 continue
             record(root, {"step": step.id, "state": "started", "machine": step.machine_id, "group": step.group_id})
+            progress_index += 1
+            started_at = time.monotonic()
+            print(f"[PROGRESS] {progress_index}/{total_actionable} {step.group_id} ({step.action})...", flush=True)
             phase = "bootstrap" if step.action == "apps_bootstrap" else "runtime" if step.action == "apps_runtime" else "full"
             _apply_group(effective_plan, effective_plan.group(step.group_id), project_root, root, bundle, phase=phase)
             completed_steps.append(step.id)
@@ -347,6 +353,7 @@ def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resum
                 status["groups"][step.group_id] = "applied"  # type: ignore[index]
             write_status(root, status)
             record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id, "group": step.group_id})
+            print(f"[PROGRESS] {progress_index}/{total_actionable} {step.group_id} listo ({time.monotonic() - started_at:.1f}s)", flush=True)
     except (ExecutionError, ApplyError, SourceError) as exc:
         status["state"] = "failed"
         status["error"] = str(exc)
