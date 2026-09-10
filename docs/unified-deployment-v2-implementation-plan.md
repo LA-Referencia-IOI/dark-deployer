@@ -250,6 +250,11 @@ sin ambigüedad, local; si no, SSH. DNS con resultados locales y remotos mezclad
 produce error. `localhost` no sirve como destino remoto. Nunca decidir por el
 nombre developer/production, ni pasar a local porque SSH falló.
 
+El plan v2 normaliza `auto` a `local` o `ssh` antes de derivar aliases,
+bridges y endpoints. La resolución solo lee DNS e interfaces: no crea redes ni
+contacta Docker. Por ello un `auto` local recibe el mismo modelo de red que una
+máquina declarada `local`, y un `auto` remoto usa exclusivamente el modelo SSH.
+
 Preflight confirma el daemon elegido y su identidad. Docker CLI disponible no
 demuestra que el daemon sea local: rechazar contextos TCP/SSH en ejecución local;
 aceptar socket Docker Desktop/local explícito. En destino SSH ejecutar contra

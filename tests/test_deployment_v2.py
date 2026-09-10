@@ -35,6 +35,16 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertEqual(len(plan.docker_subnets), machines)
             self.assertTrue(any(step.id == "verify:deployment" for step in plan.steps))
 
+    def test_auto_machine_is_resolved_before_networks_are_derived(self):
+        document = json.loads((ROOT / "examples" / "deployment-v2" / "local-simple.json").read_text())
+        document["machines"]["local"]["execution"] = "auto"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "auto.json"
+            path.write_text(json.dumps(document))
+            plan = build_plan(path)
+        self.assertEqual(plan.machine("local").execution, "local")
+        self.assertEqual(plan.endpoints[0].transport, "docker")
+
     def test_rejects_duplicate_private_address_and_bad_replication(self):
         source = ROOT / "examples" / "deployment-v2" / "production-five-host.json"
         document = json.loads(source.read_text())

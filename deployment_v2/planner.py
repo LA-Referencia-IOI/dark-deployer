@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
+from .executor import LocalExecutor, resolve_executor
 from .inventory import load_inventory
 from .model import DeploymentPlan, PlanStep
 from .network import allocate_docker_subnets, derive_endpoints
@@ -11,6 +13,15 @@ from .network import allocate_docker_subnets, derive_endpoints
 
 def build_plan(inventory_path: Path) -> DeploymentPlan:
     raw, machines, groups, networks = load_inventory(inventory_path)
+    # ``auto`` is useful in a portable inventory, but endpoint rendering needs
+    # a concrete answer: Docker aliases/bridge addresses are valid only on a
+    # daemon actually selected as local. Resolution is read-only (DNS/interface
+    # inspection) and happens before the otherwise pure placement calculations.
+    machines = tuple(
+        replace(machine, execution="local" if isinstance(resolve_executor(machine), LocalExecutor) else "ssh")
+        if machine.execution == "auto" else machine
+        for machine in machines
+    )
     steps: list[PlanStep] = []
     for machine in machines:
         steps.append(PlanStep(f"preflight:{machine.id}", machine.id, "", "preflight", (), f"Validate Docker and required paths on {machine.id}"))
