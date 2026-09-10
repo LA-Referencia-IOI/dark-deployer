@@ -69,7 +69,7 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
     data = f"{machine.data_root}/{plan.deployment_id}/apps"
     bind = host_bind_address(machine)
     node_addresses = chain_node_addresses(plan)
-    minter_build = _build(components, "services/dark-core-minter-api/Dockerfile")
+    minter_build = _build(components, "dark-core-minter-api/Dockerfile")
     contracts_build = {"context": machine.workspace_root, "dockerfile": "deployment_v2/Dockerfile.contracts"}
     # `required: false` keeps `docker compose config` usable for a public
     # bundle.  The runner separately requires the file before `apply` starts
@@ -100,9 +100,9 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
         # application database may be created idempotently during bootstrap,
         # so probing `minter` here would make a fresh bind mount unhealthy.
         "postgres": {**common, "image": "postgres:15-alpine", "environment": {"POSTGRES_USER": "dark", "POSTGRES_PASSWORD_FILE": "/run/secrets/minter-db-password", "POSTGRES_DB": "minter"}, "volumes": [f"{data}/minter/postgres:/var/lib/postgresql/data"], "secrets": ["minter-db-password"], "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U dark -d postgres"], "interval": "3s", "timeout": "3s", "retries": 20}},
-        "admin-api": {**common, "build": _build(components, "services/dark-core-admin-api/Dockerfile"), "env_file": admin_env, "ports": _exposed_ports(plan, machine, "admin-api", 8000)},
-        "resolver-api": {**common, "build": _build(components, "services/dark-core-resolver-api/Dockerfile"), "env_file": resolver_env, "ports": _exposed_ports(plan, machine, "resolver-api", 8002)},
-        "store-api": {**common, "build": _build(components, "services/dark-store-api/Dockerfile"), "env_file": ["./env/store-api.env"], "ports": _exposed_ports(plan, machine, "store-api", 8003), "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]},
+        "admin-api": {**common, "build": _build(components, "dark-core-admin-api/Dockerfile"), "env_file": admin_env, "ports": _exposed_ports(plan, machine, "admin-api", 8000)},
+        "resolver-api": {**common, "build": _build(components, "dark-core-resolver-api/Dockerfile"), "env_file": resolver_env, "ports": _exposed_ports(plan, machine, "resolver-api", 8002)},
+        "store-api": {**common, "build": _build(components, "dark-store-api/Dockerfile"), "env_file": ["./env/store-api.env"], "ports": _exposed_ports(plan, machine, "store-api", 8003), "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]},
         "minter-api": {**common, "build": minter_build, "env_file": minter_env, "ports": _exposed_ports(plan, machine, "minter-api", 8001), "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "minter-migrate": {**common, "profiles": ["setup"], "build": minter_build, "command": ["migrate"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_healthy"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "rpc-probe": {**common, "profiles": ["setup"], "build": contracts_build, "entrypoint": ["python"], "environment": {"DARK_RPC_URL": "http://blockchain-rpc:8545", "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]) }},
