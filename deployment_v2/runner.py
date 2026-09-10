@@ -11,7 +11,7 @@ from pathlib import Path
 from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_executor, run_preflight
 from .model import DeploymentPlan, Group
 from .render import render_plan
-from .sources import SourceError, source_evidence
+from .sources import SourceError, require_matching_source_evidence, source_evidence
 from .state import StateLockError, deployment_lock, record, run_root, write_status
 
 
@@ -232,10 +232,6 @@ def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resum
                 pushed = False
         if not pushed:
             raise ApplyError(f"run directory already exists: {root}; use deploy.py resume")
-    evidence = source_evidence(plan, project_root)
-    effective_plan = _effective_plan_for_apply(plan, project_root, root)
-    if not bundle.exists():
-        render_plan(effective_plan, bundle)
     if (resume or pushed) and status_path.exists():
         try:
             status = json.loads(status_path.read_text())
@@ -243,10 +239,25 @@ def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resum
             raise ApplyError(f"invalid existing run status: {status_path}") from exc
         if status.get("deployment_id") != plan.deployment_id or not isinstance(status.get("groups"), dict):
             raise ApplyError(f"existing run status does not belong to {plan.deployment_id}")
+    else:
+        status = {"deployment_id": plan.deployment_id, "state": "running", "groups": {}}
+    try:
+        evidence = source_evidence(plan, project_root)
+        if resume or pushed:
+            recorded_evidence = status.get("sources")
+            if not isinstance(recorded_evidence, dict):
+                raise ApplyError("existing run has no valid source evidence; create a new deployment run")
+            require_matching_source_evidence(recorded_evidence, evidence)
+    except SourceError as exc:
+        raise ApplyError(str(exc)) from exc
+    effective_plan = _effective_plan_for_apply(plan, project_root, root)
+    if not bundle.exists():
+        render_plan(effective_plan, bundle)
+    if resume or pushed:
         status["state"] = "running"
         status.pop("error", None)
     else:
-        status = {"deployment_id": plan.deployment_id, "state": "running", "groups": {}, "sources": evidence}
+        status["sources"] = evidence
     write_status(root, status)
     try:
         for step in plan.steps:

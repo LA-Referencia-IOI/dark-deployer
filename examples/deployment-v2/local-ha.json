@@ -18,7 +18,7 @@
     "storage-b": {"kind": "storage", "machine": "local", "members": ["storage-b"]}
   },
   "blockchain": {
-    "chain_id": 2025, "besu_image": "hyperledger/besu:26.6.1", "artifact": {"path": "blockchain/role-artifact"},
+    "chain_id": 2025, "besu_image": "hyperledger/besu:26.6.1", "qbft": {"block_period_seconds": 6, "epoch_length": 30000, "request_timeout_seconds": 10}, "artifact": {"path": "blockchain/role-artifact"},
     "nodes": {"rpc01": {"validator": false}, "validator01": {"validator": true}, "validator02": {"validator": true}, "validator03": {"validator": true}, "validator04": {"validator": true}}
   },
   "storage": {"cluster_name": "dark-local", "nodes": ["storage-a", "storage-b"], "replication": {"publish_after_replicas": 1, "target_replicas": 2}},

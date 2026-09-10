@@ -66,7 +66,9 @@ provisionar el paquete mínimo exportado para cada rol. Falta probar este flujo
 en una red Docker nueva. El runner ya trata ese material como inmutable: si el
 destino existe debe coincidir byte a byte mediante `cmp`; una diferencia detiene
 la ejecución y no sobrescribe genesis, claves, configuración Besu ni static
-nodes. Aún falta añadir un manifiesto de hashes exportable entre controladores.
+nodes. Cada artefacto completo o exportado lleva además un manifiesto SHA-256
+(`artifact-manifest.json`), verificable con `deploy.py chain-verify`; detecta
+archivos faltantes, extra o modificados antes de usarlos.
 
 El renderer ya emite entornos públicos diferenciados para Store, Minter, Admin,
 Resolver y Dashboard. Deriva RPC, Store API, chain ID, política de réplica y
@@ -295,7 +297,8 @@ si se necesitan probes externos y darles puertos únicos derivados.
 
 - `groups[id]`: `kind: apps|validators|storage`, `machine` y `members` (IDs de
   nodos); `explorer: true` solo para un grupo validators.
-- `blockchain`: chain ID, imagen Besu, parámetros QBFT actuales, nodos
+- `blockchain`: chain ID, imagen Besu, parámetros QBFT tipados
+  (`block_period_seconds`, `epoch_length`, `request_timeout_seconds`), nodos
   `{id, validator}` y referencia al artefacto seguro de cadena. Grupo y máquina
   se obtienen de `members`. RPC debe pertenecer a apps.
 - `storage`: cluster name, lista de node IDs, política
@@ -391,7 +394,10 @@ efectivo; nunca resetear ni cambiar los componentes del usuario.
 
 `push` solo entrega fuentes públicas y el bundle renderizado a cada destino; no
 crea redes, directorios de datos ni contenedores. Un `apply` posterior acepta
-un run cuyo estado sea `pushed` y continúa con el mismo bundle. Las claves,
+un run cuyo estado sea `pushed` y continúa con el mismo bundle, pero compara la
+evidencia de ramas, commits y estado sucio del controlador contra la registrada
+en `push`; `resume` aplica la misma regla. Si cambia, exige un nuevo despliegue
+en vez de mezclar fuentes distintas. Las claves,
 artefactos QBFT y otros secretos no se transfieren con este comando.
 Si rama falta, fallar explícitamente con su nombre; no fallback silencioso.
 

@@ -247,6 +247,12 @@ def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
         artifact_path = _string(artifact.get("path"), "blockchain.artifact.path")
         if Path(artifact_path).is_absolute() or ".." in Path(artifact_path).parts:
             raise _error("blockchain.artifact.path must be relative to secrets_root")
+    qbft = _object(blockchain.get("qbft"), "blockchain.qbft")
+    _only_keys(qbft, "blockchain.qbft", {"block_period_seconds", "epoch_length", "request_timeout_seconds"})
+    for field in ("block_period_seconds", "epoch_length", "request_timeout_seconds"):
+        value = qbft.get(field)
+        if not isinstance(value, int) or value < 1:
+            raise _error(f"blockchain.qbft.{field} must be a positive integer")
     nodes = _object(blockchain.get("nodes"), "blockchain.nodes")
     validators = []
     rpc = []

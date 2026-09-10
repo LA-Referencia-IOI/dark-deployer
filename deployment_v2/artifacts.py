@@ -76,6 +76,7 @@ def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
         "deployment_id": plan.deployment_id,
         "chain_id": plan.raw["blockchain"]["chain_id"],
         "besu_image": plan.raw["blockchain"]["besu_image"],
+        "qbft": plan.raw["blockchain"]["qbft"],
         "master_wallet_address": master_wallet_address.lower(),
         "nodes": {
             node: {
@@ -98,7 +99,12 @@ def write_chain_bootstrap(plan: DeploymentPlan, output: Path, master_wallet_addr
         "genesis": {
             "config": {
                 "chainId": context["chain_id"], "berlinBlock": 0, "londonBlock": 0,
-                "qbft": {"blockperiodseconds": 6, "epochlength": 30000, "requesttimeoutseconds": 10, "blockreward": "0"},
+                "qbft": {
+                    "blockperiodseconds": context["qbft"]["block_period_seconds"],
+                    "epochlength": context["qbft"]["epoch_length"],
+                    "requesttimeoutseconds": context["qbft"]["request_timeout_seconds"],
+                    "blockreward": "0",
+                },
             },
             "nonce": "0x0", "timestamp": "0x0", "gasLimit": "0x1fffffffffffff",
             "difficulty": "0x1", "mixHash": "0x63746963616c2062797a616e74696e65206661756c7420746f6c6572616e6365",

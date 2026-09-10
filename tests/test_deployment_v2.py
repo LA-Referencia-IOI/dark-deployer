@@ -17,7 +17,7 @@ from deployment_v2.runner import apply, push
 from deployment_v2.runner import ApplyError, _copy_if_absent_or_identical, _ignore_public_source, _wait_for_rpc
 from deployment_v2.state import deployment_lock, run_root, write_status
 from deployment_v2.verify import verify
-from deployment_v2.sources import SourceError, source_evidence
+from deployment_v2.sources import SourceError, require_matching_source_evidence, source_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,6 +131,7 @@ class DeploymentV2Tests(unittest.TestCase):
             root = write_chain_bootstrap(plan, Path(temporary) / "chain", "0x" + "a" * 40)
             context = json.loads((root / "chain-context.json").read_text())
             self.assertEqual(context["chain_id"], 2025)
+            self.assertEqual(context["qbft"]["block_period_seconds"], 6)
             self.assertEqual(context["nodes"]["validator01"]["private_address"], "10.20.30.10")
             keys = {node: f"{index:0128x}" for index, node in enumerate(("validator01", "validator02", "validator03", "validator04", "rpc01"), 1)}
             peers = static_nodes(context, keys)
@@ -146,6 +147,15 @@ class DeploymentV2Tests(unittest.TestCase):
             context = json.loads((root / "chain-context.json").read_text())
             self.assertEqual(context["nodes"]["validator01"]["private_address"], "172.30.0.10")
             self.assertEqual(context["nodes"]["rpc01"]["private_address"], "172.30.0.14")
+
+    def test_rejects_invalid_qbft_settings(self):
+        document = json.loads((ROOT / "examples" / "deployment-v2" / "local-ha.json").read_text())
+        document["blockchain"]["qbft"]["block_period_seconds"] = 0
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "bad.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "block_period_seconds"):
+                load_inventory(path)
 
     def test_greenfield_secret_init_generates_runtime_files_without_wallet(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
@@ -212,6 +222,22 @@ class DeploymentV2Tests(unittest.TestCase):
             with mock.patch("deployment_v2.runner.run_preflight", return_value=[]), mock.patch("deployment_v2.runner.source_evidence", return_value={}), mock.patch("deployment_v2.runner._apply_group") as apply_group, mock.patch("deployment_v2.verify.verify", return_value={"ok": True}):
                 apply(plan, project)
             self.assertEqual(apply_group.call_count, 5)
+
+    def test_apply_refuses_sources_changed_since_push(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-simple.json")
+        pushed_evidence = {"dark-core-lib": {"commit": "a", "dirty": False}}
+        current_evidence = {"dark-core-lib": {"commit": "b", "dirty": False}}
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            root = run_root(project, plan.deployment_id)
+            root.mkdir(parents=True)
+            (root / "bundle").mkdir()
+            write_status(root, {"deployment_id": plan.deployment_id, "state": "pushed", "groups": {}, "sources": pushed_evidence})
+            with mock.patch("deployment_v2.runner.source_evidence", return_value=current_evidence):
+                with self.assertRaisesRegex(ApplyError, "source evidence changed"):
+                    apply(plan, project)
+        with self.assertRaisesRegex(SourceError, "dark-core-lib"):
+            require_matching_source_evidence(pushed_evidence, current_evidence)
 
     def test_verify_reads_compose_state_and_records_result(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")

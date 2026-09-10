@@ -64,3 +64,26 @@ def source_evidence(plan: DeploymentPlan, project_root: Path) -> dict[str, dict[
             "inventory_branch": expected or None,
         }
     return evidence
+
+
+def require_matching_source_evidence(
+    pushed: dict[str, dict[str, object]], current: dict[str, dict[str, object]]
+) -> None:
+    """Reject applying a delivered bundle from a different source revision.
+
+    A branch is intentionally a moving delivery reference. Once ``push`` has
+    staged a public bundle, the subsequent apply must use exactly the commits
+    recorded with it. Dirty state is evidence too: changing it could make a
+    local build differ from the sources delivered to a remote host.
+    """
+    if pushed == current:
+        return
+    changed = [
+        component_id
+        for component_id in sorted(set(pushed) | set(current))
+        if pushed.get(component_id) != current.get(component_id)
+    ]
+    raise SourceError(
+        "source evidence changed since push; create a new push before apply"
+        + (f" ({', '.join(changed)})" if changed else "")
+    )
