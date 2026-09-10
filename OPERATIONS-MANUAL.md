@@ -44,6 +44,12 @@ el inventario (clone si faltan; `fetch`, cambio de rama y `merge --ff-only` si
 ya existen). Para trabajar con checkouts ya preparados se puede usar
 `--skip-acquire`.
 
+`merge --ff-only` significa que el instalador solo avanza una rama local cuando
+la rama remota está estrictamente por delante. No crea commits de merge ni
+sobrescribe cambios locales. Si la rama local y la remota divergen, la
+adquisición se detiene para que el operador revise, guarde o integre los
+cambios explícitamente.
+
 Validar antes de generar cualquier bundle:
 
 ```bash
