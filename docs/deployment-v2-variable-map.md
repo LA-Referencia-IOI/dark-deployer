@@ -1,6 +1,6 @@
 # Mapa de configuración: instalador actual → despliegue v2
 
-Estado: inventario de transición. Fecha: 2026-09-09.
+Estado: inventario de transición. Fecha: 2026-09-10.
 
 Este documento delimita qué variables existentes debe absorber
 `deployment-topology.json` v2 y cuáles deben dejar de ser entradas manuales.
@@ -38,8 +38,8 @@ cuando el renderer v2 pueda generar todos los entornos y jobs operativos.
 | `DEPLOYER_PRIVATE_KEY_FILE` | controller SSH | `defaults.ssh.private_key_file` | No es secreto de aplicación ni se transfiere. |
 | `*_IPFS_SWARM_KEY_FILE` | Kubo | `secrets.ipfs-swarm-key` | Montaje de solo lectura en storage. |
 | `*_IPFS_CLUSTER_SECRET_FILE` | Cluster | `secrets.ipfs-cluster-secret` | Montaje de solo lectura en storage. |
-| contraseña PostgreSQL minter | PostgreSQL/Minter | `secrets.minter-db-password` | Falta generar `DATABASE_URL`/archivo compatible sin exponer la contraseña. |
-| MySQL/Redis dashboard | dashboard | secretos específicos dashboard | Pendiente de portado del instalador Laravel. |
+| contraseña PostgreSQL minter | PostgreSQL/Minter | `secrets.minter-db-password`, `secrets.minter-runtime-env` | `secrets-init` genera `DATABASE_URL` en un archivo `0600`; el bundle público no lo contiene. |
+| MySQL/Redis dashboard | dashboard | `secrets.dashboard-runtime-env` | `secrets-init` crea password, root password y APP_KEY en entorno privado `0600`; el job Laravel ya está modelado. Falta prueba Docker real. |
 
 ## Variables generadas por servicio
 
@@ -74,10 +74,7 @@ servicio la consume.
 
 1. Tipar `settings` y `exposure` en schema; ahora se conservan como objetos
    libres para no bloquear el prototipo.
-2. Portar la materialización segura de secretos y las URLs de PostgreSQL/MySQL.
-3. Implementar el job único de Alembic, Laravel y contratos; después propagar
-   su resultado como handoff de contratos.
-4. Comparar sistemáticamente los Compose generados contra los actuales:
+2. Comparar sistemáticamente los Compose generados contra los actuales:
    comandos, healthchecks, builds, permisos y volúmenes.
-5. Reducir `.env.example` al puntero de topología solo después de que los cuatro
+3. Reducir `.env.example` al puntero de topología solo después de que los tres
    puntos anteriores hayan pasado una instalación limpia local y una por SSH.
