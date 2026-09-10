@@ -58,13 +58,13 @@ def _local_stage_sources(machine, project_root: Path, run_dir: Path) -> Path:
     return source_root
 
 
-def _effective_plan_for_apply(plan: DeploymentPlan, project_root: Path, run_dir: Path) -> DeploymentPlan:
+def _effective_plan_for_apply(plan: DeploymentPlan, project_root: Path, run_dir: Path, *, stage_sources: bool = True) -> DeploymentPlan:
     """Use staged paths only for local machines; remote paths remain declared."""
     machines = []
     for machine in plan.machines:
         if isinstance(resolve_executor(machine), LocalExecutor):
             local_root = run_dir / "local" / machine.id
-            workspace = _local_stage_sources(machine, project_root, run_dir)
+            workspace = _local_stage_sources(machine, project_root, run_dir) if stage_sources else local_root / "sources"
             machines.append(replace(
                 machine,
                 workspace_root=str(workspace),
@@ -76,7 +76,7 @@ def _effective_plan_for_apply(plan: DeploymentPlan, project_root: Path, run_dir:
     return replace(plan, machines=tuple(machines))
 
 
-def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir: Path, bundle: Path) -> None:
+def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir: Path, bundle: Path, *, phase: str = "full") -> None:
     machine = plan.machine(group.machine_id)
     executor = resolve_executor(machine)
     group_dir = bundle / "groups" / group.id
@@ -114,9 +114,11 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
             for filename in ("nodekey", "key.pub", "static-nodes.json"):
                 _require(executor.run(("cp", str(node_source / filename), str(node_target / filename))), f"install {filename} for {node} on {machine.id}")
     compose = ("docker", "compose", "--project-name", f"{plan.deployment_id}-{group.id}", "-f", str(destination / "compose.yaml"))
-    if group.kind == "apps":
+    if group.kind == "apps" and phase == "bootstrap":
         _require(executor.run((*compose, "--profile", "rpc", "up", "-d", "blockchain-rpc"), timeout=1800.0), f"start RPC for {group.id}")
         _require(executor.run((*compose, "run", "--rm", "contracts-deploy"), timeout=1800.0), f"deploy or verify contracts for {group.id}")
+        return
+    if group.kind == "apps" and phase == "runtime":
         _require(executor.run((*compose, "up", "-d", "--build", "postgres"), timeout=1800.0), f"start PostgreSQL for {group.id}")
         _require(executor.run((*compose, "run", "--rm", "minter-migrate"), timeout=1800.0), f"run Alembic migration for {group.id}")
         _require(executor.run((*compose, "up", "-d", "dashboard-mysql"), timeout=1800.0), f"start dashboard MySQL for {group.id}")
@@ -155,14 +157,18 @@ def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> 
                     raise ApplyError(f"preflight failed on {step.machine_id}: " + ", ".join(failed))
                 record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id})
                 continue
-            if step.action != "compose_apply":
+            if step.action not in {"compose_apply", "apps_bootstrap", "apps_runtime"}:
                 continue
-            if status["groups"].get(step.group_id) == "applied":  # type: ignore[index]
+            completed_steps = status.setdefault("completed_steps", [])
+            if step.id in completed_steps:
                 record(root, {"step": step.id, "state": "skipped", "reason": "already_applied", "machine": step.machine_id, "group": step.group_id})
                 continue
             record(root, {"step": step.id, "state": "started", "machine": step.machine_id, "group": step.group_id})
-            _apply_group(effective_plan, effective_plan.group(step.group_id), project_root, root, bundle)
-            status["groups"][step.group_id] = "applied"  # type: ignore[index]
+            phase = "bootstrap" if step.action == "apps_bootstrap" else "runtime" if step.action == "apps_runtime" else "full"
+            _apply_group(effective_plan, effective_plan.group(step.group_id), project_root, root, bundle, phase=phase)
+            completed_steps.append(step.id)
+            if step.action in {"compose_apply", "apps_runtime"}:
+                status["groups"][step.group_id] = "applied"  # type: ignore[index]
             write_status(root, status)
             record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id, "group": step.group_id})
     except (ExecutionError, ApplyError) as exc:

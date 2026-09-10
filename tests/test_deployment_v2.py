@@ -14,6 +14,8 @@ from deployment_v2.model import Machine, SshSettings
 from deployment_v2.planner import build_plan
 from deployment_v2.render import render_plan
 from deployment_v2.runner import apply
+from deployment_v2.state import run_root, write_status
+from deployment_v2.verify import verify
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +68,11 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertIn("components", apps)
             apps_compose = yaml.safe_load((output / "groups" / "apps" / "compose.yaml").read_text())
             self.assertIn("minter-chain-worker", apps_compose["services"])
+            rpc = apps_compose["services"]["blockchain-rpc"]
+            self.assertIn("--genesis-file=/config/genesis.json", rpc["command"])
+            self.assertEqual(rpc["networks"]["dark-local-ha-local"]["ipv4_address"], "172.30.0.14")
+            validators = yaml.safe_load((output / "groups" / "validators-a" / "compose.yaml").read_text())
+            self.assertEqual(validators["services"]["validator01"]["networks"]["dark-local-ha-local"]["ipv4_address"], "172.30.0.10")
             storage_a = yaml.safe_load((output / "groups" / "storage-a" / "compose.yaml").read_text())
             storage_b = yaml.safe_load((output / "groups" / "storage-b" / "compose.yaml").read_text())
             self.assertNotEqual(storage_a["services"]["cluster"]["ports"][0], storage_b["services"]["cluster"]["ports"][0])
@@ -102,6 +109,14 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertTrue(any(peer.endswith("@10.20.30.20:30307") for peer in peers["validator01"]))
             with self.assertRaisesRegex(ArtifactError, "public keys"):
                 static_nodes(context, {"validator01": keys["validator01"]})
+
+    def test_local_chain_artifact_uses_shared_bridge_addresses_not_fake_vpn_ips(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = write_chain_bootstrap(plan, Path(temporary) / "chain", "0x" + "b" * 40)
+            context = json.loads((root / "chain-context.json").read_text())
+            self.assertEqual(context["nodes"]["validator01"]["private_address"], "172.30.0.10")
+            self.assertEqual(context["nodes"]["rpc01"]["private_address"], "172.30.0.14")
 
     def test_greenfield_secret_init_generates_runtime_files_without_wallet(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
@@ -140,9 +155,37 @@ class DeploymentV2Tests(unittest.TestCase):
             project = Path(temporary)
             with mock.patch("deployment_v2.runner.run_preflight", return_value=[]), mock.patch("deployment_v2.runner._apply_group") as apply_group:
                 apply(plan, project)
-                self.assertEqual(apply_group.call_count, 4)
+                self.assertEqual(apply_group.call_count, 5)
+                self.assertEqual([call.kwargs["phase"] for call in apply_group.call_args_list], ["full", "full", "bootstrap", "full", "runtime"])
                 apply(plan, project, resume=True)
-                self.assertEqual(apply_group.call_count, 4)
+                self.assertEqual(apply_group.call_count, 5)
+
+    def test_verify_reads_compose_state_and_records_result(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
+
+        class HealthyExecutor:
+            def run(self, argv, *, timeout=30.0):
+                if "ps" in argv:
+                    group_id = next(part.removeprefix(f"{plan.deployment_id}-") for part in argv if part.startswith(f"{plan.deployment_id}-"))
+                    group = plan.group(group_id)
+                    names = {
+                        "apps": ["blockchain-rpc", "postgres", "admin-api", "resolver-api", "store-api", "minter-api", "minter-metadata-worker", "minter-replication-worker", "minter-chain-worker", "dashboard-mysql", "dashboard-redis", "dashboard"],
+                        "validators-a": ["validator01", "validator02", "explorer"],
+                        "validators-b": ["validator03", "validator04"],
+                        "storage-a": ["ipfs", "cluster"],
+                        "storage-b": ["ipfs", "cluster"],
+                    }[group.id]
+                    return CommandResult(tuple(argv), 0, json.dumps([{"Service": name, "State": "running"} for name in names]), "")
+                return CommandResult(tuple(argv), 0, "", "")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            root = run_root(project, plan.deployment_id)
+            write_status(root, {"deployment_id": plan.deployment_id, "state": "applied", "groups": {group.id: "applied" for group in plan.groups}})
+            with mock.patch("deployment_v2.verify.resolve_executor", return_value=HealthyExecutor()):
+                report = verify(plan, project)
+            self.assertTrue(report["ok"])
+            self.assertEqual(json.loads((root / "status.json").read_text())["state"], "verified")
 
 
 if __name__ == "__main__":

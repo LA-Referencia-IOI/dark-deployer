@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from .model import DeploymentPlan
+from .network import chain_node_addresses
 
 
 class ArtifactError(ValueError):
@@ -29,11 +30,7 @@ def _write_json(path: Path, value: object) -> None:
 def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
     if not _ADDRESS.fullmatch(master_wallet_address):
         raise ArtifactError("master wallet address must be a 20-byte hexadecimal address")
-    node_to_machine = {
-        member: plan.machine(group.machine_id)
-        for group in plan.groups for member in group.members
-        if group.kind in {"apps", "validators"}
-    }
+    advertised = chain_node_addresses(plan)
     return {
         "version": 1,
         "deployment_id": plan.deployment_id,
@@ -43,7 +40,7 @@ def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
         "nodes": {
             node: {
                 "validator": node in _VALIDATORS,
-                "private_address": node_to_machine[node].private_address,
+                "private_address": advertised[node],
                 "p2p_port": _P2P_PORTS[node],
             }
             for node in _NODES

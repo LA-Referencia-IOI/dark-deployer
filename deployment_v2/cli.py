@@ -13,12 +13,13 @@ from .render import render_plan
 from .runner import ApplyError, apply
 from .artifacts import ArtifactError, export_chain_role, initialize_chain, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
+from .verify import VerifyError, verify
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "apply", "resume", "status", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "secrets-init"):
+    for name in ("validate", "plan", "render", "preflight", "apply", "resume", "status", "verify", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "secrets-init"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
@@ -81,6 +82,13 @@ def main() -> None:
                 raise ValueError(f"no deployment status found: {status_file}")
             print(status_file.read_text(), end="")
             return
+        if args.action == "verify":
+            project_root = Path(__file__).resolve().parents[1]
+            report = verify(plan, project_root)
+            print(json.dumps(report, indent=2, sort_keys=True))
+            if not report["ok"]:
+                raise SystemExit(2)
+            return
         if args.action == "chain-bootstrap":
             artifact_root = write_chain_bootstrap(plan, args.output, args.master_wallet_address)
             print(f"[OK] Wrote public chain bootstrap inputs to {artifact_root}")
@@ -110,7 +118,7 @@ def main() -> None:
             return
         rendered = render_plan(plan, args.output)
         print(f"[OK] Rendered public plan at {rendered}")
-    except (InventoryError, ExecutionError, ApplyError, ArtifactError, SecretError, ValueError) as exc:
+    except (InventoryError, ExecutionError, ApplyError, ArtifactError, SecretError, VerifyError, ValueError) as exc:
         raise SystemExit(f"[ERROR] {exc}") from exc
 
 

@@ -1,7 +1,7 @@
 # Plan de implementación del despliegue unificado v2
 
-Estado: especificación para implementar; no describe capacidades ya disponibles.
-Fecha: 2026-09-09. Base: [análisis del instalador](installer-local-remote-unification-analysis.md).
+Estado: implementación incremental en curso; la instalación real v2 aún no está certificada.
+Fecha: 2026-09-10. Base: [análisis del instalador](installer-local-remote-unification-analysis.md).
 
 ## Estado de implementación
 
@@ -44,15 +44,19 @@ porque regenerarlos automáticamente rompería la continuidad de la cadena.
 
 El Compose de apps ya modela `minter-migrate` como job de perfil `setup`: el
 runner arranca PostgreSQL, espera su healthcheck y ejecuta Alembic una vez antes
-de iniciar API y workers. La migración Laravel, el despliegue idempotente de
-contratos y el handoff de sus direcciones siguen pendientes.
+de iniciar API y workers. También modela la migración Laravel como job y el
+despliegue de contratos como job idempotente que deja un handoff público. Aún
+falta comprobar la imagen PHP/Laravel y el flujo completo contra una cadena
+verde real.
 
 `chain-init` crea, bajo un directorio de salida explícito, genesis QBFT, cuatro
 claves de validadores, una clave RPC no validadora y static nodes derivados de
-las IP privadas del inventario. `chain-export` separa ese artefacto en los
-paquetes mínimos `rpc`, `validators-a` y `validators-b`. No se ejecutó contra
-Docker ni se incorporó aún al runner; falta su prueba de integración y la
-importación idempotente en cada host.
+la red efectiva: IPs fijas de la bridge compartida cuando la máquina es local,
+o IPs privadas/VPN cuando es remota. `chain-export` separa ese artefacto en los
+paquetes mínimos `rpc`, `validators-a` y `validators-b`. El runner importa el
+paquete del rol antes de arrancar Besu. El RPC tiene un comando Besu explícito,
+con su clave, genesis, puerto P2P y dirección anunciada; el mismo modelo se usa
+para los validadores. Falta la prueba de integración con cinco peers reales.
 
 El runner ya consume `blockchain.artifact.path` relativo al `secrets_root` de
 cada máquina. Antes de iniciar un grupo Besu copia el genesis, la configuración
@@ -83,16 +87,19 @@ Admin, Resolver y Minter cargan ese entorno generado. Falta ejecutar una
 prueba de cadena limpia y comparar ABI/bytecode con el proceso de compilación
 actual antes de declararlo sustituto de `dark-dapp/deploy.py`.
 
-`resume` y `status` ya operan sobre el `status.json` del deployment. `resume`
-revalida preflight y omite únicamente grupos registrados como aplicados; no
-vuelve a enviar sus jobs. Falta añadir la verificación posterior de sus
-evidencias reales (contenedores, chain, almacenamiento y endpoints) antes de
-permitir que una reanudación los dé por definitivamente sanos.
+`resume` y `status` ya operan sobre el `status.json` del deployment. Cada fase
+queda registrada por separado: `apps_bootstrap` (RPC y contratos), storage y
+`apps_runtime` (bases, migraciones, APIs, workers y dashboard). Así una
+reanudación no repite contratos ni migraciones que ya terminaron. `verify`
+consulta el estado Compose de cada grupo y, desde apps, prueba RPC mediante JSON
+RPC y los endpoints live de minter y Store. Falta ampliar esa evidencia a
+progreso de bloques, peers Cluster, contratos y conectividad remota cruzada.
 
-Solo pasó pruebas estructurales y `docker compose config`; no usarlo aún para
-reemplazar la instalación actual. Faltan la generación e importación completa
-de identidades/genesis Besu, jobs de contratos/migraciones, health checks,
-reanudación y una prueba Docker real.
+Solo pasó pruebas unitarias/estructurales y `docker compose config`; no usarlo
+aún para reemplazar la instalación actual. Están implementados la generación e
+importación de identidades/genesis, jobs de contratos/migraciones, reanudación
+y una verificación básica, pero faltan una prueba Docker limpia real, la matriz
+SSH, locks/hashes de artefactos y la retirada del instalador legado.
 
 ## 1. Resultado obligatorio y límites
 

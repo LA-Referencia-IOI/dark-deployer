@@ -7,6 +7,7 @@ the destination host; no generated Compose file includes legacy Compose files.
 from __future__ import annotations
 
 from .model import DeploymentPlan, Group
+from .network import chain_node_addresses, host_bind_address
 
 
 def _network(plan: DeploymentPlan, group: Group) -> str:
@@ -42,7 +43,8 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
     network = _network(plan, group)
     components = machine.workspace_root
     data = f"{machine.data_root}/{plan.deployment_id}/apps"
-    bind = "127.0.0.1" if machine.execution == "local" else machine.private_address
+    bind = host_bind_address(machine)
+    node_addresses = chain_node_addresses(plan)
     minter_build = _build(components, "services/dark-core-minter-api/Dockerfile")
     # `required: false` keeps `docker compose config` usable for a public
     # bundle.  The runner separately requires the file before `apply` starts
@@ -55,7 +57,20 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
     dashboard_db_env = ["./env/dashboard-db.env", {"path": _secret_file(plan, machine.id, "dashboard-runtime-env"), "required": False}]
     common = {"restart": "unless-stopped", "networks": [network]}
     services = {
-        "blockchain-rpc": {**common, "image": plan.raw["blockchain"]["besu_image"], "profiles": ["rpc"], "ports": [f"{bind}:8545:8545"], "volumes": [f"{data}/blockchain/rpc01:/data", f"{data}/blockchain/config:/config:ro"]},
+        "blockchain-rpc": {
+            **common,
+            "image": plan.raw["blockchain"]["besu_image"],
+            "profiles": ["rpc"],
+            "ports": [f"{bind}:8545:8545", f"{bind}:30307:30307/tcp", f"{bind}:30307:30307/udp"],
+            "volumes": [f"{data}/blockchain/rpc01:/data", f"{data}/blockchain/config:/config:ro"],
+            "command": [
+                "--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json",
+                "--node-private-key-file=/data/nodekey", "--p2p-port=30307",
+                f"--p2p-host={node_addresses['rpc01']}", "--rpc-http-enabled=true",
+                "--rpc-http-host=0.0.0.0",
+            ],
+            "networks": {network: {"ipv4_address": node_addresses["rpc01"]}},
+        },
         "postgres": {**common, "image": "postgres:15-alpine", "environment": {"POSTGRES_USER": "dark", "POSTGRES_PASSWORD_FILE": "/run/secrets/minter-db-password", "POSTGRES_DB": "minter"}, "volumes": [f"{data}/minter/postgres:/var/lib/postgresql/data"], "secrets": ["minter-db-password"], "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U dark -d minter"], "interval": "3s", "timeout": "3s", "retries": 20}},
         "admin-api": {**common, "build": _build(components, "services/dark-core-admin-api/Dockerfile"), "env_file": admin_env, "ports": [f"{bind}:8000:8000"]},
         "resolver-api": {**common, "build": _build(components, "services/dark-core-resolver-api/Dockerfile"), "env_file": resolver_env, "ports": [f"{bind}:8002:8002"]},
@@ -83,14 +98,16 @@ def _validators(plan: DeploymentPlan, group: Group) -> dict:
     network = _network(plan, group)
     data = f"{machine.data_root}/{plan.deployment_id}/blockchain"
     workspace = machine.workspace_root
+    bind = host_bind_address(machine)
+    node_addresses = chain_node_addresses(plan)
     services = {}
     base_port = 30303
     node_order = ["validator01", "validator02", "validator03", "validator04"]
     for node in group.members:
         port = base_port + node_order.index(node)
-        services[node] = {"image": plan.raw["blockchain"]["besu_image"], "restart": "unless-stopped", "volumes": [f"{data}/config:/config:ro", f"{data}/{node}:/data"], "command": ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/data/nodekey", f"--p2p-port={port}", "--rpc-http-enabled=false"], "ports": [f"{machine.private_address}:{port}:{port}/tcp", f"{machine.private_address}:{port}:{port}/udp"], "networks": [network]}
+        services[node] = {"image": plan.raw["blockchain"]["besu_image"], "restart": "unless-stopped", "volumes": [f"{data}/config:/config:ro", f"{data}/{node}:/data"], "command": ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/data/nodekey", f"--p2p-port={port}", f"--p2p-host={node_addresses[node]}", "--rpc-http-enabled=false"], "ports": [f"{bind}:{port}:{port}/tcp", f"{bind}:{port}:{port}/udp"], "networks": {network: {"ipv4_address": node_addresses[node]}}}
     if group.explorer:
-        services["explorer"] = {"image": "nginx:alpine", "restart": "unless-stopped", "ports": [f"{machine.private_address}:25000:80"], "networks": [network]}
+        services["explorer"] = {"image": "nginx:alpine", "restart": "unless-stopped", "ports": [f"{bind}:25000:80"], "networks": [network]}
     return {"name": f"{plan.deployment_id}-{group.id}", "services": services, "networks": {network: {"name": network, "external": True}}}
 
 

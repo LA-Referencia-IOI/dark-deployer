@@ -8,6 +8,9 @@ from .inventory import InventoryError
 from .model import Endpoint, Group, Machine
 
 
+_CHAIN_NODE_ORDER = ("validator01", "validator02", "validator03", "validator04", "rpc01")
+
+
 def allocate_docker_subnets(machines: tuple[Machine, ...], raw: dict) -> dict[str, str]:
     docker = raw["defaults"]["docker"]
     pool = ipaddress.ip_network(docker["subnet_pool"])
@@ -56,3 +59,34 @@ def derive_endpoints(machines: tuple[Machine, ...], groups: tuple[Group, ...]) -
             for name, port in (("admin-api", 8000), ("minter-api", 8001), ("resolver-api", 8002), ("store-api", 8003), ("dashboard", 8081)):
                 result.append(endpoint_for(name, provider, provider, port))
     return tuple(result)
+
+
+def chain_node_addresses(plan) -> dict[str, str]:
+    """Return the address every Besu node must advertise to its peers.
+
+    A local execution is a multi-host simulation on one Docker daemon, so the
+    only routable addresses between its Compose projects are fixed addresses on
+    that machine's shared bridge.  An SSH deployment instead uses its real
+    private/VPN address, with the node-specific published P2P port providing
+    the distinction between co-located validators.
+    """
+    assignments = {
+        member: plan.machine(group.machine_id)
+        for group in plan.groups
+        if group.kind in {"apps", "validators"}
+        for member in group.members
+    }
+    addresses: dict[str, str] = {}
+    for index, node in enumerate(_CHAIN_NODE_ORDER, start=10):
+        machine = assignments[node]
+        if machine.execution == "local":
+            subnet = ipaddress.ip_network(plan.docker_subnets[machine.id])
+            addresses[node] = str(subnet.network_address + index)
+        else:
+            addresses[node] = machine.private_address
+    return addresses
+
+
+def host_bind_address(machine: Machine) -> str:
+    """Local simulations publish only on loopback; servers use their VPN/LAN IP."""
+    return "127.0.0.1" if machine.execution == "local" else machine.private_address

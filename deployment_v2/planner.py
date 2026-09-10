@@ -19,10 +19,11 @@ def build_plan(inventory_path: Path) -> DeploymentPlan:
         steps.append(PlanStep(f"apply:{group.id}", group.machine_id, group.id, "compose_apply", (f"preflight:{group.machine_id}",), f"Start {group.id}"))
     validator_steps = tuple(f"apply:{group.id}" for group in validators)
     apps = next(group for group in groups if group.kind == "apps")
-    steps.append(PlanStep("apply:apps", apps.machine_id, apps.id, "compose_apply", (f"preflight:{apps.machine_id}", *validator_steps), "Start RPC, APIs, workers and dashboard"))
+    steps.append(PlanStep("bootstrap:apps", apps.machine_id, apps.id, "apps_bootstrap", (f"preflight:{apps.machine_id}", *validator_steps), "Start the non-validator RPC and deploy or verify contracts"))
     for group in (group for group in groups if group.kind == "storage"):
-        steps.append(PlanStep(f"apply:{group.id}", group.machine_id, group.id, "compose_apply", (f"preflight:{group.machine_id}",), f"Start Kubo and Cluster for {group.id}"))
+        steps.append(PlanStep(f"apply:{group.id}", group.machine_id, group.id, "compose_apply", (f"preflight:{group.machine_id}", "bootstrap:apps"), f"Start Kubo and Cluster for {group.id}"))
     storage_steps = tuple(f"apply:{group.id}" for group in groups if group.kind == "storage")
+    steps.append(PlanStep("apply:apps", apps.machine_id, apps.id, "apps_runtime", ("bootstrap:apps", *storage_steps), "Start APIs, workers and dashboard after storage is available"))
     steps.append(PlanStep("verify:deployment", apps.machine_id, apps.id, "verify", ("apply:apps", *storage_steps), "Verify chain, storage and application readiness"))
     return DeploymentPlan(
         deployment_id=raw["deployment"]["id"], inventory_path=inventory_path.resolve(),
