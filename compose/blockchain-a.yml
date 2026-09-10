@@ -1,5 +1,0 @@
-name: ${DARK_COMPOSE_PROJECT:-dark-blockchain-a}
-
-include:
-  - ../blockchain/compose.yml
-  - components/blockchain/explorer.yml

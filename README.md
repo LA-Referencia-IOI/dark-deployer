@@ -46,8 +46,8 @@ For a single-machine developer installation, copy only the environment example
 and run the wizard:
 
 ```bash
-cp .env.example .env
-python3 install.py
+cp deployment-topology.example.json deployment-topology.json
+venv/bin/python deploy.py install --inventory deployment-topology.json
 ```
 
 The wizard offers two storage modes:
@@ -137,11 +137,10 @@ Start from `deployment-topology.example.json` and render the public host bundles
 ```bash
 cp deployment-topology.example.json deployment-topology.json
 # Set addresses and secret target paths in the topology.
-python3 install.py topology validate --file deployment-topology.json
-python3 install.py topology render \
-  --file deployment-topology.json \
-  --output dist/dark-site-a-1
-python3 install.py deployment verify --bundle dist/dark-site-a-1
+venv/bin/python deploy.py validate --inventory deployment-topology.json
+venv/bin/python deploy.py render --inventory deployment-topology.json \
+  --output .generated/deployment-v2/dark-site-a-1
+venv/bin/python deploy.py verify --inventory deployment-topology.json
 ```
 
 The renderer creates one shared topology, endpoint and firewall policy plus one
@@ -166,9 +165,9 @@ Store API always belongs to `apps`, never to a storage node.
 Validate before changing the host:
 
 ```bash
-python3 install.py validate
-python3 install.py plan
-python3 install.py
+venv/bin/python deploy.py validate --inventory deployment-topology.json
+venv/bin/python deploy.py plan --inventory deployment-topology.json
+venv/bin/python deploy.py install --inventory deployment-topology.json
 ```
 
 The interactive wizard selects only the profile and role. It does not collect
@@ -180,8 +179,7 @@ first stage that did not finish instead of rerunning blockchain setup and
 contract deployment:
 
 ```bash
-python3 install.py resume --from ipfs
-python3 install.py resume --from store-api
+venv/bin/python deploy.py resume --inventory deployment-topology.json
 ```
 
 Valid stages, in order, are `blockchain`, `core-lib`, `admin`, `ipfs`,

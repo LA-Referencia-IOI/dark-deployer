@@ -76,9 +76,9 @@ venv/bin/python -m deployment_v2.cli apply \
   --inventory examples/deployment-v2/local-ha.json
 ```
 
-El orden esperado es validators-a, validators-b, apps/RPC, storage y APIs. Si
-se solicita una instalación tradicional mediante `python3 install.py`, usar el
-`.env` generado por el instalador y no editar manualmente los `.env.integration`.
+El orden esperado es validators-a, validators-b, apps/RPC, storage y APIs.
+`deploy.py` es la única entrada soportada y genera los archivos de ejecución
+desde el inventario; no se editan manualmente los `.env.integration`.
 
 ## 4. Despliegue remoto
 

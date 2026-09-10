@@ -1,5 +1,0 @@
-name: dark-storage-${NODE_ID:-storage}
-
-# One logical storage host: exactly one Kubo + one Cluster peer.
-include:
-  - components/storage/ipfs.yml
