@@ -11,7 +11,7 @@ from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_execut
 from .model import DeploymentPlan, Group
 from .render import render_plan
 from .sources import SourceError, source_evidence
-from .state import record, run_root, write_status
+from .state import StateLockError, deployment_lock, record, run_root, write_status
 
 
 class ApplyError(RuntimeError):
@@ -130,6 +130,15 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
 def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> Path:
     """Render then apply groups in plan order. Preconditions and secrets must exist."""
     root = run_root(project_root, plan.deployment_id)
+    try:
+        with deployment_lock(root):
+            return _apply_locked(plan, project_root, root, resume=resume)
+    except StateLockError as exc:
+        raise ApplyError(str(exc)) from exc
+
+
+def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resume: bool) -> Path:
+    """Internal apply implementation; caller owns the controller journal lock."""
     bundle = root / "bundle"
     if bundle.exists() and not resume:
         raise ApplyError(f"run directory already exists: {root}; use deploy.py resume")

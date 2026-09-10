@@ -115,6 +115,12 @@ progreso de bloques, peers Cluster, contratos y conectividad remota cruzada.
 cuando obtiene evidencia sana; `resume` conserva las fases terminadas pero
 vuelve a verificar el conjunto completo.
 
+El controlador toma un lock no bloqueante en
+`.generated/deployment-v2/<id>/.controller.lock` para que dos procesos locales
+no alteren simultáneamente el bundle, journal o decisiones de reanudación. La
+exclusión entre controladores distintos sobre un mismo host remoto sigue siendo
+una mejora pendiente; no se afirma que el lock local sustituya esa protección.
+
 Solo pasó pruebas unitarias/estructurales y `docker compose config`; no usarlo
 aún para reemplazar la instalación actual. Están implementados la generación e
 importación de identidades/genesis, jobs de contratos/migraciones, reanudación

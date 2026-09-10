@@ -5,13 +5,41 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import fcntl
+
+
+class StateLockError(RuntimeError):
+    """Another controller already owns this local deployment run."""
+
 
 def run_root(project_root: Path, deployment_id: str) -> Path:
     return project_root / ".generated" / "deployment-v2" / deployment_id
+
+
+@contextmanager
+def deployment_lock(root: Path):
+    """Prevent two local controller processes from mutating one run journal.
+
+    Remote host serialization is still delegated to Docker/Compose and remains
+    a separate operational concern; this lock protects the controller's
+    generated bundle, state file and resume decisions.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / ".controller.lock"
+    with path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise StateLockError(f"deployment run is already controlled: {root}") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def record(root: Path, event: dict[str, Any]) -> None:

@@ -14,7 +14,7 @@ from deployment_v2.model import Machine, SshSettings
 from deployment_v2.planner import build_plan
 from deployment_v2.render import render_plan
 from deployment_v2.runner import apply
-from deployment_v2.state import run_root, write_status
+from deployment_v2.state import deployment_lock, run_root, write_status
 from deployment_v2.verify import verify
 from deployment_v2.sources import SourceError, source_evidence
 
@@ -206,6 +206,12 @@ class DeploymentV2Tests(unittest.TestCase):
         plan.raw["components"]["dark-core-lib"]["branch"] = "definitely-not-current"
         with self.assertRaisesRegex(SourceError, "expected definitely-not-current"):
             source_evidence(plan, ROOT)
+
+    def test_deployment_lock_creates_a_controller_lock_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            with deployment_lock(root):
+                self.assertTrue((root / ".controller.lock").exists())
 
 
 if __name__ == "__main__":
