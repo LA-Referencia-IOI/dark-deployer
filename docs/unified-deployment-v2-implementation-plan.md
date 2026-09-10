@@ -784,7 +784,7 @@ La salida se guardó fuera del repositorio en
 fuente no fueron modificados.
 
 También se intentó ejecutar `notebooks/dark_e2e_authority_to_resolver.ipynb` y
-`components/services/dark-core-minter-api/notebooks/minter_api_test.ipynb`.
+`components/dark-core-minter-api/notebooks/minter_api_test.ipynb`.
 El kernel inició y alcanzó los servicios locales, pero la herramienta terminó
 antes de guardar sus salidas; esas ejecuciones no se consideran evidencia
 concluyente y deben repetirse con un runner Jupyter persistente. No se registró

@@ -123,7 +123,7 @@ Use the project Python 3.12 virtual environment. Do not rely on the macOS
 system Python. The database-lock suite needs an isolated PostgreSQL URL:
 
 ```bash
-cd components/services/dark-core-minter-api
+cd components/dark-core-minter-api
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ../.venv/bin/python -m pytest \
   tests/test_worker_unit.py tests/test_worker_status_api.py
 

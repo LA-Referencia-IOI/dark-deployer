@@ -221,18 +221,18 @@ debe recrearse y luego aplicar Alembic desde cero.
 
 ## Archivos principales modificados
 
-- `components/services/dark-core-minter-api/app/models/processing.py`
-- `components/services/dark-core-minter-api/app/database/models.py`
-- `components/services/dark-core-minter-api/app/repositories/ark_repository.py`
-- `components/services/dark-core-minter-api/app/workers/publisher.py`
-- `components/services/dark-core-minter-api/app/main_worker.py`
-- `components/services/dark-core-minter-api/app/api/worker.py`
-- `components/services/dark-core-minter-api/alembic/versions/0001_initial_schema.py`
+- `components/dark-core-minter-api/app/models/processing.py`
+- `components/dark-core-minter-api/app/database/models.py`
+- `components/dark-core-minter-api/app/repositories/ark_repository.py`
+- `components/dark-core-minter-api/app/workers/publisher.py`
+- `components/dark-core-minter-api/app/main_worker.py`
+- `components/dark-core-minter-api/app/api/worker.py`
+- `components/dark-core-minter-api/alembic/versions/0001_initial_schema.py`
 - `compose/components/services/minter.yml` (owned by the deployer)
-- `components/services/dark-core-minter-api/docker-entrypoint.sh`
-- `components/frontend/dashboard-web/app/Http/Controllers/Dashboard/WorkerController.php`
-- `components/frontend/dashboard-web/resources/views/dashboard/workers/index.blade.php`
-- `components/frontend/dashboard-web/resources/views/dashboard/workers/errors.blade.php`
+- `components/dark-core-minter-api/docker-entrypoint.sh`
+- `components/dashboard-web/app/Http/Controllers/Dashboard/WorkerController.php`
+- `components/dashboard-web/resources/views/dashboard/workers/index.blade.php`
+- `components/dashboard-web/resources/views/dashboard/workers/errors.blade.php`
 - `install.py` y `.env.example`
 
 ## Verificación pendiente

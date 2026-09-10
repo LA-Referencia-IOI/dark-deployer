@@ -112,8 +112,8 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
         "minter-chain-worker": {**common, "build": minter_build, "command": ["chain-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "dashboard-mysql": {**common, "image": "mysql:8.0", "env_file": dashboard_db_env, "volumes": [f"{data}/dashboard/mysql:/var/lib/mysql"], "healthcheck": {"test": ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$$MYSQL_ROOT_PASSWORD\""], "interval": "3s", "timeout": "3s", "retries": 20}},
         "dashboard-redis": {**common, "image": "redis:7-alpine", "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{data}/dashboard/redis:/data"]},
-        "dashboard": {**common, "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "ports": _exposed_ports(plan, machine, "dashboard", 8080), "volumes": [f"{components}/components/frontend/dashboard-web:/var/www/app"]},
-        "dashboard-migrate": {**common, "profiles": ["setup"], "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "depends_on": {"dashboard-mysql": {"condition": "service_healthy"}}, "command": ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan migrate --force --seed && php artisan storage:link --force"], "volumes": [f"{components}/components/frontend/dashboard-web:/var/www/app"]},
+        "dashboard": {**common, "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "ports": _exposed_ports(plan, machine, "dashboard", 8080), "volumes": [f"{components}/components/dashboard-web:/var/www/app"]},
+        "dashboard-migrate": {**common, "profiles": ["setup"], "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "depends_on": {"dashboard-mysql": {"condition": "service_healthy"}}, "command": ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan migrate --force --seed && php artisan storage:link --force"], "volumes": [f"{components}/components/dashboard-web:/var/www/app"]},
     }
     return {
         "name": f"{plan.deployment_id}-{group.id}", "services": services,
@@ -135,7 +135,7 @@ def _validators(plan: DeploymentPlan, group: Group) -> dict:
         port = base_port + node_order.index(node)
         services[node] = {"image": plan.raw["blockchain"]["besu_image"], "restart": "unless-stopped", "volumes": [f"{data}/config:/config:ro", f"{data}/{node}:/data"], "command": ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/data/nodekey", f"--p2p-port={port}", f"--p2p-host={node_addresses[node]}", "--rpc-http-enabled=false"], "ports": [f"{bind}:{port}:{port}/tcp", f"{bind}:{port}:{port}/udp"], "networks": {network: {"ipv4_address": node_addresses[node]}}}
     if group.explorer:
-        explorer_root = f"{machine.workspace_root}/components/blockchain/dark-explorador"
+        explorer_root = f"{machine.workspace_root}/components/dark-explorador"
         services["explorer"] = {
             # The explorer Dockerfile copies its pre-built dist/ relative to
             # the component root, not the monorepo components directory.
@@ -182,13 +182,13 @@ def _storage(plan: DeploymentPlan, group: Group) -> dict:
         "ipfs": {
             "image": "ipfs/kubo:v0.41.0", "restart": "unless-stopped", "entrypoint": ["/usr/local/bin/ipfs-entrypoint.sh"],
             "environment": {"NODE_NAME": node, "IPFS_SWARM_KEY_FILE": "/run/dark-secrets/ipfs-swarm.key", "IPFS_BOOTSTRAP_HOSTS": ipfs_bootstrap_hosts, "CLUSTER_SEED": str(seed).lower(), "IPFS_ANNOUNCE_MULTIADDRESS": f"/ip4/{storage_announce_address(plan, group)}/tcp/{ipfs_swarm_port}"},
-            "volumes": [f"{workspace}/components/storage/dark-ipfs/scripts/ipfs-entrypoint.sh:/usr/local/bin/ipfs-entrypoint.sh:ro", f"{swarm_key}:/run/dark-secrets/ipfs-swarm.key:ro", f"{data}/ipfs:/data/ipfs"],
+            "volumes": [f"{workspace}/components/dark-ipfs/scripts/ipfs-entrypoint.sh:/usr/local/bin/ipfs-entrypoint.sh:ro", f"{swarm_key}:/run/dark-secrets/ipfs-swarm.key:ro", f"{data}/ipfs:/data/ipfs"],
             "ports": [f"{host_bind_address(machine)}:{ipfs_api_port}:5001", f"{host_bind_address(machine)}:{ipfs_swarm_port}:4001/tcp", f"{host_bind_address(machine)}:{ipfs_swarm_port}:4001/udp"], "networks": ipfs_network,
         },
         "cluster": {
             "image": "ipfs/ipfs-cluster:v1.1.6", "restart": "unless-stopped", "entrypoint": ["/usr/local/bin/cluster-entrypoint.sh"], "depends_on": ["ipfs"],
             "environment": {"CLUSTER_PEERNAME": node, "CLUSTER_SECRET_FILE": "/run/dark-secrets/ipfs-cluster-secret", "CLUSTER_BOOTSTRAP_HOSTS": cluster_bootstrap_hosts, "CLUSTER_SEED": str(seed).lower(), "CLUSTER_CRDT_CLUSTERNAME": plan.raw["storage"]["cluster_name"], "IPFS_DARK_NET_ALIAS": f"ipfs-{node}"},
-            "volumes": [f"{workspace}/components/storage/dark-ipfs/scripts/cluster-entrypoint.sh:/usr/local/bin/cluster-entrypoint.sh:ro", f"{cluster_secret}:/run/dark-secrets/ipfs-cluster-secret:ro", f"{data}/cluster:/data/ipfs-cluster"],
+            "volumes": [f"{workspace}/components/dark-ipfs/scripts/cluster-entrypoint.sh:/usr/local/bin/cluster-entrypoint.sh:ro", f"{cluster_secret}:/run/dark-secrets/ipfs-cluster-secret:ro", f"{data}/cluster:/data/ipfs-cluster"],
             "ports": [f"{host_bind_address(machine)}:{cluster_rest_port}:9094", f"{host_bind_address(machine)}:{cluster_proxy_port}:9095", f"{host_bind_address(machine)}:{cluster_swarm_port}:9096/tcp", f"{host_bind_address(machine)}:{cluster_swarm_port}:9096/udp"], "networks": cluster_network,
         },
     }

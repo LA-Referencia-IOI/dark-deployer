@@ -44,7 +44,7 @@ No había registros procesables en las etapas `AVAILABILITY` o `REPLICATION` con
 
 ## Por qué `full` informa una cola falsa
 
-En `components/services/dark-core-minter-api/app/api/worker.py`, el status de replicación define un registro como retenido cuando se cumple:
+En `components/dark-core-minter-api/app/api/worker.py`, el status de replicación define un registro como retenido cuando se cumple:
 
 ```python
 level1_json IS NOT NULL OR original_content IS NOT NULL
@@ -127,7 +127,7 @@ También hubo respuestas lentas o incompletas del segundo endpoint `/peers` y er
 
 ## Error `missing Hash` en Store API
 
-`components/services/dark-store-api/app/backends/ipfs_cluster.py` acepta actualmente estas formas de respuesta de `/add`:
+`components/dark-store-api/app/backends/ipfs_cluster.py` acepta actualmente estas formas de respuesta de `/add`:
 
 ```json
 {"Hash": "..."}

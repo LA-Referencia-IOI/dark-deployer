@@ -35,7 +35,7 @@ Los ejemplos con `docker compose` se ejecutan desde el directorio del
 componente instalado:
 
 ```bash
-cd components/services/dark-core-minter-api
+cd components/dark-core-minter-api
 ```
 
 ## 2. CSV de entrada

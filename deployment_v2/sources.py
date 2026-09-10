@@ -13,15 +13,15 @@ class SourceError(RuntimeError):
 
 
 COMPONENT_PATHS = {
-    "dark-dapp": "components/blockchain/dark-dapp",
-    "dark-explorador": "components/blockchain/dark-explorador",
-    "dashboard-web": "components/frontend/dashboard-web",
-    "dark-core-lib": "components/libraries/dark-core-lib",
-    "dark-core-admin-api": "components/services/dark-core-admin-api",
-    "dark-core-minter-api": "components/services/dark-core-minter-api",
-    "dark-core-resolver-api": "components/services/dark-core-resolver-api",
-    "dark-store-api": "components/services/dark-store-api",
-    "dark-ipfs": "components/storage/dark-ipfs",
+    "dark-dapp": "components/dark-dapp",
+    "dark-explorador": "components/dark-explorador",
+    "dashboard-web": "components/dashboard-web",
+    "dark-core-lib": "components/dark-core-lib",
+    "dark-core-admin-api": "components/dark-core-admin-api",
+    "dark-core-minter-api": "components/dark-core-minter-api",
+    "dark-core-resolver-api": "components/dark-core-resolver-api",
+    "dark-store-api": "components/dark-store-api",
+    "dark-ipfs": "components/dark-ipfs",
 }
 
 

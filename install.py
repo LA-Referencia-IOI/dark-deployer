@@ -607,7 +607,7 @@ def print_install_summary(prefix: str, env: dict) -> None:
         or get_url(env, f"{prefix}_ORCHESTRATOR_REPOSITORY_URL")
     )
     if core_lib_selected:
-        core_env_path = Path("components/libraries/dark-core-lib/.env.integration")
+        core_env_path = Path("components/dark-core-lib/.env.integration")
         state = "present" if core_env_path.is_file() else "missing"
         print(f"- Core Lib env: {core_env_path} [{state}]")
 
@@ -1563,7 +1563,7 @@ def read_deployed_contract_addresses(ini_path: Path) -> tuple[str, str]:
 
 
 _DEPLOYED_CONTRACTS_INI_PATH = PROJECT_ROOT / (
-    "components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini"
+    "components/dark-dapp/dARK_dapp/deployed_contracts.ini"
 )
 
 _ROOT_ENV_INTEGRATION = PROJECT_ROOT / ".env.integration"
@@ -1891,7 +1891,7 @@ def resolve_contract_addresses(env: dict) -> tuple[str, str]:
 def generate_core_lib_env_integration(core_path: Path, env: dict) -> None:
     """Generate .env.integration for dark-core-lib from installed blockchain state.
 
-    :param core_path: Path to components/libraries/dark-core-lib.
+    :param core_path: Path to components/dark-core-lib.
     :type core_path: Path
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
@@ -1948,7 +1948,7 @@ def generate_minter_env_integration(minter_path: Path, env: dict) -> None:
     blockchain-sensitive values with the deployed contracts and master key from
     the active installation.
 
-    :param minter_path: Path to components/services/dark-core-minter-api.
+    :param minter_path: Path to components/dark-core-minter-api.
     :type minter_path: Path
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
@@ -2233,7 +2233,7 @@ def generate_admin_api_env_integration(admin_api_path: Path, env: dict) -> None:
     blockchain-sensitive values with the deployed contracts and master key from
     the active installation.
 
-    :param admin_api_path: Path to components/services/dark-core-admin-api.
+    :param admin_api_path: Path to components/dark-core-admin-api.
     :type admin_api_path: Path
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
@@ -2282,7 +2282,7 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
     deterministic and does not accidentally inherit stale values from a
     previous minter installation.
 
-    :param resolver_api_path: Path to components/services/dark-core-resolver-api.
+    :param resolver_api_path: Path to components/dark-core-resolver-api.
     :type resolver_api_path: Path
     :param env: Dictionary of environment variables loaded from .env.
     :type env: dict
@@ -2306,7 +2306,7 @@ def generate_resolver_api_env_integration(resolver_api_path: Path, env: dict) ->
             # Resolver filesystem mode must read the same metadata directory that
             # the minter writes to, so relative paths are resolved from the
             # minter service workspace rather than the resolver workspace.
-            minter_path = Path("components/services/dark-core-minter-api").resolve()
+            minter_path = Path("components/dark-core-minter-api").resolve()
             metadata_storage_path = str((minter_path / storage_path).resolve())
 
     integration_env = {
@@ -2433,7 +2433,7 @@ REBUILD_COMPONENT_ALIASES = {
 SERVICE_REBUILD_COMPONENTS = {
     "admin": {
         "display": "admin API",
-        "path": Path("components/services/dark-core-admin-api"),
+        "path": Path("components/dark-core-admin-api"),
         "services": ["admin-api"],
         "health_port": 8000,
         "repo_suffix": "CORE_ADMIN_API",
@@ -2441,7 +2441,7 @@ SERVICE_REBUILD_COMPONENTS = {
     },
     "resolver": {
         "display": "resolver API",
-        "path": Path("components/services/dark-core-resolver-api"),
+        "path": Path("components/dark-core-resolver-api"),
         "services": ["resolver-api"],
         "health_port": 8002,
         "repo_suffix": "RESOLVER",
@@ -2449,7 +2449,7 @@ SERVICE_REBUILD_COMPONENTS = {
     },
     "store-api": {
         "display": "store API",
-        "path": Path("components/services/dark-store-api"),
+        "path": Path("components/dark-store-api"),
         "services": ["store-api"],
         "health_port": 8003,
         "repo_suffix": "STORE_API",
@@ -2457,7 +2457,7 @@ SERVICE_REBUILD_COMPONENTS = {
     },
     "minter": {
         "display": "minter",
-        "path": Path("components/services/dark-core-minter-api"),
+        "path": Path("components/dark-core-minter-api"),
         "services": [],
         "health_port": 8001,
         "repo_suffix": "MINTER",
@@ -2493,7 +2493,7 @@ def maybe_pull_rebuild_component(component: str, prefix: str, env: dict) -> None
             or env.get(legacy_branch_key, "main").strip()
             or "main"
         )
-        target = "components/libraries/dark-core-lib"
+        target = "components/dark-core-lib"
         repo_name = "dark-core-lib"
     else:
         spec = SERVICE_REBUILD_COMPONENTS[component]
@@ -2592,7 +2592,7 @@ def rebuild_core_lib(
     if no_cache:
         print("[WARNING] --no-cache only applies to Docker builds; ignoring it for core-lib.")
 
-    core_path = require_component_path("core-lib", Path("components/libraries/dark-core-lib"))
+    core_path = require_component_path("core-lib", Path("components/dark-core-lib"))
 
     print("\n── Rebuild core-lib ──────────────────────────────────────────")
     setup_repo(target_dir=str(core_path), commands_str="")
@@ -2723,7 +2723,7 @@ def install_core_lib(prefix: str, env: dict) -> None:
     if not extra_commands:
         extra_commands = get_commands(env, legacy_commands_key)
 
-    core_path = Path("components/libraries/dark-core-lib")
+    core_path = Path("components/dark-core-lib")
 
     install_repo(
         name="dark-core-lib",
@@ -2779,7 +2779,7 @@ def install_core_admin_api(prefix: str, env: dict) -> None:
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = get_commands(env, commands_key)
-    target = "components/services/dark-core-admin-api"
+    target = "components/dark-core-admin-api"
     target_path = Path(target).resolve()
 
     install_repo(
@@ -2817,7 +2817,7 @@ def install_core_resolver_api(prefix: str, env: dict) -> None:
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = get_commands(env, commands_key)
-    target = "components/services/dark-core-resolver-api"
+    target = "components/dark-core-resolver-api"
     target_path = Path(target).resolve()
 
     install_repo(
@@ -2876,7 +2876,7 @@ def install_dark_store_api(prefix: str, env: dict) -> None:
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = get_commands(env, commands_key)
-    target = "components/services/dark-store-api"
+    target = "components/dark-store-api"
     target_path = Path(target).resolve()
 
     install_repo(
@@ -2935,7 +2935,7 @@ def install_dark_ipfs(prefix: str, env: dict) -> None:
     branch = env.get(branch_key, "main").strip() or "main"
     do_setup = env.get(setup_key, "True").strip().lower() != "false"
     commands = get_commands(env, commands_key, ["make up"])
-    target = "components/storage/dark-ipfs"
+    target = "components/dark-ipfs"
 
     if platform.machine() != "x86_64":
         print(
@@ -3078,7 +3078,7 @@ def install_single_component(name: str, prefix: str, env: dict) -> None:
     target   = f"components/{name.lower()}"
     repo_name = name.lower()
     if name.upper() == "MINTER":
-        target = "components/services/dark-core-minter-api"
+        target = "components/dark-core-minter-api"
         repo_name = "dark-core-minter-api"
     target_path = Path(target).resolve()
 
@@ -3128,7 +3128,7 @@ def install_dashboard(prefix: str, env: dict) -> None:
     # .env.example files) would otherwise silently skip the dashboard setup.
     if not commands:
         commands = list(default_commands)
-    target   = "components/frontend/dashboard-web"
+    target   = "components/dashboard-web"
 
     install_repo(name="dashboard-web", repo_url=repo_url, branch=branch, target_dir=target)
     generate_dashboard_env_integration(Path(target).resolve(), env)

@@ -46,7 +46,7 @@ PRODUCTION_MINTER_SHOULDER=201
 
 Durante la instalación, el Deployer valida el formato `2MM` y escribe el valor
 seleccionado como `MINTER_SHOULDER` en
-`components/services/dark-core-minter-api/.env.integration`. No es necesario
+`components/dark-core-minter-api/.env.integration`. No es necesario
 editar manualmente el `.env.integration` del minter; este archivo se regenera
 en cada instalación.
 

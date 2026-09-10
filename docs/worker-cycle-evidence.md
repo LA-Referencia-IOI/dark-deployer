@@ -49,7 +49,7 @@ independientes.
 ## Entrada del flujo: API y persistencia inicial
 
 La operación `PUT /api/v1/arks/{ark}` está implementada en
-`components/services/dark-core-minter-api/app/api/arks.py`.
+`components/dark-core-minter-api/app/api/arks.py`.
 
 La API realiza estas operaciones dentro de la transacción de la solicitud:
 
@@ -122,7 +122,7 @@ contra una actualización concurrente.
 ## Store API y significado del CID
 
 El backend Cluster de Store API está en
-`components/services/dark-store-api/app/backends/ipfs_cluster.py`.
+`components/dark-store-api/app/backends/ipfs_cluster.py`.
 
 `POST /v1/store`:
 
@@ -443,15 +443,15 @@ afirmar que el worker observó un estado que no habilitaba chain.
 
 ## Archivos de referencia
 
-- API y entrada del flujo: `components/services/dark-core-minter-api/app/api/arks.py`.
-- Selección y transiciones DB: `components/services/dark-core-minter-api/app/repositories/ark_repository.py`.
-- Implementación de los tres workers: `components/services/dark-core-minter-api/app/workers/publisher.py`.
-- Ciclo, heartbeat, locks y sleeps: `components/services/dark-core-minter-api/app/main_worker.py`.
-- Códigos internos: `components/services/dark-core-minter-api/app/models/processing.py`.
-- Modelo persistente: `components/services/dark-core-minter-api/app/database/models.py`.
-- Store API y status batch: `components/services/dark-store-api/app/api/store.py`.
-- Conteo de estados Cluster: `components/services/dark-store-api/app/backends/ipfs_cluster.py`.
-- Cliente de metadata/Store API: `components/libraries/dark-core-lib/dark_core_lib/metadata/storage/store_api.py`.
+- API y entrada del flujo: `components/dark-core-minter-api/app/api/arks.py`.
+- Selección y transiciones DB: `components/dark-core-minter-api/app/repositories/ark_repository.py`.
+- Implementación de los tres workers: `components/dark-core-minter-api/app/workers/publisher.py`.
+- Ciclo, heartbeat, locks y sleeps: `components/dark-core-minter-api/app/main_worker.py`.
+- Códigos internos: `components/dark-core-minter-api/app/models/processing.py`.
+- Modelo persistente: `components/dark-core-minter-api/app/database/models.py`.
+- Store API y status batch: `components/dark-store-api/app/api/store.py`.
+- Conteo de estados Cluster: `components/dark-store-api/app/backends/ipfs_cluster.py`.
+- Cliente de metadata/Store API: `components/dark-core-lib/dark_core_lib/metadata/storage/store_api.py`.
 
 ## Alternativas para aumentar throughput — propuesta documental
 

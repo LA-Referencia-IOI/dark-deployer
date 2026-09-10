@@ -40,7 +40,7 @@ The monolithic v1 design was refactored into two distinct contracts to separate 
 
 ### 2.1 `IAuthority.sol` — Interface
 
-[`IAuthority.sol`](components/blockchain/dark-dapp/dARK_dapp/contracts/IAuthority.sol) defines the minimal surface that `dARK.sol` needs from the authority contract. This decouples the two contracts: `dARK.sol` depends only on the interface, not the implementation.
+[`IAuthority.sol`](components/dark-dapp/dARK_dapp/contracts/IAuthority.sol) defines the minimal surface that `dARK.sol` needs from the authority contract. This decouples the two contracts: `dARK.sol` depends only on the interface, not the implementation.
 
 ```solidity
 interface IAuthority {
@@ -53,7 +53,7 @@ interface IAuthority {
 
 ### 2.2 `Authority.sol` — Access Control Registry
 
-[`Authority.sol`](components/blockchain/dark-dapp/dARK_dapp/contracts/Authority.sol) is the central registry that binds organization identities to Ethereum wallets and controls which NAANs each authority can write.
+[`Authority.sol`](components/dark-dapp/dARK_dapp/contracts/Authority.sol) is the central registry that binds organization identities to Ethereum wallets and controls which NAANs each authority can write.
 
 **Key Concept**: One Wallet = One Authority UUID.
 
@@ -97,7 +97,7 @@ The `encrypted_private_key` is stored on-chain so services can retrieve and decr
 
 ### 2.3 `dARK.sol` — ARK Identifier Storage
 
-[`dARK.sol`](components/blockchain/dark-dapp/dARK_dapp/contracts/dARK.sol) is the pure data store for ARK identifiers. It holds a reference to `IAuthority` and delegates all permission checks to it.
+[`dARK.sol`](components/dark-dapp/dARK_dapp/contracts/dARK.sol) is the pure data store for ARK identifiers. It holds a reference to `IAuthority` and delegates all permission checks to it.
 
 **`ARK` struct (on-chain):**
 ```solidity
@@ -179,7 +179,7 @@ Resolver API                 dARK contract
 
 ## 4. Service Layer
 
-Each service uses [`dark-core-lib`](components/libraries/dark-core-lib/) as the Python SDK to interact with the contracts via Web3.py.
+Each service uses [`dark-core-lib`](components/dark-core-lib/) as the Python SDK to interact with the contracts via Web3.py.
 
 | Service | Role | Contract interaction |
 | :--- | :--- | :--- |

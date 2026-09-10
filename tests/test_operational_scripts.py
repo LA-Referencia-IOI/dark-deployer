@@ -45,7 +45,7 @@ class OperationalScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.make_compose(root, "compose/apps.yml")
-            storage = root / "components/storage/dark-ipfs"
+            storage = root / "components/dark-ipfs"
             storage.mkdir(parents=True)
             (storage / ".env.node.site-a-storage-1").write_text("NODE_ID=site-a-storage-1\n")
             (storage / ".env.node.site-a-storage-2").write_text("NODE_ID=site-a-storage-2\n")

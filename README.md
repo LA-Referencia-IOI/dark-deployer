@@ -287,7 +287,7 @@ dark-deployer/
 ```bash
 python3 -m unittest discover -s tests -v
 
-cd components/services/dark-store-api
+cd components/dark-store-api
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest -q

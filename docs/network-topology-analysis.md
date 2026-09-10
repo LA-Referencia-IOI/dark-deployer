@@ -445,11 +445,11 @@ Prueba: desde un contenedor en backbone, resolver `blockchain-rpc:8545`; desde f
 
 Archivos:
 
-- `components/services/dark-core-minter-api/docker-compose.yml`.
-- `components/services/dark-core-admin-api/docker-compose.yml`.
-- `components/services/dark-core-resolver-api/docker-compose.yml`.
-- `components/services/dark-store-api/docker-compose.yml`.
-- `components/frontend/dashboard-web/docker-compose.yml`.
+- `components/dark-core-minter-api/docker-compose.yml`.
+- `components/dark-core-admin-api/docker-compose.yml`.
+- `components/dark-core-resolver-api/docker-compose.yml`.
+- `components/dark-store-api/docker-compose.yml`.
+- `components/dashboard-web/docker-compose.yml`.
 
 1. Conectar dashboard y todas las APIs a `dark-apps`.
 2. Conservar `minter-net` para PostgreSQL del minter y la red default del dashboard para MySQL/Redis.
@@ -462,7 +462,7 @@ Prueba: desde dashboard resolver todas las APIs por sus nombres Docker; confirma
 
 ### Fase 4 — Aislar cada nodo IPFS
 
-Archivo: `components/storage/dark-ipfs/docker-compose.yml`.
+Archivo: `components/dark-ipfs/docker-compose.yml`.
 
 1. Eliminar `dark-net` de Kubo y Cluster.
 2. Usar una red local `dark-storage-${NODE_ID}` para la pareja Kubo + Cluster.

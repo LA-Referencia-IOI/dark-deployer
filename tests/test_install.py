@@ -450,7 +450,7 @@ class ValidationTests(unittest.TestCase):
                 self.assertEqual(Path(env["DEVELOPER_IPFS_SWARM_KEY_FILE"]).read_bytes(), swarm_before)
                 self.assertEqual(len(installer.configured_storage_runtime("DEVELOPER", env).nodes), 1)
 
-            ipfs_dir = root / "components/storage/dark-ipfs"
+            ipfs_dir = root / "components/dark-ipfs"
             ipfs_dir.mkdir(parents=True)
             stale = ipfs_dir / ".env.node.developer-storage-2"
             stale.write_text("NODE_ID=developer-storage-2\n")

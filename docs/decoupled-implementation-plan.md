@@ -110,7 +110,7 @@ já funciona para quem não configura serviços opcionais.
 **Funções afetadas:** `generate_admin_api_env_integration()` (linha 1225), `generate_resolver_api_env_integration()` (linha 1274), `generate_minter_env_integration()` (linha 1017), `generate_core_lib_env_integration()` (linha 980)
 
 Todas essas funções chamam `read_deployed_contract_addresses()`, que lê
-`components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini`.
+`components/dark-dapp/dARK_dapp/deployed_contracts.ini`.
 No modo desacoplado esse arquivo não existe.
 
 **Solução:** criar uma função helper `resolve_contract_addresses(prefix, env)`:
@@ -128,7 +128,7 @@ def resolve_contract_addresses(prefix: str, env: dict) -> tuple[str, str]:
     if dark_addr and authority_addr:
         return dark_addr, authority_addr
 
-    ini_path = Path("components/blockchain/dark-dapp/dARK_dapp/deployed_contracts.ini")
+    ini_path = Path("components/dark-dapp/dARK_dapp/deployed_contracts.ini")
     return read_deployed_contract_addresses(ini_path)
 ```
 

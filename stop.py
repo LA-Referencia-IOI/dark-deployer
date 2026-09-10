@@ -37,7 +37,7 @@ def main() -> int:
             failures.append(project)
     env_text = (ROOT / ".env").read_text(errors="ignore") if (ROOT / ".env").exists() else ""
     storage = ROOT / ("compose/storage-production.yml" if "TYPE=production" in env_text else "compose/storage.yml")
-    for env_file in sorted((ROOT / "components/storage/dark-ipfs").glob(".env.node*")):
+    for env_file in sorted((ROOT / "components/dark-ipfs").glob(".env.node*")):
         project = f"dark-storage-{env_file.name.removeprefix('.env.node.') or 'storage'}"
         if not stop(project, storage, env_file):
             failures.append(project)
