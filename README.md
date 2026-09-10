@@ -182,16 +182,14 @@ contract deployment:
 venv/bin/python deploy.py resume --inventory deployment-topology.json
 ```
 
-Valid stages, in order, are `blockchain`, `core-lib`, `admin`, `ipfs`,
-`store-api`, `resolver`, `minter` and `dashboard`. Resume uses the saved `.env`
-and blockchain handoff, does not open the wizard, and reports every preserved
-stage.
+The installation journal records each generated group and can be resumed with
+the same inventory after a transient failure.
 
 ### Recommended storage sequence
 
 1. Deploy the first storage node listed in `deployment-topology.json`; it seeds the Cluster.
 2. Deploy the remaining nodes using their individual `storage_node_id`.
-3. Verify the cluster with `python3 install.py storage audit`.
+3. Verify the cluster with `venv/bin/python deploy.py verify --inventory deployment-topology.json`.
 4. Deploy the apps role with its `storage_access_group`.
 5. Add nodes by editing the shared topology and rerun `storage reconcile`.
 
@@ -236,40 +234,21 @@ Health endpoints:
 ## Operations
 
 ```bash
-# Read-only global status
-python3 install.py storage audit
-
-# Reapply topology replication factors to every existing pin; never unpins
-python3 install.py storage reconcile
-
-# Restart installed stacks and check topology-aware endpoints
-python3 restart.py
-
-# Stop stacks while preserving storage volumes
-python3 stop.py
-
-# Rebuild one application component
-python3 install.py rebuild store-api
-
-# Inspect one rendered production host bundle
-python3 install.py host validate --config dist/dark-site-a-1/hosts/site-a-apps-1/host.json
-python3 install.py host plan --config dist/dark-site-a-1/hosts/site-a-apps-1/host.json
-python3 install.py host status --config dist/dark-site-a-1/hosts/site-a-apps-1/host.json --json
+venv/bin/python deploy.py status --inventory deployment-topology.json
+venv/bin/python deploy.py verify --inventory deployment-topology.json
+venv/bin/python deploy.py recreate --inventory deployment-topology.json --group apps --service store-api --build
 ```
 
-`clean.py` preserves the named Kubo and Cluster volumes even when cleaning the
-rest of the development stack. Storage deletion is intentionally not automated.
-Storage operations return exit code `2` when any CID is below the configured
-minimum or reports a pin error, making the audit suitable for monitoring jobs.
+The deployer never deletes persistent data automatically. Remove generated
+runtime data only after verifying the inventory and the intended deployment.
 
 ## Repository layout
 
 ```text
 dark-deployer/
-├── install.py
-├── restart.py / stop.py / clean.py
+├── deploy.py
 ├── deployment-topology.example.json
-├── compose/                    # all operational Docker orchestration
+├── deployment_v2/              # inventory, rendering and runtime orchestration
 ├── blockchain/                 # internal Besu runtime templates/scripts
 ├── dark_deployer/
 │   ├── commands.py
