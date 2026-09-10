@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -123,15 +124,27 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
     _require(executor.run((*compose, "up", "-d", "--build"), timeout=1800.0), f"apply group {group.id}")
 
 
-def apply(plan: DeploymentPlan, project_root: Path) -> Path:
+def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> Path:
     """Render then apply groups in plan order. Preconditions and secrets must exist."""
     root = run_root(project_root, plan.deployment_id)
     bundle = root / "bundle"
-    if bundle.exists():
-        raise ApplyError(f"run directory already exists: {root}; use a future resume command")
+    if bundle.exists() and not resume:
+        raise ApplyError(f"run directory already exists: {root}; use deploy.py resume")
     effective_plan = _effective_plan_for_apply(plan, project_root, root)
-    render_plan(effective_plan, bundle)
-    status: dict[str, object] = {"deployment_id": plan.deployment_id, "state": "running", "groups": {}}
+    if not bundle.exists():
+        render_plan(effective_plan, bundle)
+    status_path = root / "status.json"
+    if resume and status_path.exists():
+        try:
+            status = json.loads(status_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ApplyError(f"invalid existing run status: {status_path}") from exc
+        if status.get("deployment_id") != plan.deployment_id or not isinstance(status.get("groups"), dict):
+            raise ApplyError(f"existing run status does not belong to {plan.deployment_id}")
+        status["state"] = "running"
+        status.pop("error", None)
+    else:
+        status = {"deployment_id": plan.deployment_id, "state": "running", "groups": {}}
     write_status(root, status)
     try:
         for step in plan.steps:
@@ -143,6 +156,9 @@ def apply(plan: DeploymentPlan, project_root: Path) -> Path:
                 record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id})
                 continue
             if step.action != "compose_apply":
+                continue
+            if status["groups"].get(step.group_id) == "applied":  # type: ignore[index]
+                record(root, {"step": step.id, "state": "skipped", "reason": "already_applied", "machine": step.machine_id, "group": step.group_id})
                 continue
             record(root, {"step": step.id, "state": "started", "machine": step.machine_id, "group": step.group_id})
             _apply_group(effective_plan, effective_plan.group(step.group_id), project_root, root, bundle)

@@ -18,7 +18,7 @@ from .secrets import SecretError, initialize_greenfield_secrets
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "apply", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "secrets-init"):
+    for name in ("validate", "plan", "render", "preflight", "apply", "resume", "status", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "secrets-init"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
@@ -69,10 +69,17 @@ def main() -> None:
                 for step in plan.steps:
                     print(f"{step.id}: {step.description}")
             return
-        if args.action == "apply":
+        if args.action in {"apply", "resume"}:
             project_root = Path(__file__).resolve().parents[1]
-            output = apply(plan, project_root)
-            print(f"[OK] Applied deployment from {output}")
+            output = apply(plan, project_root, resume=args.action == "resume")
+            print(f"[OK] {'Resumed' if args.action == 'resume' else 'Applied'} deployment from {output}")
+            return
+        if args.action == "status":
+            project_root = Path(__file__).resolve().parents[1]
+            status_file = project_root / ".generated" / "deployment-v2" / plan.deployment_id / "status.json"
+            if not status_file.exists():
+                raise ValueError(f"no deployment status found: {status_file}")
+            print(status_file.read_text(), end="")
             return
         if args.action == "chain-bootstrap":
             artifact_root = write_chain_bootstrap(plan, args.output, args.master_wallet_address)

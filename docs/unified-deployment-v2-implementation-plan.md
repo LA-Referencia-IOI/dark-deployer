@@ -83,6 +83,12 @@ Admin, Resolver y Minter cargan ese entorno generado. Falta ejecutar una
 prueba de cadena limpia y comparar ABI/bytecode con el proceso de compilación
 actual antes de declararlo sustituto de `dark-dapp/deploy.py`.
 
+`resume` y `status` ya operan sobre el `status.json` del deployment. `resume`
+revalida preflight y omite únicamente grupos registrados como aplicados; no
+vuelve a enviar sus jobs. Falta añadir la verificación posterior de sus
+evidencias reales (contenedores, chain, almacenamiento y endpoints) antes de
+permitir que una reanudación los dé por definitivamente sanos.
+
 Solo pasó pruebas estructurales y `docker compose config`; no usarlo aún para
 reemplazar la instalación actual. Faltan la generación e importación completa
 de identidades/genesis Besu, jobs de contratos/migraciones, health checks,

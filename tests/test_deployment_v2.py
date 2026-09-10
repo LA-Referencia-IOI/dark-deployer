@@ -13,6 +13,7 @@ from deployment_v2.executor import CommandResult, run_preflight
 from deployment_v2.model import Machine, SshSettings
 from deployment_v2.planner import build_plan
 from deployment_v2.render import render_plan
+from deployment_v2.runner import apply
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +133,16 @@ class DeploymentV2Tests(unittest.TestCase):
             exported = export_chain_role(root, "validators-a", Path(temporary) / "role")
             self.assertTrue((exported / "nodes" / "validator01" / "nodekey").exists())
             self.assertFalse((exported / "nodes" / "validator03").exists())
+
+    def test_resume_skips_groups_already_recorded_as_applied(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-simple.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            with mock.patch("deployment_v2.runner.run_preflight", return_value=[]), mock.patch("deployment_v2.runner._apply_group") as apply_group:
+                apply(plan, project)
+                self.assertEqual(apply_group.call_count, 4)
+                apply(plan, project, resume=True)
+                self.assertEqual(apply_group.call_count, 4)
 
 
 if __name__ == "__main__":
