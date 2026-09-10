@@ -130,9 +130,11 @@ queda registrada por separado: `apps_bootstrap` (RPC y contratos), storage y
 reanudación no repite contratos ni migraciones que ya terminaron. `verify`
 consulta el estado Compose de cada grupo y, desde apps, prueba RPC mediante JSON
 RPC: exige el `chainId` del inventario y registra el bloque observado, además
-de probar los endpoints live de minter y Store. Falta ampliar esa evidencia a
-progreso de bloques en una ventana temporal, peers Cluster, contratos y
-conectividad remota cruzada.
+de probar los endpoints live de minter y Store. También consulta el readiness
+de escritura refrescado del Store y exige que los peers Cluster visibles sean
+al menos los nodos storage de la topología. Falta ampliar esa evidencia a
+progreso de bloques en una ventana temporal, contratos y conectividad remota
+cruzada.
 `apply` termina ejecutando esa verificación y solo deja el estado `verified`
 cuando obtiene evidencia sana; `resume` conserva las fases terminadas pero
 vuelve a verificar el conjunto completo.

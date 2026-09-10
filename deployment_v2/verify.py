@@ -26,6 +26,17 @@ def _rpc_command(base: tuple[str, ...], method: str) -> tuple[str, ...]:
     return (*base, "minter-api", "python", "-c", program)
 
 
+def _store_cluster_command(base: tuple[str, ...]) -> tuple[str, ...]:
+    """Read Store write readiness and print the visible Cluster peer count."""
+    program = (
+        "import json, urllib.request; "
+        "payload=json.loads(urllib.request.urlopen('http://127.0.0.1:8003/health?refresh=true', timeout=10).read()); "
+        "assert payload.get('backend_healthy'), payload; "
+        "print(payload.get('available_cluster_peers', 0))"
+    )
+    return (*base, "store-api", "python", "-c", program)
+
+
 def _group_directory(plan: DeploymentPlan, group, root: Path) -> Path:
     machine = plan.machine(group.machine_id)
     if isinstance(resolve_executor(machine), SshExecutor):
@@ -88,13 +99,26 @@ def verify(plan: DeploymentPlan, project_root: Path) -> dict:
             block_ok = block_number is not None and int(block_number, 16) >= 0
         except ValueError:
             block_ok = False
+        store_cluster_result = executor.run(_store_cluster_command(base), timeout=20.0)
+        try:
+            visible_cluster_peers = int(store_cluster_result.stdout.strip())
+        except ValueError:
+            visible_cluster_peers = 0
+        expected_cluster_peers = len(plan.raw["storage"]["nodes"])
         probes = {
             "rpc_chain_id": chain_id_result.returncode == 0 and chain_id == expected_chain_id,
             "rpc_block_number": block_ok,
             "minter": executor.run((*base, "minter-api", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live', timeout=5).read()"), timeout=15.0).returncode == 0,
             "store": executor.run((*base, "store-api", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health/live', timeout=5).read()"), timeout=15.0).returncode == 0,
+            "store_cluster_peers": store_cluster_result.returncode == 0 and visible_cluster_peers >= expected_cluster_peers,
         }
-        probe_report = {**probes, "rpc_chain_id_value": chain_id, "rpc_block_number_value": block_number}
+        probe_report = {
+            **probes,
+            "rpc_chain_id_value": chain_id,
+            "rpc_block_number_value": block_number,
+            "store_cluster_peers_visible": visible_cluster_peers,
+            "store_cluster_peers_expected": expected_cluster_peers,
+        }
         report["probes"] = probe_report
         report["ok"] = all(probes.values())
     status = json.loads(status_path.read_text())

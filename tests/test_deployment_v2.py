@@ -309,6 +309,8 @@ class DeploymentV2Tests(unittest.TestCase):
                     return CommandResult(tuple(argv), 0, "0x7e9\n", "")
                 if "eth_blockNumber" in " ".join(argv):
                     return CommandResult(tuple(argv), 0, "0x1\n", "")
+                if "/health?refresh=true" in " ".join(argv):
+                    return CommandResult(tuple(argv), 0, "2\n", "")
                 return CommandResult(tuple(argv), 0, "", "")
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -318,6 +320,7 @@ class DeploymentV2Tests(unittest.TestCase):
             with mock.patch("deployment_v2.verify.resolve_executor", return_value=HealthyExecutor()):
                 report = verify(plan, project)
             self.assertTrue(report["ok"])
+            self.assertEqual(report["probes"]["store_cluster_peers_visible"], 2)
             self.assertEqual(json.loads((root / "status.json").read_text())["state"], "verified")
 
     def test_source_evidence_rejects_a_declared_branch_mismatch(self):
