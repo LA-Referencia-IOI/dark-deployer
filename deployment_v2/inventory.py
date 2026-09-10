@@ -232,6 +232,13 @@ def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
         raise _error("exactly two validator groups and one explorer group are required")
     if not storage_groups:
         raise _error("at least one storage group is required")
+    storage_by_machine: dict[str, list[Group]] = {}
+    for group in storage_groups:
+        storage_by_machine.setdefault(group.machine_id, []).append(group)
+    for machine_id, assigned in storage_by_machine.items():
+        execution = raw["machines"][machine_id]["execution"]
+        if len(assigned) > 1 and execution != "local":
+            raise _error("a non-local machine may host only one storage group; use separate hosts or an explicit local simulation")
     blockchain = _object(raw["blockchain"], "blockchain")
     _only_keys(blockchain, "blockchain", {"chain_id", "besu_image", "nodes", "qbft", "artifact"})
     artifact = _object(blockchain.get("artifact", {}), "blockchain.artifact")

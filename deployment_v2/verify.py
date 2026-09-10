@@ -15,6 +15,17 @@ class VerifyError(RuntimeError):
     """Live deployment evidence is missing or unhealthy."""
 
 
+def _rpc_command(base: tuple[str, ...], method: str) -> tuple[str, ...]:
+    payload = f'{{"jsonrpc":"2.0","method":"{method}","params":[],"id":1}}'
+    program = (
+        "import json, urllib.request; "
+        f"request=urllib.request.Request('http://blockchain-rpc:8545', data=b'{payload}', "
+        "headers={'Content-Type':'application/json'}); "
+        "print(json.loads(urllib.request.urlopen(request, timeout=5).read())['result'])"
+    )
+    return (*base, "minter-api", "python", "-c", program)
+
+
 def _group_directory(plan: DeploymentPlan, group, root: Path) -> Path:
     machine = plan.machine(group.machine_id)
     if isinstance(resolve_executor(machine), SshExecutor):
@@ -68,14 +79,24 @@ def verify(plan: DeploymentPlan, project_root: Path) -> dict:
         executor = resolve_executor(machine)
         directory = _group_directory(effective, apps, root)
         base = ("docker", "compose", "--project-name", f"{plan.deployment_id}-apps", "-f", str(directory / "compose.yaml"), "exec", "-T")
+        chain_id_result = executor.run(_rpc_command(base, "eth_chainId"), timeout=15.0)
+        block_result = executor.run(_rpc_command(base, "eth_blockNumber"), timeout=15.0)
+        expected_chain_id = hex(int(plan.raw["blockchain"]["chain_id"])).lower()
+        chain_id = chain_id_result.stdout.strip().lower() if chain_id_result.returncode == 0 else None
+        block_number = block_result.stdout.strip().lower() if block_result.returncode == 0 else None
+        try:
+            block_ok = block_number is not None and int(block_number, 16) >= 0
+        except ValueError:
+            block_ok = False
         probes = {
-            "rpc": (*base, "minter-api", "python", "-c", "import urllib.request; request=urllib.request.Request('http://blockchain-rpc:8545', data=b'{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}', headers={'Content-Type':'application/json'}); urllib.request.urlopen(request, timeout=5).read()"),
-            "minter": (*base, "minter-api", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live', timeout=5).read()"),
-            "store": (*base, "store-api", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health/live', timeout=5).read()"),
+            "rpc_chain_id": chain_id_result.returncode == 0 and chain_id == expected_chain_id,
+            "rpc_block_number": block_ok,
+            "minter": executor.run((*base, "minter-api", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live', timeout=5).read()"), timeout=15.0).returncode == 0,
+            "store": executor.run((*base, "store-api", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health/live', timeout=5).read()"), timeout=15.0).returncode == 0,
         }
-        probe_report = {name: executor.run(command, timeout=15.0).returncode == 0 for name, command in probes.items()}
+        probe_report = {**probes, "rpc_chain_id_value": chain_id, "rpc_block_number_value": block_number}
         report["probes"] = probe_report
-        report["ok"] = all(probe_report.values())
+        report["ok"] = all(probes.values())
     status = json.loads(status_path.read_text())
     status["verification"] = report
     status["state"] = "verified" if report["ok"] else "verification_failed"

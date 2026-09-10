@@ -81,7 +81,10 @@ def chain_node_addresses(plan) -> dict[str, str]:
         machine = assignments[node]
         if machine.execution == "local":
             subnet = ipaddress.ip_network(plan.docker_subnets[machine.id])
-            addresses[node] = str(subnet.network_address + index)
+            address = subnet.network_address + index
+            if address not in subnet or address == subnet.broadcast_address:
+                raise InventoryError(f"deployment topology v2: Docker subnet {subnet} for {machine.id} is too small for local QBFT addresses")
+            addresses[node] = str(address)
         else:
             addresses[node] = machine.private_address
     return addresses
@@ -90,3 +93,35 @@ def chain_node_addresses(plan) -> dict[str, str]:
 def host_bind_address(machine: Machine) -> str:
     """Local simulations publish only on loopback; servers use their VPN/LAN IP."""
     return "127.0.0.1" if machine.execution == "local" else machine.private_address
+
+
+def storage_container_addresses(plan) -> dict[str, dict[str, str]]:
+    """Allocate stable Kubo/Cluster addresses only inside local simulations.
+
+    Production peers live on separate Docker daemons.  Their routable identity
+    is the host VPN address plus published ports, so assigning a container IP
+    adds no value there.  A local multi-host simulation needs stable bridge
+    addresses instead of the inventory's conceptual VPN addresses.
+    """
+    result: dict[str, dict[str, str]] = {}
+    by_machine: dict[str, int] = {}
+    for group in sorted((item for item in plan.groups if item.kind == "storage"), key=lambda item: item.id):
+        machine = plan.machine(group.machine_id)
+        if machine.execution != "local":
+            continue
+        slot = by_machine.get(machine.id, 0)
+        by_machine[machine.id] = slot + 1
+        subnet = ipaddress.ip_network(plan.docker_subnets[machine.id])
+        # Reserve .10-.14 for QBFT nodes, .100+ for storage pairs.
+        ipfs = subnet.network_address + 100 + (slot * 2)
+        cluster = ipfs + 1
+        if ipfs not in subnet or cluster not in subnet or ipfs == subnet.broadcast_address or cluster == subnet.broadcast_address:
+            raise InventoryError(f"deployment topology v2: Docker subnet {subnet} for {machine.id} is too small for local storage addresses")
+        result[group.id] = {"ipfs": str(ipfs), "cluster": str(cluster)}
+    return result
+
+
+def storage_announce_address(plan, group: Group) -> str:
+    machine = plan.machine(group.machine_id)
+    local = storage_container_addresses(plan).get(group.id)
+    return local["ipfs"] if local else machine.private_address

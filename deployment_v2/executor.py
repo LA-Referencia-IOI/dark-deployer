@@ -93,9 +93,13 @@ def run_preflight(machine: Machine) -> list[dict[str, str | bool]]:
     commands = {
         "docker": ("docker", "info", "--format", "{{.ID}}"),
         "compose": ("docker", "compose", "version", "--short"),
+        "architecture": ("uname", "-m"),
         "workspace_parent": ("test", "-d", str(Path(machine.workspace_root).parent)),
+        "workspace_parent_writable": ("test", "-w", str(Path(machine.workspace_root).parent)),
         "data_parent": ("test", "-d", str(Path(machine.data_root).parent)),
+        "data_parent_writable": ("test", "-w", str(Path(machine.data_root).parent)),
         "secrets_parent": ("test", "-d", str(Path(machine.secrets_root).parent)),
+        "secrets_parent_writable": ("test", "-w", str(Path(machine.secrets_root).parent)),
     }
     results: list[dict[str, str | bool]] = []
     for name, argv in commands.items():

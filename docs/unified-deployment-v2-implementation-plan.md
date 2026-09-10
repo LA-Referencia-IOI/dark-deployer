@@ -63,8 +63,10 @@ cada máquina. Antes de iniciar un grupo Besu copia el genesis, la configuració
 base, la clave del nodo y sus static nodes al data root del deployment. Una
 máquina local puede usar el artefacto completo; en hosts separados se debe
 provisionar el paquete mínimo exportado para cada rol. Falta probar este flujo
-en una red Docker nueva y añadir la comprobación de hashes para evitar una
-sustitución accidental de genesis o claves.
+en una red Docker nueva. El runner ya trata ese material como inmutable: si el
+destino existe debe coincidir byte a byte mediante `cmp`; una diferencia detiene
+la ejecución y no sobrescribe genesis, claves, configuración Besu ni static
+nodes. Aún falta añadir un manifiesto de hashes exportable entre controladores.
 
 El renderer ya emite entornos públicos diferenciados para Store, Minter, Admin,
 Resolver y Dashboard. Deriva RPC, Store API, chain ID, política de réplica y
@@ -104,13 +106,29 @@ Admin, Resolver y Minter cargan ese entorno generado. Falta ejecutar una
 prueba de cadena limpia y comparar ABI/bytecode con el proceso de compilación
 actual antes de declararlo sustituto de `dark-dapp/deploy.py`.
 
+Antes de iniciar ese job, el runner usa `rpc-probe`, un contenedor efímero en
+la misma red Compose, para esperar hasta 90 segundos el RPC y verificar su
+chain ID. Esto elimina la carrera entre `docker compose up blockchain-rpc` y
+el primer despliegue de contratos, sin requerir herramientas instaladas en el
+host ni exponer el RPC.
+
+En simulación local, cada pareja Kubo/Cluster recibe IPs fijas de la bridge
+compartida (`.100/.101`, `.102/.103`, …) y Kubo anuncia esa IP real de Docker.
+No se anuncian las direcciones VPN conceptuales del inventario, porque no son
+ruteables dentro del daemon local. En SSH/producción no se fijan IPs de
+contenedor: cada pareja anuncia la IP privada/VPN de su host y usa sus puertos
+publicados. Para mantener esta regla sin puertos ambiguos, una máquina no local
+solo puede alojar un grupo storage.
+
 `resume` y `status` ya operan sobre el `status.json` del deployment. Cada fase
 queda registrada por separado: `apps_bootstrap` (RPC y contratos), storage y
 `apps_runtime` (bases, migraciones, APIs, workers y dashboard). Así una
 reanudación no repite contratos ni migraciones que ya terminaron. `verify`
 consulta el estado Compose de cada grupo y, desde apps, prueba RPC mediante JSON
-RPC y los endpoints live de minter y Store. Falta ampliar esa evidencia a
-progreso de bloques, peers Cluster, contratos y conectividad remota cruzada.
+RPC: exige el `chainId` del inventario y registra el bloque observado, además
+de probar los endpoints live de minter y Store. Falta ampliar esa evidencia a
+progreso de bloques en una ventana temporal, peers Cluster, contratos y
+conectividad remota cruzada.
 `apply` termina ejecutando esa verificación y solo deja el estado `verified`
 cuando obtiene evidencia sana; `resume` conserva las fases terminadas pero
 vuelve a verificar el conjunto completo.

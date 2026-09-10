@@ -7,7 +7,7 @@ the destination host; no generated Compose file includes legacy Compose files.
 from __future__ import annotations
 
 from .model import DeploymentPlan, Group
-from .network import chain_node_addresses, host_bind_address
+from .network import chain_node_addresses, host_bind_address, storage_announce_address, storage_container_addresses
 
 
 def _network(plan: DeploymentPlan, group: Group) -> str:
@@ -56,6 +56,7 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
     bind = host_bind_address(machine)
     node_addresses = chain_node_addresses(plan)
     minter_build = _build(components, "services/dark-core-minter-api/Dockerfile")
+    contracts_build = {"context": machine.workspace_root, "dockerfile": "deployment_v2/Dockerfile.contracts"}
     # `required: false` keeps `docker compose config` usable for a public
     # bundle.  The runner separately requires the file before `apply` starts
     # any apps service, so this never weakens runtime secret validation.
@@ -87,7 +88,8 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
         "store-api": {**common, "build": _build(components, "services/dark-store-api/Dockerfile"), "env_file": ["./env/store-api.env"], "ports": [f"{bind}:8003:8003"], "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]},
         "minter-api": {**common, "build": minter_build, "env_file": minter_env, "ports": [f"{bind}:8001:8001"], "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "minter-migrate": {**common, "profiles": ["setup"], "build": minter_build, "command": ["migrate"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_healthy"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
-        "contracts-deploy": {**common, "profiles": ["setup"], "build": {"context": machine.workspace_root, "dockerfile": "deployment_v2/Dockerfile.contracts"}, "environment": {"DARK_RPC_URL": "http://blockchain-rpc:8545", "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]), "CONTRACT_SIGNER_FILE": "/run/dark-secrets/contract-signer", "CONTRACT_HANDOFF_FILE": "/state/handoff.json", "CONTRACT_RUNTIME_ENV_FILE": "/state/contracts.env"}, "volumes": [f"{_secret_file(plan, machine.id, 'contract-signer')}:/run/dark-secrets/contract-signer:ro", f"{data}/contracts:/state"]},
+        "rpc-probe": {**common, "profiles": ["setup"], "build": contracts_build, "entrypoint": ["python"], "environment": {"DARK_RPC_URL": "http://blockchain-rpc:8545", "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]) }},
+        "contracts-deploy": {**common, "profiles": ["setup"], "build": contracts_build, "environment": {"DARK_RPC_URL": "http://blockchain-rpc:8545", "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]), "CONTRACT_SIGNER_FILE": "/run/dark-secrets/contract-signer", "CONTRACT_HANDOFF_FILE": "/state/handoff.json", "CONTRACT_RUNTIME_ENV_FILE": "/state/contracts.env"}, "volumes": [f"{_secret_file(plan, machine.id, 'contract-signer')}:/run/dark-secrets/contract-signer:ro", f"{data}/contracts:/state"]},
         "minter-metadata-worker": {**common, "build": minter_build, "command": ["metadata-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "minter-replication-worker": {**common, "build": minter_build, "command": ["replication-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "minter-chain-worker": {**common, "build": minter_build, "command": ["chain-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
@@ -151,18 +153,24 @@ def _storage(plan: DeploymentPlan, group: Group) -> dict:
     seed = group.id == min(candidate.id for candidate in plan.groups if candidate.kind == "storage")
     swarm_key = _secret_file(plan, machine.id, "ipfs-swarm-key")
     cluster_secret = _secret_file(plan, machine.id, "ipfs-cluster-secret")
+    container_addresses = storage_container_addresses(plan).get(group.id, {})
+    ipfs_network = {network: {"aliases": [f"ipfs-{node}"]}}
+    cluster_network = {network: {"aliases": [f"cluster-{group.id}"]}}
+    if container_addresses:
+        ipfs_network[network]["ipv4_address"] = container_addresses["ipfs"]
+        cluster_network[network]["ipv4_address"] = container_addresses["cluster"]
     services = {
         "ipfs": {
             "image": "ipfs/kubo:v0.41.0", "restart": "unless-stopped", "entrypoint": ["/usr/local/bin/ipfs-entrypoint.sh"],
-            "environment": {"NODE_NAME": node, "IPFS_SWARM_KEY_FILE": "/run/dark-secrets/ipfs-swarm.key", "IPFS_BOOTSTRAP_HOSTS": ipfs_bootstrap_hosts, "CLUSTER_SEED": str(seed).lower(), "IPFS_ANNOUNCE_MULTIADDRESS": f"/ip4/{machine.private_address}/tcp/{ipfs_swarm_port}"},
+            "environment": {"NODE_NAME": node, "IPFS_SWARM_KEY_FILE": "/run/dark-secrets/ipfs-swarm.key", "IPFS_BOOTSTRAP_HOSTS": ipfs_bootstrap_hosts, "CLUSTER_SEED": str(seed).lower(), "IPFS_ANNOUNCE_MULTIADDRESS": f"/ip4/{storage_announce_address(plan, group)}/tcp/{ipfs_swarm_port}"},
             "volumes": [f"{workspace}/components/storage/dark-ipfs/scripts/ipfs-entrypoint.sh:/usr/local/bin/ipfs-entrypoint.sh:ro", f"{swarm_key}:/run/dark-secrets/ipfs-swarm.key:ro", f"{data}/ipfs:/data/ipfs"],
-            "ports": [f"{machine.private_address}:{ipfs_api_port}:5001", f"{machine.private_address}:{ipfs_swarm_port}:4001/tcp", f"{machine.private_address}:{ipfs_swarm_port}:4001/udp"], "networks": {network: {"aliases": [f"ipfs-{node}"]}},
+            "ports": [f"{host_bind_address(machine)}:{ipfs_api_port}:5001", f"{host_bind_address(machine)}:{ipfs_swarm_port}:4001/tcp", f"{host_bind_address(machine)}:{ipfs_swarm_port}:4001/udp"], "networks": ipfs_network,
         },
         "cluster": {
             "image": "ipfs/ipfs-cluster:v1.1.6", "restart": "unless-stopped", "entrypoint": ["/usr/local/bin/cluster-entrypoint.sh"], "depends_on": ["ipfs"],
             "environment": {"CLUSTER_PEERNAME": node, "CLUSTER_SECRET_FILE": "/run/dark-secrets/ipfs-cluster-secret", "CLUSTER_BOOTSTRAP_HOSTS": cluster_bootstrap_hosts, "CLUSTER_SEED": str(seed).lower(), "CLUSTER_CRDT_CLUSTERNAME": plan.raw["storage"]["cluster_name"], "IPFS_DARK_NET_ALIAS": f"ipfs-{node}"},
             "volumes": [f"{workspace}/components/storage/dark-ipfs/scripts/cluster-entrypoint.sh:/usr/local/bin/cluster-entrypoint.sh:ro", f"{cluster_secret}:/run/dark-secrets/ipfs-cluster-secret:ro", f"{data}/cluster:/data/ipfs-cluster"],
-            "ports": [f"{machine.private_address}:{cluster_rest_port}:9094", f"{machine.private_address}:{cluster_proxy_port}:9095", f"{machine.private_address}:{cluster_swarm_port}:9096/tcp", f"{machine.private_address}:{cluster_swarm_port}:9096/udp"], "networks": {network: {"aliases": [f"cluster-{group.id}"]}},
+            "ports": [f"{host_bind_address(machine)}:{cluster_rest_port}:9094", f"{host_bind_address(machine)}:{cluster_proxy_port}:9095", f"{host_bind_address(machine)}:{cluster_swarm_port}:9096/tcp", f"{host_bind_address(machine)}:{cluster_swarm_port}:9096/udp"], "networks": cluster_network,
         },
     }
     return {"name": f"{plan.deployment_id}-{group.id}", "services": services, "networks": {network: {"name": network, "external": True}}}

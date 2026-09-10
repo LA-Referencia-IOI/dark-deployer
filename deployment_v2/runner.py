@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,10 +19,53 @@ class ApplyError(RuntimeError):
     """An apply step failed; journal and status identify the exact group."""
 
 
+_RPC_READY_TIMEOUT_SECONDS = 90
+
+
 def _require(result, description: str) -> None:
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip() or "no command output"
         raise ApplyError(f"{description}: {detail}")
+
+
+def _copy_if_absent_or_identical(executor, source: Path, destination: Path, description: str) -> None:
+    """Install immutable chain material without replacing an existing identity.
+
+    A rerun may copy the same artifact safely.  A different genesis, private
+    key or static-node list is a configuration change that must be handled by
+    an explicit migration, never by an incidental deployment rerun.
+    """
+    present = executor.run(("test", "-e", str(destination)))
+    if present.returncode == 0:
+        identical = executor.run(("cmp", "-s", str(source), str(destination)))
+        if identical.returncode:
+            raise ApplyError(f"{description}: existing destination differs; refusing to overwrite {destination}")
+        return
+    _require(executor.run(("cp", str(source), str(destination))), description)
+
+
+def _wait_for_rpc(executor, compose: tuple[str, ...], expected_chain_id: int) -> None:
+    """Wait for the expected network before allowing contract deployment.
+
+    The probe is a short-lived Python container already built from the
+    contracts job image, so it uses the exact same Docker network and does not
+    require curl, Python, or an exposed RPC port on the destination host.
+    """
+    program = (
+        "import os; from web3 import Web3; "
+        "web3=Web3(Web3.HTTPProvider(os.environ['DARK_RPC_URL'], request_kwargs={'timeout': 5})); "
+        "assert web3.is_connected(), 'RPC unavailable'; "
+        "assert web3.eth.chain_id == int(os.environ['DARK_CHAIN_ID']), 'unexpected chain ID'"
+    )
+    deadline = time.monotonic() + _RPC_READY_TIMEOUT_SECONDS
+    last_detail = "RPC did not respond"
+    while time.monotonic() < deadline:
+        result = executor.run((*compose, "run", "--rm", "rpc-probe", "-c", program), timeout=30.0)
+        if result.returncode == 0:
+            return
+        last_detail = result.stderr.strip() or result.stdout.strip() or last_detail
+        time.sleep(2)
+    raise ApplyError(f"RPC did not become ready on expected chain {expected_chain_id} within {_RPC_READY_TIMEOUT_SECONDS}s: {last_detail}")
 
 
 def _source_paths(project_root: Path) -> tuple[Path, ...]:
@@ -105,18 +149,19 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
         target = Path(machine.data_root) / plan.deployment_id / "blockchain"
         _require(executor.run(("test", "-r", str(source / "genesis.json"))), f"chain artifact genesis is readable for {role} on {machine.id}")
         _require(executor.run(("mkdir", "-p", str(target / "config"))), f"prepare chain config on {machine.id}")
-        _require(executor.run(("cp", str(source / "genesis.json"), str(target / "config" / "genesis.json"))), f"install chain genesis for {role} on {machine.id}")
-        _require(executor.run(("cp", str(Path(machine.workspace_root) / "blockchain" / "config" / "besu-config.toml"), str(target / "config" / "besu-config.toml"))), f"install Besu config for {role} on {machine.id}")
+        _copy_if_absent_or_identical(executor, source / "genesis.json", target / "config" / "genesis.json", f"install chain genesis for {role} on {machine.id}")
+        _copy_if_absent_or_identical(executor, Path(machine.workspace_root) / "blockchain" / "config" / "besu-config.toml", target / "config" / "besu-config.toml", f"install Besu config for {role} on {machine.id}")
         for node in group.members:
             node_source = source / "nodes" / node
             node_target = target / node
             _require(executor.run(("test", "-r", str(node_source / "nodekey"))), f"chain key is readable for {node} on {machine.id}")
             _require(executor.run(("mkdir", "-p", str(node_target))), f"prepare chain node {node} on {machine.id}")
             for filename in ("nodekey", "key.pub", "static-nodes.json"):
-                _require(executor.run(("cp", str(node_source / filename), str(node_target / filename))), f"install {filename} for {node} on {machine.id}")
+                _copy_if_absent_or_identical(executor, node_source / filename, node_target / filename, f"install {filename} for {node} on {machine.id}")
     compose = ("docker", "compose", "--project-name", f"{plan.deployment_id}-{group.id}", "-f", str(destination / "compose.yaml"))
     if group.kind == "apps" and phase == "bootstrap":
         _require(executor.run((*compose, "--profile", "rpc", "up", "-d", "blockchain-rpc"), timeout=1800.0), f"start RPC for {group.id}")
+        _wait_for_rpc(executor, compose, int(plan.raw["blockchain"]["chain_id"]))
         _require(executor.run((*compose, "run", "--rm", "contracts-deploy"), timeout=1800.0), f"deploy or verify contracts for {group.id}")
         return
     if group.kind == "apps" and phase == "runtime":

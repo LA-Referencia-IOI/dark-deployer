@@ -14,6 +14,7 @@ from deployment_v2.model import Machine, SshSettings
 from deployment_v2.planner import build_plan
 from deployment_v2.render import render_plan
 from deployment_v2.runner import apply
+from deployment_v2.runner import ApplyError, _copy_if_absent_or_identical, _wait_for_rpc
 from deployment_v2.state import deployment_lock, run_root, write_status
 from deployment_v2.verify import verify
 from deployment_v2.sources import SourceError, source_evidence
@@ -69,6 +70,16 @@ class DeploymentV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(InventoryError, "safe Git branch"):
                 load_inventory(path)
 
+    def test_rejects_multiple_remote_storage_groups_on_one_machine(self):
+        source = ROOT / "examples" / "deployment-v2" / "production-five-host.json"
+        document = json.loads(source.read_text())
+        document["groups"]["storage-b"]["machine"] = "storage-1"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "bad.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "only one storage group"):
+                load_inventory(path)
+
     def test_render_produces_public_group_configs_without_secret_values(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
         with tempfile.TemporaryDirectory() as temporary:
@@ -80,6 +91,7 @@ class DeploymentV2Tests(unittest.TestCase):
             apps_compose = yaml.safe_load((output / "groups" / "apps" / "compose.yaml").read_text())
             self.assertIn("minter-chain-worker", apps_compose["services"])
             self.assertEqual(apps_compose["services"]["contracts-deploy"]["build"]["context"], "/srv/dark")
+            self.assertEqual(apps_compose["services"]["rpc-probe"]["entrypoint"], ["python"])
             rpc = apps_compose["services"]["blockchain-rpc"]
             self.assertIn("--genesis-file=/config/genesis.json", rpc["command"])
             self.assertEqual(rpc["networks"]["dark-local-ha-local"]["ipv4_address"], "172.30.0.14")
@@ -90,6 +102,9 @@ class DeploymentV2Tests(unittest.TestCase):
             storage_a = yaml.safe_load((output / "groups" / "storage-a" / "compose.yaml").read_text())
             storage_b = yaml.safe_load((output / "groups" / "storage-b" / "compose.yaml").read_text())
             self.assertNotEqual(storage_a["services"]["cluster"]["ports"][0], storage_b["services"]["cluster"]["ports"][0])
+            self.assertEqual(storage_a["services"]["ipfs"]["networks"]["dark-local-ha-local"]["ipv4_address"], "172.30.0.100")
+            self.assertEqual(storage_b["services"]["cluster"]["networks"]["dark-local-ha-local"]["ipv4_address"], "172.30.0.103")
+            self.assertEqual(storage_a["services"]["ipfs"]["environment"]["IPFS_ANNOUNCE_MULTIADDRESS"], "/ip4/172.30.0.100/tcp/4001")
             endpoints = json.loads((output / "groups" / "apps" / "config" / "storage-endpoints.json").read_text())
             self.assertEqual(endpoints["version"], 1)
             self.assertEqual({node["id"] for node in endpoints["nodes"]}, {"storage-a", "storage-b"})
@@ -106,8 +121,8 @@ class DeploymentV2Tests(unittest.TestCase):
         )
         with mock.patch("deployment_v2.executor.LocalExecutor.run", return_value=CommandResult(("test",), 0, "ok\n", "")) as command:
             results = run_preflight(machine)
-        self.assertEqual([item["check"] for item in results], ["docker", "compose", "workspace_parent", "data_parent", "secrets_parent"])
-        self.assertEqual(command.call_count, 5)
+        self.assertEqual([item["check"] for item in results], ["docker", "compose", "architecture", "workspace_parent", "workspace_parent_writable", "data_parent", "data_parent_writable", "secrets_parent", "secrets_parent_writable"])
+        self.assertEqual(command.call_count, 9)
         self.assertTrue(all(item["ok"] for item in results))
 
     def test_chain_bootstrap_is_public_and_static_nodes_use_derived_private_addresses(self):
@@ -190,6 +205,10 @@ class DeploymentV2Tests(unittest.TestCase):
                         "storage-b": ["ipfs", "cluster"],
                     }[group.id]
                     return CommandResult(tuple(argv), 0, json.dumps([{"Service": name, "State": "running"} for name in names]), "")
+                if "eth_chainId" in " ".join(argv):
+                    return CommandResult(tuple(argv), 0, "0x7e9\n", "")
+                if "eth_blockNumber" in " ".join(argv):
+                    return CommandResult(tuple(argv), 0, "0x1\n", "")
                 return CommandResult(tuple(argv), 0, "", "")
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -212,6 +231,35 @@ class DeploymentV2Tests(unittest.TestCase):
             root = Path(temporary) / "run"
             with deployment_lock(root):
                 self.assertTrue((root / ".controller.lock").exists())
+
+    def test_immutable_artifact_copy_refuses_to_replace_different_file(self):
+        class Executor:
+            def __init__(self):
+                self.commands = []
+
+            def run(self, argv, *, timeout=30.0):
+                self.commands.append(tuple(argv))
+                if argv[0] == "test":
+                    return CommandResult(tuple(argv), 0, "", "")
+                if argv[0] == "cmp":
+                    return CommandResult(tuple(argv), 1, "", "")
+                return CommandResult(tuple(argv), 0, "", "")
+
+        with self.assertRaisesRegex(ApplyError, "refusing to overwrite"):
+            _copy_if_absent_or_identical(Executor(), Path("/source"), Path("/destination"), "install test artifact")
+
+    def test_rpc_probe_waits_in_the_compose_network_before_contracts(self):
+        class Executor:
+            def __init__(self):
+                self.calls = 0
+
+            def run(self, argv, *, timeout=30.0):
+                self.calls += 1
+                return CommandResult(tuple(argv), 0, "", "")
+
+        executor = Executor()
+        _wait_for_rpc(executor, ("docker", "compose", "-f", "/bundle/compose.yaml"), 2025)
+        self.assertEqual(executor.calls, 1)
 
 
 if __name__ == "__main__":
