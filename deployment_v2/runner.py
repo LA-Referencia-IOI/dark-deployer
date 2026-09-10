@@ -10,6 +10,7 @@ from pathlib import Path
 from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_executor, run_preflight
 from .model import DeploymentPlan, Group
 from .render import render_plan
+from .sources import SourceError, source_evidence
 from .state import record, run_root, write_status
 
 
@@ -132,6 +133,7 @@ def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> 
     bundle = root / "bundle"
     if bundle.exists() and not resume:
         raise ApplyError(f"run directory already exists: {root}; use deploy.py resume")
+    evidence = source_evidence(plan, project_root)
     effective_plan = _effective_plan_for_apply(plan, project_root, root)
     if not bundle.exists():
         render_plan(effective_plan, bundle)
@@ -146,7 +148,7 @@ def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> 
         status["state"] = "running"
         status.pop("error", None)
     else:
-        status = {"deployment_id": plan.deployment_id, "state": "running", "groups": {}}
+        status = {"deployment_id": plan.deployment_id, "state": "running", "groups": {}, "sources": evidence}
     write_status(root, status)
     try:
         for step in plan.steps:
@@ -188,7 +190,7 @@ def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> 
                 status["groups"][step.group_id] = "applied"  # type: ignore[index]
             write_status(root, status)
             record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id, "group": step.group_id})
-    except (ExecutionError, ApplyError) as exc:
+    except (ExecutionError, ApplyError, SourceError) as exc:
         status["state"] = "failed"
         status["error"] = str(exc)
         write_status(root, status)

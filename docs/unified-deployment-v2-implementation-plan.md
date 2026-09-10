@@ -69,8 +69,17 @@ sustitución accidental de genesis o claves.
 El renderer ya emite entornos públicos diferenciados para Store, Minter, Admin,
 Resolver y Dashboard. Deriva RPC, Store API, chain ID, política de réplica y
 endpoints Docker internos; no acepta esos valores repetidos en `.env`. Aún no
-materializa las direcciones de contratos, firmantes ni las credenciales
-MySQL/Laravel, que deben llegar desde jobs y secretos privados.
+materializa las direcciones de contratos hasta que el job idempotente las
+confirma on-chain. Los firmantes y las credenciales MySQL/Laravel llegan por
+secretos privados provisionados fuera del bundle.
+
+Antes de `apply`, el controlador inspecciona cada checkout público utilizado y
+registra rama, commit, remote y si contiene cambios locales en `status.json`.
+Si el inventario declara una rama para un componente, el checkout debe estar en
+esa rama: un host remoto nunca elige otra referencia por sí mismo. El hash es
+la evidencia exacta de lo enviado; la rama sigue siendo la referencia humana
+de entrega. La comparación estricta de URLs remotas y una política sobre trees
+sucios continúan pendientes de decisión operativa.
 
 El mismo mecanismo ya modela Dashboard: `secrets-init` genera el entorno
 privado de Laravel/MySQL, el runner espera el healthcheck de MySQL y ejecuta

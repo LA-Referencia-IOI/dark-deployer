@@ -16,6 +16,7 @@ from deployment_v2.render import render_plan
 from deployment_v2.runner import apply
 from deployment_v2.state import run_root, write_status
 from deployment_v2.verify import verify
+from deployment_v2.sources import SourceError, source_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -156,7 +157,7 @@ class DeploymentV2Tests(unittest.TestCase):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-simple.json")
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary)
-            with mock.patch("deployment_v2.runner.run_preflight", return_value=[]), mock.patch("deployment_v2.runner._apply_group") as apply_group, mock.patch("deployment_v2.verify.verify", return_value={"ok": True}):
+            with mock.patch("deployment_v2.runner.run_preflight", return_value=[]), mock.patch("deployment_v2.runner.source_evidence", return_value={}), mock.patch("deployment_v2.runner._apply_group") as apply_group, mock.patch("deployment_v2.verify.verify", return_value={"ok": True}):
                 apply(plan, project)
                 self.assertEqual(apply_group.call_count, 5)
                 self.assertEqual([call.kwargs["phase"] for call in apply_group.call_args_list], ["full", "full", "bootstrap", "full", "runtime"])
@@ -189,6 +190,12 @@ class DeploymentV2Tests(unittest.TestCase):
                 report = verify(plan, project)
             self.assertTrue(report["ok"])
             self.assertEqual(json.loads((root / "status.json").read_text())["state"], "verified")
+
+    def test_source_evidence_rejects_a_declared_branch_mismatch(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
+        plan.raw["components"]["dark-core-lib"]["branch"] = "definitely-not-current"
+        with self.assertRaisesRegex(SourceError, "expected definitely-not-current"):
+            source_evidence(plan, ROOT)
 
 
 if __name__ == "__main__":

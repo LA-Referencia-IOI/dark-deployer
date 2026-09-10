@@ -14,6 +14,7 @@ from .runner import ApplyError, apply
 from .artifacts import ArtifactError, export_chain_role, initialize_chain, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
+from .sources import SourceError
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -118,7 +119,7 @@ def main() -> None:
             return
         rendered = render_plan(plan, args.output)
         print(f"[OK] Rendered public plan at {rendered}")
-    except (InventoryError, ExecutionError, ApplyError, ArtifactError, SecretError, VerifyError, ValueError) as exc:
+    except (InventoryError, ExecutionError, ApplyError, ArtifactError, SecretError, VerifyError, SourceError, ValueError) as exc:
         raise SystemExit(f"[ERROR] {exc}") from exc
 
 
