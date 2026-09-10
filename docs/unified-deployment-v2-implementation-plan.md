@@ -498,6 +498,44 @@ un reset como parte de la reanudación.
 
 ## 7. Orden de aplicación y handoffs
 
+### 7.1 Resultado de la primera prueba Docker local-ha (2026-09-10)
+
+La prueba se ejecutó con Docker Desktop 29.7.2, Compose 5.5.0 y arquitectura
+arm64, usando un árbol nuevo bajo `.generated/deployment-v2/dark-local-ha`.
+Validación, plan, preflight, secretos, generación y verificación del artefacto
+QBFT (32 archivos) fueron correctos. Los cuatro validadores formaron quórum y
+el RPC no validador llegó a responder `chain_id=2025`.
+
+Se corrigieron durante la prueba tres defectos de la candidata: el preflight
+local ya no exige rutas `/srv` inexistentes; el contexto de build del explorador
+usa su raíz real para incluir `dist/`; y el RPC permite el alias Docker interno
+mediante `host-allowlist=["*"]`. También se corrigió el namespace de datos del
+RPC (`apps/blockchain`) y el bind mount del dashboard.
+
+La ejecución quedó detenida en la migración del dashboard. En un bind mount
+nuevo, PostgreSQL tuvo un primer arranque con ownership incorrecto y omitió
+crear `minter`; crear la base vacía permitió continuar. Después Laravel falló
+porque el proveedor de `laravel-ide-helper` se registraba aunque
+`composer install --no-dev` lo elimina. El registro se hizo condicional, pero
+el journal exige generar un nuevo bundle por el cambio de fuente antes de
+reanudar. Por tanto, la prueba aún no es una instalación v2 verde completa:
+debe repetirse `push`/`apply` en un árbol nuevo (o regenerar el bundle) y
+verificarse el ajuste de ownership/creación de bases en el instalador.
+
+La suite estructural se ejecutó con 79 pruebas; 77 pasaron y 2 fallaron por
+expectativas antiguas (la lista de checks de preflight local y el contexto de
+build del explorador), que deben actualizarse junto con esta nueva semántica.
+
+Una segunda ejecución aislada (`dark-local-ha-test3`) con un pool Docker
+distinto confirmó un defecto adicional del arranque: `validator01` y
+`validator02` fueron creados sin endpoint de red, aunque Compose los marcó como
+creados. RPC y validators B sí quedaron en la bridge, pero el RPC permaneció en
+bloque 0 y el despliegue de contratos agotó 180 segundos. Conectar manualmente
+los dos validadores a la bridge permitió descubrir los cuatro peers, pero no
+reactivó la minería. El runner debe asegurar que la red externa exista y que
+cada servicio tenga su endpoint antes de crearlo; conectar contenedores después
+no es una recuperación válida. La candidata continúa sin superar el paso 6.
+
 Steps tienen ID estable, máquina, grupo, dependencias, timeout y probe de éxito.
 Ejecutar secuencialmente inicialmente; no crear paralelismo distribuido innecesario.
 
@@ -628,3 +666,147 @@ servidor, fuentes públicas se entregan y se construyen allí, secretos se
 provisionan aparte, una bridge por máquina, ramas como selección de código y
 hashes como evidencia. Si evidencia técnica obliga a cambiar alguna, documentar
 el motivo y su efecto antes de sustituirla; no introducir otro sistema paralelo.
+### 7.2 Diagnóstico adicional del ensayo Docker (2026-09-10)
+
+La verificación de `dark-local-ha-test3` confirmó los cinco grupos, RPC con
+`chain_id=2025` y producción de bloques, pero Store API veía cero peers de
+Cluster. La causa fue el estado persistido de Cluster: una inicialización nueva
+puede escribir `node_multiaddress` como `/ip4/127.0.0.1/tcp/5001`, mientras el
+entrypoint solo normalizaba direcciones `/dns4/...`; Cluster intentaba entonces
+conectar a Kubo por localhost. El entrypoint de `dark-ipfs` fue corregido para
+normalizar ambas formas. Para probarlo se eliminaron únicamente los datos y
+contenedores del ensayo local; no se modificó la cadena ni el contenedor
+`lareferencia-dev`. La siguiente instalación debe regenerar los pares IPFS y
+Cluster y verificar que `/peers` muestre ambos miembros antes de arrancar las
+APIs.
+
+La repetición limpia `dark-local-ha-test4` quedó verificada: los cinco grupos
+(apps, validators-a, validators-b, storage-a y storage-b) están operativos; el
+RPC responde con `chain_id=2025` y bloque `0x49`; Store API confirma los dos
+peers de Cluster. Durante la preparación fue necesario inicializar el bind
+mount de PostgreSQL vacío; un directorio parcialmente creado hace que la
+imagen omita la inicialización y falte la base `minter`.
+
+La parte automática del paso 6 quedó verde en `dark-local-ha-test4`: los cinco
+grupos están operativos, el RPC responde con `chain_id=2025` y bloque creciente,
+Minter y Store están saludables, y Store observa los dos peers de Cluster. La
+reserva/persistencia/publicación manual de un ARK queda pendiente para una
+sesión con una autoridad registrada y fondeada; la cadena limpia no contiene
+autoridades y el endpoint de autoridad devuelve error, por lo que no se creó
+una identidad administrativa solo para alterar el ensayo.
+
+Se intentó además la prueba funcional del paso 6 con una autoridad temporal
+(`docker-test-authority`) y NAAN `12345`. La reserva creó el registro
+`2000000000c`, pero la llamada de persistencia fue rechazada por el Minter como
+`Invalid ARK checkdigit` (calculó `z` como esperado). Esto evidencia una
+inconsistencia previa entre la generación de la reserva y la validación del
+dígito de control; no se alteró el algoritmo de NOID durante esta prueba.
+
+Diagnóstico corregido: el cálculo de NOID era consistente. El rechazo procedía
+del formato de entrada `ark:/NAAN/nombre`, mientras el parser interno solo
+aceptaba `ark:NAAN/nombre` y trataba el NAAN como vacío. El parser del minter
+ahora normaliza ambas formas antes de validar el dígito; las pruebas cubren los
+dos formatos. No se cambió el algoritmo de generación ni de checkdigit.
+
+Con la validación NOID activa, la segunda reserva
+`ark:12345/2000000001x` se persistió usando la forma compacta y llegó a estado
+`P` con CIDs L1/L2. Tras aplicar este ajuste, la forma URI también seguirá el
+mismo camino porque el parser normaliza ambas antes de consultar la base y
+validar el dígito.
+
+### 7.4 Comando de instalación de alto nivel (2026-09-10)
+
+Se añadió el subcomando `deploy.py install` como orquestador del flujo normal.
+El modo `--dry-run` ya muestra las fases `preflight`, validadores, RPC y
+contratos, storage, APIs/dashboard y verificación sin modificar Docker.
+
+Uso principal:
+
+```bash
+venv/bin/python deploy.py install \
+  --inventory examples/deployment-v2/local-ha.json
+```
+
+Opciones disponibles: `--non-interactive`, `--yes`, `--resume`, `--dry-run`,
+`--master-wallet-address` y `--chain-artifact`. Para una instalación local
+nueva el orquestador prepara secretos runtime y puede generar el artefacto QBFT
+cuando se proporciona la dirección pública de la master wallet. Si se usa una
+cadena existente, valida el manifest y no regenera genesis ni identidades.
+Cuando se proporciona un `master-wallet.txt`, la dirección pública se deriva de
+su línea `Address` y no se solicita un segundo valor redundante. Si no se pasa
+`--contract-signer-file`, se reutiliza automáticamente el mismo archivo como
+signer; los parámetros explícitos conservan prioridad para instalaciones con
+credenciales separadas.
+
+La implementación reutiliza `apply()` y `verify()` y conserva los comandos de
+bajo nivel para diagnóstico. El flujo remoto sigue requiriendo que los secretos
+y artefactos privados estén provisionados previamente en cada host. La prueba
+de ejecución completa quedó verificada posteriormente en un run Docker limpio;
+el `dry-run` y la compilación Python del nuevo camino también están verificados.
+Antes de preparar bundles o iniciar grupos, `install` ejecuta un preflight
+solo-lectura en cada máquina y detiene el proceso si Docker, Compose o la
+arquitectura requerida no están disponibles. En hosts SSH esto confirma además
+la conectividad y evita dejar un despliegue parcialmente iniciado; las rutas de
+secretos y artefactos se validan después, durante `apply`, con el contexto del
+grupo.
+
+### 7.5 Instalación de alto nivel verificada (2026-09-10)
+
+Se ejecutó `deploy.py install` sobre `examples/deployment-v2/local-ha.json` en
+un run limpio. Durante la primera aplicación se corrigieron dos precondiciones
+reales: normalización de `master-wallet.txt` a una clave hexadecimal para los
+servicios de firma, y propagación de `DARK_ADMIN_PRIVATE_KEY` al Admin API y al
+chain worker. También se hizo idempotente la creación de la base PostgreSQL
+`minter` y se añadió `--wait` al arranque de PostgreSQL.
+
+La aplicación completa alcanzó los cinco grupos. La verificación final devolvió
+`ok: true`: apps, validators-a, validators-b, storage-a y storage-b están
+operativos; RPC tiene chain ID 2025 y bloque `0x13`; Store API ve 2/2 peers de
+Cluster; Admin, Minter, Resolver, Store, dashboard y los tres workers están
+running. La ejecución se completó mediante `install --resume` después de la
+ventana inicial de readiness, sin regenerar genesis, identidades ni contratos.
+El comando dejó además el informe público
+`.generated/deployment-v2/dark-local-ha/install-report.json`, que contiene el
+resultado de verificación y no incluye secretos.
+
+### 7.3 Pruebas de notebooks de integración (2026-09-10)
+
+Con el entorno Docker `dark-local-ha-test4` en ejecución se ejecutó
+`notebooks/dark_platform_deposit_lifecycle.ipynb` usando Python 3.12 y
+Jupyter/nbconvert. La prueba pasó de extremo a extremo: comprobó health y
+workers, verificó autoridad y NAAN, reservó un ARK, confirmó la idempotencia de
+la reserva batch, persistió metadata L1/L2, esperó `PUBLISHED`, confirmó ambos
+CIDs como `pinned` mediante Store API y comprobó la resolución HTTP mediante
+Resolver API.
+
+La salida se guardó fuera del repositorio en
+`/private/tmp/dark_platform_deposit_lifecycle.executed.ipynb`; los notebooks
+fuente no fueron modificados.
+
+También se intentó ejecutar `notebooks/dark_e2e_authority_to_resolver.ipynb` y
+`components/services/dark-core-minter-api/notebooks/minter_api_test.ipynb`.
+El kernel inició y alcanzó los servicios locales, pero la herramienta terminó
+antes de guardar sus salidas; esas ejecuciones no se consideran evidencia
+concluyente y deben repetirse con un runner Jupyter persistente. No se registró
+ningún cambio de código ni de datos por esos intentos.
+
+La ventana de verificación posterior a `install` es deliberadamente amplia
+(hasta diez minutos, con sondeos cada cinco segundos), porque la primera
+construcción de imágenes y las migraciones del dashboard pueden terminar mucho
+después de que el runtime de blockchain ya esté disponible. Un fallo de esa
+ventana conserva el estado para `--resume`; no implica por sí solo que los
+servicios estén caídos, por lo que debe confirmarse con `deploy.py verify`.
+
+### 7.6 Cobertura automatizada del instalador (2026-09-10)
+
+Se añadieron pruebas unitarias para el orquestador de alto nivel: el informe de
+instalación solo contiene estado y verificación públicos, y `--dry-run` no crea
+estado de ejecución ni modifica Docker. La suite completa se ejecutó con
+Python 3.12 y quedó en **81 passed, 57 subtests passed**; `git diff --check`
+también pasa.
+
+El orquestador de alto nivel difiere la verificación estricta interna de
+`apply()` y ejecuta su propia ventana de readiness (hasta diez minutos). Esto
+evita que una primera compilación o migración lenta obligue a continuar con
+`resume`; los comandos `apply` y `resume` de bajo nivel conservan la verificación
+estricta inmediata.

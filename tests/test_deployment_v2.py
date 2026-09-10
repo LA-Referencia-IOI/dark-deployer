@@ -18,6 +18,7 @@ from deployment_v2.runner import ApplyError, _copy_if_absent_or_identical, _igno
 from deployment_v2.state import deployment_lock, run_root, write_status
 from deployment_v2.verify import verify
 from deployment_v2.sources import SourceError, require_matching_source_evidence, source_evidence
+from deployment_v2.cli import _write_install_report
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,33 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertEqual(plan.deployment_id, json.loads(path.read_text())["deployment"]["id"])
             self.assertEqual(len(plan.docker_subnets), machines)
             self.assertTrue(any(step.id == "verify:deployment" for step in plan.steps))
+
+    def test_install_report_is_public_and_records_verification_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            report = _write_install_report(
+                root,
+                {"deployment_id": "local-test", "ok": True, "groups": {"apps": {"ok": True}}},
+                resumed=False,
+            )
+            document = json.loads(report.read_text())
+            self.assertEqual(document["state"], "verified")
+            self.assertFalse(document["resumed"])
+            self.assertTrue(document["verification"]["ok"])
+            self.assertNotIn("Private Key", report.read_text())
+            self.assertNotIn("DARK_ADMIN_PRIVATE_KEY", report.read_text())
+
+    def test_install_dry_run_does_not_create_runtime_state(self):
+        from deployment_v2.cli import _install
+
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-simple.json")
+        args = mock.Mock(dry_run=True, yes=False, non_interactive=True, resume=False)
+        with mock.patch("builtins.print") as output:
+            _install(args, plan)
+        text = "\n".join(str(call.args[0]) for call in output.call_args_list)
+        self.assertIn("Deployment: dark-local-simple", text)
+        self.assertIn("apply:apps", text)
+        self.assertFalse((ROOT / ".generated" / "deployment-v2" / "dark-local-simple" / "install-report.json").exists())
 
     def test_auto_machine_is_resolved_before_networks_are_derived(self):
         document = json.loads((ROOT / "examples" / "deployment-v2" / "local-simple.json").read_text())
@@ -100,6 +128,7 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertIn("components", apps)
             apps_compose = yaml.safe_load((output / "groups" / "apps" / "compose.yaml").read_text())
             self.assertIn("minter-chain-worker", apps_compose["services"])
+            self.assertIn("pg_isready -U dark -d postgres", apps_compose["services"]["postgres"]["healthcheck"]["test"])
             self.assertEqual(apps_compose["services"]["contracts-deploy"]["build"]["context"], "/srv/dark")
             self.assertEqual(apps_compose["services"]["rpc-probe"]["entrypoint"], ["python"])
             rpc = apps_compose["services"]["blockchain-rpc"]
@@ -108,7 +137,7 @@ class DeploymentV2Tests(unittest.TestCase):
             validators = yaml.safe_load((output / "groups" / "validators-a" / "compose.yaml").read_text())
             self.assertEqual(validators["services"]["validator01"]["networks"]["dark-local-ha-local"]["ipv4_address"], "172.30.0.10")
             self.assertEqual(validators["services"]["explorer"]["environment"]["RPC_HTTP_URL"], "http://blockchain-rpc:8545")
-            self.assertEqual(validators["services"]["explorer"]["build"]["dockerfile"], "blockchain/dark-explorador/Dockerfile")
+            self.assertEqual(validators["services"]["explorer"]["build"]["dockerfile"], "Dockerfile")
             storage_a = yaml.safe_load((output / "groups" / "storage-a" / "compose.yaml").read_text())
             storage_b = yaml.safe_load((output / "groups" / "storage-b" / "compose.yaml").read_text())
             self.assertNotEqual(storage_a["services"]["cluster"]["ports"][0], storage_b["services"]["cluster"]["ports"][0])
@@ -135,8 +164,8 @@ class DeploymentV2Tests(unittest.TestCase):
         )
         with mock.patch("deployment_v2.executor.LocalExecutor.run", return_value=CommandResult(("test",), 0, "ok\n", "")) as command:
             results = run_preflight(machine)
-        self.assertEqual([item["check"] for item in results], ["docker", "compose", "architecture", "workspace_parent", "workspace_parent_writable", "data_parent", "data_parent_writable", "secrets_parent", "secrets_parent_writable"])
-        self.assertEqual(command.call_count, 9)
+        self.assertEqual([item["check"] for item in results], ["docker", "compose", "architecture"])
+        self.assertEqual(command.call_count, 3)
         self.assertTrue(all(item["ok"] for item in results))
 
     def test_chain_bootstrap_is_public_and_static_nodes_use_derived_private_addresses(self):

@@ -18,6 +18,9 @@ rpc-http-enabled=true
 rpc-http-host="0.0.0.0"
 rpc-http-cors-origins=["*"]
 rpc-http-api=["ETH","NET","QBFT","ADMIN","WEB3","TXPOOL","DEBUG"]
+# Internal Docker aliases (for example blockchain-rpc) are trusted in the
+# local apps network; production firewalls still constrain who can reach RPC.
+host-allowlist=["*"]
 
 # GraphQL (disabled)
 graphql-http-enabled=false

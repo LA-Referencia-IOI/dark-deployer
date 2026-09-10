@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import json
 import time
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -81,6 +82,10 @@ def _ignore_public_source(_directory: str, names: list[str]) -> set[str]:
     """Keep source delivery free of VCS state, runtime data and private env files."""
     ignored = set(_PUBLIC_SOURCE_EXCLUDES).intersection(names)
     ignored.update(name for name in names if name.startswith(".env.node"))
+    # Developer checkouts may contain framework-created links (for example
+    # Laravel public/storage) whose target exists only inside a container.
+    # They are not source inputs and must not make public staging fail.
+    ignored.update(name for name in names if os.path.islink(Path(_directory) / name) and not os.path.exists(Path(_directory) / name))
     return ignored
 
 
@@ -157,7 +162,10 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
         if not artifact_path:
             raise ApplyError("blockchain.artifact.path is required to apply Besu groups")
         source = Path(machine.secrets_root) / artifact_path
-        target = Path(machine.data_root) / plan.deployment_id / "blockchain"
+        # Apps keeps the non-validator RPC under its apps data namespace;
+        # validator groups use the shared blockchain namespace.
+        target_namespace = "apps/blockchain" if group.kind == "apps" else "blockchain"
+        target = Path(machine.data_root) / plan.deployment_id / target_namespace
         _require(executor.run(("test", "-r", str(source / "genesis.json"))), f"chain artifact genesis is readable for {role} on {machine.id}")
         _require(executor.run(("mkdir", "-p", str(target / "config"))), f"prepare chain config on {machine.id}")
         _copy_if_absent_or_identical(executor, source / "genesis.json", target / "config" / "genesis.json", f"install chain genesis for {role} on {machine.id}")
@@ -176,19 +184,28 @@ def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir
         _require(executor.run((*compose, "run", "--rm", "contracts-deploy"), timeout=1800.0), f"deploy or verify contracts for {group.id}")
         return
     if group.kind == "apps" and phase == "runtime":
-        _require(executor.run((*compose, "up", "-d", "--build", "postgres"), timeout=1800.0), f"start PostgreSQL for {group.id}")
+        _require(executor.run((*compose, "up", "-d", "--build", "--wait", "postgres"), timeout=1800.0), f"start PostgreSQL for {group.id}")
+        # A bind-mounted PostgreSQL cluster can survive an interrupted first
+        # init without creating POSTGRES_DB.  Make the database precondition
+        # explicit and idempotent before running Alembic.
+        ensure_db = (
+            "sh", "-lc",
+            "exists=$(psql -U dark -d postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='minter'\"); "
+            "if [ \"$exists\" != \"1\" ]; then psql -U dark -d postgres -c 'CREATE DATABASE minter'; fi",
+        )
+        _require(executor.run((*compose, "exec", "-T", "postgres", *ensure_db), timeout=120.0), f"ensure PostgreSQL database for {group.id}")
         _require(executor.run((*compose, "run", "--rm", "minter-migrate"), timeout=1800.0), f"run Alembic migration for {group.id}")
         _require(executor.run((*compose, "up", "-d", "dashboard-mysql"), timeout=1800.0), f"start dashboard MySQL for {group.id}")
         _require(executor.run((*compose, "run", "--rm", "dashboard-migrate"), timeout=1800.0), f"run Laravel migration for {group.id}")
     _require(executor.run((*compose, "up", "-d", "--build"), timeout=1800.0), f"apply group {group.id}")
 
 
-def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> Path:
+def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False, defer_verification: bool = False) -> Path:
     """Render then apply groups in plan order. Preconditions and secrets must exist."""
     root = run_root(project_root, plan.deployment_id)
     try:
         with deployment_lock(root):
-            return _apply_locked(plan, project_root, root, resume=resume)
+            return _apply_locked(plan, project_root, root, resume=resume, defer_verification=defer_verification)
     except StateLockError as exc:
         raise ApplyError(str(exc)) from exc
 
@@ -219,7 +236,7 @@ def push(plan: DeploymentPlan, project_root: Path) -> Path:
         raise ApplyError(str(exc)) from exc
 
 
-def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resume: bool) -> Path:
+def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resume: bool, defer_verification: bool = False) -> Path:
     """Internal apply implementation; caller owns the controller journal lock."""
     bundle = root / "bundle"
     pushed = False
@@ -277,8 +294,10 @@ def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resum
                 from .verify import verify
 
                 report = verify(plan, project_root)
-                if not report["ok"]:
+                if not report["ok"] and not defer_verification:
                     raise ApplyError("post-apply verification failed; inspect status.json for evidence")
+                if not report["ok"]:
+                    record(root, {"step": step.id, "state": "pending", "reason": "readiness_retry_deferred"})
                 status = json.loads(status_path.read_text())
                 completed_steps = status.setdefault("completed_steps", [])
                 completed_steps.append(step.id)

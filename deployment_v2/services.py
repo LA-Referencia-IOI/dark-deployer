@@ -76,7 +76,7 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
     # any apps service, so this never weakens runtime secret validation.
     contract_env = f"{data}/contracts/contracts.env"
     minter_env = ["./env/minter.env", {"path": contract_env, "required": False}, {"path": _secret_file(plan, machine.id, "minter-runtime-env"), "required": False}]
-    admin_env = ["./env/admin-api.env", {"path": contract_env, "required": False}]
+    admin_env = ["./env/admin-api.env", {"path": contract_env, "required": False}, {"path": _secret_file(plan, machine.id, "minter-runtime-env"), "required": False}]
     resolver_env = ["./env/resolver-api.env", {"path": contract_env, "required": False}]
     dashboard_env = ["./env/dashboard.env", {"path": _secret_file(plan, machine.id, "dashboard-runtime-env"), "required": False}]
     dashboard_db_env = ["./env/dashboard-db.env", {"path": _secret_file(plan, machine.id, "dashboard-runtime-env"), "required": False}]
@@ -96,7 +96,10 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
             ],
             "networks": {network: {"ipv4_address": node_addresses["rpc01"]}},
         },
-        "postgres": {**common, "image": "postgres:15-alpine", "environment": {"POSTGRES_USER": "dark", "POSTGRES_PASSWORD_FILE": "/run/secrets/minter-db-password", "POSTGRES_DB": "minter"}, "volumes": [f"{data}/minter/postgres:/var/lib/postgresql/data"], "secrets": ["minter-db-password"], "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U dark -d minter"], "interval": "3s", "timeout": "3s", "retries": 20}},
+        # Health means the PostgreSQL server is accepting connections.  The
+        # application database may be created idempotently during bootstrap,
+        # so probing `minter` here would make a fresh bind mount unhealthy.
+        "postgres": {**common, "image": "postgres:15-alpine", "environment": {"POSTGRES_USER": "dark", "POSTGRES_PASSWORD_FILE": "/run/secrets/minter-db-password", "POSTGRES_DB": "minter"}, "volumes": [f"{data}/minter/postgres:/var/lib/postgresql/data"], "secrets": ["minter-db-password"], "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U dark -d postgres"], "interval": "3s", "timeout": "3s", "retries": 20}},
         "admin-api": {**common, "build": _build(components, "services/dark-core-admin-api/Dockerfile"), "env_file": admin_env, "ports": _exposed_ports(plan, machine, "admin-api", 8000)},
         "resolver-api": {**common, "build": _build(components, "services/dark-core-resolver-api/Dockerfile"), "env_file": resolver_env, "ports": _exposed_ports(plan, machine, "resolver-api", 8002)},
         "store-api": {**common, "build": _build(components, "services/dark-store-api/Dockerfile"), "env_file": ["./env/store-api.env"], "ports": _exposed_ports(plan, machine, "store-api", 8003), "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]},
@@ -109,8 +112,8 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
         "minter-chain-worker": {**common, "build": minter_build, "command": ["chain-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "dashboard-mysql": {**common, "image": "mysql:8.0", "env_file": dashboard_db_env, "volumes": [f"{data}/dashboard/mysql:/var/lib/mysql"], "healthcheck": {"test": ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$$MYSQL_ROOT_PASSWORD\""], "interval": "3s", "timeout": "3s", "retries": 20}},
         "dashboard-redis": {**common, "image": "redis:7-alpine", "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{data}/dashboard/redis:/data"]},
-        "dashboard": {**common, "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "ports": _exposed_ports(plan, machine, "dashboard", 8080), "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},
-        "dashboard-migrate": {**common, "profiles": ["setup"], "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "depends_on": {"dashboard-mysql": {"condition": "service_healthy"}}, "command": ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan migrate --force --seed && php artisan storage:link --force"], "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},
+        "dashboard": {**common, "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "ports": _exposed_ports(plan, machine, "dashboard", 8080), "volumes": [f"{components}/components/frontend/dashboard-web:/var/www/app"]},
+        "dashboard-migrate": {**common, "profiles": ["setup"], "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "depends_on": {"dashboard-mysql": {"condition": "service_healthy"}}, "command": ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan migrate --force --seed && php artisan storage:link --force"], "volumes": [f"{components}/components/frontend/dashboard-web:/var/www/app"]},
     }
     return {
         "name": f"{plan.deployment_id}-{group.id}", "services": services,
@@ -134,7 +137,9 @@ def _validators(plan: DeploymentPlan, group: Group) -> dict:
     if group.explorer:
         explorer_root = f"{machine.workspace_root}/components/blockchain/dark-explorador"
         services["explorer"] = {
-            "build": _build(machine.workspace_root, "blockchain/dark-explorador/Dockerfile"),
+            # The explorer Dockerfile copies its pre-built dist/ relative to
+            # the component root, not the monorepo components directory.
+            "build": {"context": explorer_root, "dockerfile": "Dockerfile"},
             "restart": "unless-stopped", "ports": _exposed_ports(plan, machine, "explorer", 80),
             "environment": {"RPC_HTTP_URL": _rpc_url_for_group(plan, group)},
             "volumes": [
