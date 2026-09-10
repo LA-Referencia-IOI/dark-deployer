@@ -9,12 +9,12 @@ import yaml
 from deployment_v2.inventory import InventoryError, load_inventory
 from deployment_v2.artifacts import ArtifactError, export_chain_role, static_nodes, write_chain_bootstrap
 from deployment_v2.secrets import SecretError, initialize_greenfield_secrets
-from deployment_v2.executor import CommandResult, run_preflight
+from deployment_v2.executor import CommandResult, SshExecutor, run_preflight
 from deployment_v2.model import Machine, SshSettings
 from deployment_v2.planner import build_plan
 from deployment_v2.render import render_plan
-from deployment_v2.runner import apply
-from deployment_v2.runner import ApplyError, _copy_if_absent_or_identical, _wait_for_rpc
+from deployment_v2.runner import apply, push
+from deployment_v2.runner import ApplyError, _copy_if_absent_or_identical, _ignore_public_source, _wait_for_rpc
 from deployment_v2.state import deployment_lock, run_root, write_status
 from deployment_v2.verify import verify
 from deployment_v2.sources import SourceError, source_evidence
@@ -189,6 +189,17 @@ class DeploymentV2Tests(unittest.TestCase):
                 apply(plan, project, resume=True)
                 self.assertEqual(apply_group.call_count, 5)
 
+    def test_push_prepares_public_bundle_and_apply_accepts_it(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-simple.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            with mock.patch("deployment_v2.runner.source_evidence", return_value={}), mock.patch("deployment_v2.runner._local_prepare"):
+                root = push(plan, project)
+            self.assertEqual(json.loads((root / "status.json").read_text())["state"], "pushed")
+            with mock.patch("deployment_v2.runner.run_preflight", return_value=[]), mock.patch("deployment_v2.runner.source_evidence", return_value={}), mock.patch("deployment_v2.runner._apply_group") as apply_group, mock.patch("deployment_v2.verify.verify", return_value={"ok": True}):
+                apply(plan, project)
+            self.assertEqual(apply_group.call_count, 5)
+
     def test_verify_reads_compose_state_and_records_result(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
 
@@ -260,6 +271,20 @@ class DeploymentV2Tests(unittest.TestCase):
         executor = Executor()
         _wait_for_rpc(executor, ("docker", "compose", "-f", "/bundle/compose.yaml"), 2025)
         self.assertEqual(executor.calls, 1)
+
+    def test_public_source_filter_excludes_private_and_runtime_files(self):
+        ignored = _ignore_public_source("/source", [".git", ".env", ".env.example", ".env.node.local", "node_modules", "app.py"])
+        self.assertEqual(ignored, {".git", ".env", ".env.node.local", "node_modules"})
+
+    def test_ssh_transfer_passes_public_source_exclusions_to_rsync(self):
+        machine = Machine("remote", "ssh", "remote.example", "10.0.0.2", SshSettings("dark", 22, "/tmp/key", None), "/srv/dark", "/srv/data", "/srv/secrets")
+        with mock.patch("deployment_v2.executor.subprocess.run") as command:
+            command.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            SshExecutor(machine).transfer(Path("/source"), "/destination", excludes=(".git", ".env"))
+        argv = command.call_args.args[0]
+        self.assertIn("--exclude", argv)
+        self.assertIn(".git", argv)
+        self.assertIn(".env", argv)
 
 
 if __name__ == "__main__":

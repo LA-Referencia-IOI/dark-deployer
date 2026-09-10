@@ -49,11 +49,13 @@ class SshExecutor(Executor):
         completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         return CommandResult(tuple(command), completed.returncode, completed.stdout, completed.stderr)
 
-    def transfer(self, source: Path, destination: str, *, timeout: float = 300.0) -> CommandResult:
+    def transfer(self, source: Path, destination: str, *, excludes: tuple[str, ...] = (), timeout: float = 300.0) -> CommandResult:
         ssh = self.machine.ssh
         command = ["rsync", "-az", "-e", shlex.join(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-i", ssh.private_key_file, "-p", str(ssh.port)])]
         if ssh.known_hosts_file:
             command[-1] += " " + shlex.join(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
+        for pattern in excludes:
+            command.extend(("--exclude", pattern))
         command.extend([f"{source}/", f"{ssh.user}@{self.machine.management_address}:{destination}/"])
         completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         return CommandResult(tuple(command), completed.returncode, completed.stdout, completed.stderr)

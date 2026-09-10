@@ -371,13 +371,14 @@ deploy.py validate --inventory FILE
 deploy.py plan --inventory FILE [--json]
 deploy.py preflight --inventory FILE
 deploy.py render --inventory FILE --output DIR
+deploy.py push --inventory FILE
 deploy.py apply --inventory FILE
-deploy.py resume --run RUN_ID
+deploy.py resume --inventory FILE
 deploy.py verify --inventory FILE
 deploy.py status --inventory FILE
-deploy.py secrets init --inventory FILE --output SECURE_DIR
-deploy.py chain init --inventory FILE --output SECURE_DIR
-deploy.py chain export --inventory FILE --machine ID --output SECURE_DIR
+deploy.py secrets-init --inventory FILE --output SECURE_DIR
+deploy.py chain-init --inventory FILE --output SECURE_DIR --master-wallet-address ADDRESS
+deploy.py chain-export --inventory FILE --artifact-root DIR --role ROLE --output SECURE_DIR
 ```
 
 Validate/plan solo leen archivos. Render escribe únicamente output explícito.
@@ -386,6 +387,11 @@ o SSH. No requerir checkout preinstalado en servidores: el controlador entrega
 runner y fuentes públicas necesarias usando rsync con lista de inclusión.
 Excluir `.git`, `.env`, venv, node_modules, datos, secretos y caches. Resolver
 ramas en checkout de staging separado; nunca resetear los componentes del usuario.
+
+`push` solo entrega fuentes públicas y el bundle renderizado a cada destino; no
+crea redes, directorios de datos ni contenedores. Un `apply` posterior acepta
+un run cuyo estado sea `pushed` y continúa con el mismo bundle. Las claves,
+artefactos QBFT y otros secretos no se transfieren con este comando.
 Si rama falta, fallar explícitamente con su nombre; no fallback silencioso.
 
 Construir imágenes en destino para respetar arquitectura. Incluir dark-core-lib

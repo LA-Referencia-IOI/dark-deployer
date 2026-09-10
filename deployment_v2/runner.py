@@ -20,6 +20,10 @@ class ApplyError(RuntimeError):
 
 
 _RPC_READY_TIMEOUT_SECONDS = 90
+_PUBLIC_SOURCE_EXCLUDES = (
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
+    ".generated", ".dark-secrets", ".env", ".env.integration", ".env.integration.secrets",
+)
 
 
 def _require(result, description: str) -> None:
@@ -73,12 +77,19 @@ def _source_paths(project_root: Path) -> tuple[Path, ...]:
     return tuple(path for path in (project_root / "components", project_root / "blockchain", project_root / "deployment_v2") if path.exists())
 
 
+def _ignore_public_source(_directory: str, names: list[str]) -> set[str]:
+    """Keep source delivery free of VCS state, runtime data and private env files."""
+    ignored = set(_PUBLIC_SOURCE_EXCLUDES).intersection(names)
+    ignored.update(name for name in names if name.startswith(".env.node"))
+    return ignored
+
+
 def _remote_prepare(executor: SshExecutor, machine, project_root: Path, run_dir: Path, group_dir: Path) -> Path:
     remote_workspace = Path(machine.workspace_root)
     remote_run = remote_workspace / ".generated" / "deployment-v2" / run_dir.name
     _require(executor.run(("mkdir", "-p", str(remote_workspace), str(remote_run / "groups"))), f"prepare remote workspace {machine.id}")
     for source in _source_paths(project_root):
-        _require(executor.transfer(source, str(remote_workspace / source.name)), f"transfer {source.name} to {machine.id}")
+        _require(executor.transfer(source, str(remote_workspace / source.name), excludes=_PUBLIC_SOURCE_EXCLUDES + (".env.node*",)), f"transfer {source.name} to {machine.id}")
     _require(executor.transfer(group_dir, str(remote_run / "groups" / group_dir.name)), f"transfer group {group_dir.name} to {machine.id}")
     return remote_run / "groups" / group_dir.name
 
@@ -99,7 +110,7 @@ def _local_stage_sources(machine, project_root: Path, run_dir: Path) -> Path:
     """
     source_root = run_dir / "local" / machine.id / "sources"
     for source in _source_paths(project_root):
-        shutil.copytree(source, source_root / source.name, dirs_exist_ok=True)
+        shutil.copytree(source, source_root / source.name, dirs_exist_ok=True, ignore=_ignore_public_source)
     return source_root
 
 
@@ -182,17 +193,50 @@ def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> 
         raise ApplyError(str(exc)) from exc
 
 
+def push(plan: DeploymentPlan, project_root: Path) -> Path:
+    """Render and transfer public sources/bundles without creating Docker state."""
+    root = run_root(project_root, plan.deployment_id)
+    try:
+        with deployment_lock(root):
+            bundle = root / "bundle"
+            if bundle.exists():
+                raise ApplyError(f"run bundle already exists: {root}; use apply or resume")
+            evidence = source_evidence(plan, project_root)
+            effective = _effective_plan_for_apply(plan, project_root, root)
+            render_plan(effective, bundle)
+            for group in effective.groups:
+                machine = effective.machine(group.machine_id)
+                executor = resolve_executor(machine)
+                group_dir = bundle / "groups" / group.id
+                if isinstance(executor, SshExecutor):
+                    _remote_prepare(executor, machine, project_root, root, group_dir)
+                else:
+                    _local_prepare(machine, project_root, root, group_dir)
+                record(root, {"step": f"push:{group.id}", "state": "succeeded", "machine": machine.id, "group": group.id})
+            write_status(root, {"deployment_id": plan.deployment_id, "state": "pushed", "groups": {}, "sources": evidence})
+            return root
+    except (StateLockError, ExecutionError, SourceError) as exc:
+        raise ApplyError(str(exc)) from exc
+
+
 def _apply_locked(plan: DeploymentPlan, project_root: Path, root: Path, *, resume: bool) -> Path:
     """Internal apply implementation; caller owns the controller journal lock."""
     bundle = root / "bundle"
+    pushed = False
+    status_path = root / "status.json"
     if bundle.exists() and not resume:
-        raise ApplyError(f"run directory already exists: {root}; use deploy.py resume")
+        if status_path.exists():
+            try:
+                pushed = json.loads(status_path.read_text()).get("state") == "pushed"
+            except json.JSONDecodeError:
+                pushed = False
+        if not pushed:
+            raise ApplyError(f"run directory already exists: {root}; use deploy.py resume")
     evidence = source_evidence(plan, project_root)
     effective_plan = _effective_plan_for_apply(plan, project_root, root)
     if not bundle.exists():
         render_plan(effective_plan, bundle)
-    status_path = root / "status.json"
-    if resume and status_path.exists():
+    if (resume or pushed) and status_path.exists():
         try:
             status = json.loads(status_path.read_text())
         except json.JSONDecodeError as exc:
