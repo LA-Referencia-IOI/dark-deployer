@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import hashlib
 from pathlib import Path
 
 from .model import DeploymentPlan
@@ -25,6 +26,45 @@ _P2P_PORTS = {node: 30303 + index for index, node in enumerate(_NODES)}
 
 def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_artifact_manifest(artifact_root: Path) -> Path:
+    """Write public integrity evidence for every file in a chain artifact."""
+    manifest = artifact_root / "artifact-manifest.json"
+    files = {
+        str(path.relative_to(artifact_root)): _sha256(path)
+        for path in sorted(artifact_root.rglob("*"))
+        if path.is_file() and path != manifest
+    }
+    _write_json(manifest, {"version": 1, "files": files})
+    manifest.chmod(0o644)
+    return manifest
+
+
+def verify_artifact_manifest(artifact_root: Path) -> dict[str, str]:
+    """Reject missing, altered or untracked files in a chain artifact."""
+    manifest = artifact_root / "artifact-manifest.json"
+    if not manifest.exists():
+        raise ArtifactError(f"artifact manifest missing: {manifest}")
+    try:
+        document = json.loads(manifest.read_text())
+        expected = document["files"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ArtifactError(f"invalid artifact manifest: {manifest}") from exc
+    if not isinstance(expected, dict) or not all(isinstance(path, str) and isinstance(digest, str) for path, digest in expected.items()):
+        raise ArtifactError(f"invalid artifact manifest: {manifest}")
+    actual = {
+        str(path.relative_to(artifact_root)): _sha256(path)
+        for path in sorted(artifact_root.rglob("*"))
+        if path.is_file() and path != manifest
+    }
+    if actual != expected:
+        raise ArtifactError("artifact manifest does not match artifact files")
+    return actual
 
 
 def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
@@ -156,6 +196,7 @@ def initialize_chain(plan: DeploymentPlan, output: Path, master_wallet_address: 
         destination = output / "nodes" / node / "static-nodes.json"
         destination.write_bytes((static_root / f"{node}.json").read_bytes())
         destination.chmod(0o644)
+    write_artifact_manifest(output)
     return output
 
 
@@ -182,4 +223,5 @@ def export_chain_role(artifact_root: Path, role: str, destination: Path) -> Path
             (target / name).write_bytes((source / name).read_bytes())
             (target / name).chmod(mode)
         (target / "static-nodes.json").write_bytes(static.read_bytes())
+    write_artifact_manifest(destination)
     return destination

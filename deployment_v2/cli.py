@@ -11,7 +11,7 @@ from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
 from .runner import ApplyError, apply, push
-from .artifacts import ArtifactError, export_chain_role, initialize_chain, write_chain_bootstrap, write_static_nodes
+from .artifacts import ArtifactError, export_chain_role, initialize_chain, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
 from .sources import SourceError
@@ -20,7 +20,7 @@ from .sources import SourceError
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "secrets-init"):
+    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
@@ -45,6 +45,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--artifact-root", required=True, type=Path)
             command.add_argument("--role", required=True, choices=("rpc", "validators-a", "validators-b"))
             command.add_argument("--output", required=True, type=Path)
+        if name == "chain-verify":
+            command.add_argument("--artifact-root", required=True, type=Path)
     return parser
 
 
@@ -121,6 +123,10 @@ def main() -> None:
         if args.action == "chain-export":
             exported = export_chain_role(args.artifact_root, args.role, args.output)
             print(f"[OK] Exported {args.role} chain artifact to {exported}")
+            return
+        if args.action == "chain-verify":
+            files = verify_artifact_manifest(args.artifact_root)
+            print(f"[OK] Verified {len(files)} chain artifact file(s) in {args.artifact_root}")
             return
         rendered = render_plan(plan, args.output)
         print(f"[OK] Rendered public plan at {rendered}")

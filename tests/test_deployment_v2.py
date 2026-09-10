@@ -7,7 +7,7 @@ from unittest import mock
 import yaml
 
 from deployment_v2.inventory import InventoryError, load_inventory
-from deployment_v2.artifacts import ArtifactError, export_chain_role, static_nodes, write_chain_bootstrap
+from deployment_v2.artifacts import ArtifactError, export_chain_role, static_nodes, verify_artifact_manifest, write_artifact_manifest, write_chain_bootstrap
 from deployment_v2.secrets import SecretError, initialize_greenfield_secrets
 from deployment_v2.executor import CommandResult, SshExecutor, run_preflight
 from deployment_v2.model import Machine, SshSettings
@@ -177,6 +177,19 @@ class DeploymentV2Tests(unittest.TestCase):
             exported = export_chain_role(root, "validators-a", Path(temporary) / "role")
             self.assertTrue((exported / "nodes" / "validator01" / "nodekey").exists())
             self.assertFalse((exported / "nodes" / "validator03").exists())
+            self.assertTrue((exported / "artifact-manifest.json").exists())
+            self.assertIn("genesis.json", verify_artifact_manifest(exported))
+
+    def test_artifact_manifest_rejects_an_altered_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "artifact"
+            root.mkdir()
+            artifact = root / "genesis.json"
+            artifact.write_text("original\n")
+            write_artifact_manifest(root)
+            artifact.write_text("changed\n")
+            with self.assertRaisesRegex(ArtifactError, "does not match"):
+                verify_artifact_manifest(root)
 
     def test_resume_skips_groups_already_recorded_as_applied(self):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-simple.json")

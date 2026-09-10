@@ -386,7 +386,8 @@ Apply ejecuta preflight, prepara fuentes, genera bundle y llama al runner local
 o SSH. No requerir checkout preinstalado en servidores: el controlador entrega
 runner y fuentes públicas necesarias usando rsync con lista de inclusión.
 Excluir `.git`, `.env`, venv, node_modules, datos, secretos y caches. Resolver
-ramas en checkout de staging separado; nunca resetear los componentes del usuario.
+la rama declarada contra el checkout del controlador y registrar el commit
+efectivo; nunca resetear ni cambiar los componentes del usuario.
 
 `push` solo entrega fuentes públicas y el bundle renderizado a cada destino; no
 crea redes, directorios de datos ni contenedores. Un `apply` posterior acepta
