@@ -157,6 +157,23 @@ def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> 
                     raise ApplyError(f"preflight failed on {step.machine_id}: " + ", ".join(failed))
                 record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id})
                 continue
+            if step.action == "verify":
+                # Persist the completed runtime phases before the read-only
+                # verifier inspects them.  It owns the final verified/failed
+                # status and records its own evidence in the same journal.
+                status["state"] = "applied"
+                write_status(root, status)
+                from .verify import verify
+
+                report = verify(plan, project_root)
+                if not report["ok"]:
+                    raise ApplyError("post-apply verification failed; inspect status.json for evidence")
+                status = json.loads(status_path.read_text())
+                completed_steps = status.setdefault("completed_steps", [])
+                completed_steps.append(step.id)
+                write_status(root, status)
+                record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id})
+                continue
             if step.action not in {"compose_apply", "apps_bootstrap", "apps_runtime"}:
                 continue
             completed_steps = status.setdefault("completed_steps", [])
@@ -177,6 +194,7 @@ def apply(plan: DeploymentPlan, project_root: Path, *, resume: bool = False) -> 
         write_status(root, status)
         record(root, {"state": "failed", "error": str(exc)})
         raise
-    status["state"] = "applied"
+    if status.get("state") != "verified":
+        status["state"] = "applied"
     write_status(root, status)
     return root

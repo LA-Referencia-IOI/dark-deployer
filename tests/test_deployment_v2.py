@@ -68,11 +68,14 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertIn("components", apps)
             apps_compose = yaml.safe_load((output / "groups" / "apps" / "compose.yaml").read_text())
             self.assertIn("minter-chain-worker", apps_compose["services"])
+            self.assertEqual(apps_compose["services"]["contracts-deploy"]["build"]["context"], "/srv/dark")
             rpc = apps_compose["services"]["blockchain-rpc"]
             self.assertIn("--genesis-file=/config/genesis.json", rpc["command"])
             self.assertEqual(rpc["networks"]["dark-local-ha-local"]["ipv4_address"], "172.30.0.14")
             validators = yaml.safe_load((output / "groups" / "validators-a" / "compose.yaml").read_text())
             self.assertEqual(validators["services"]["validator01"]["networks"]["dark-local-ha-local"]["ipv4_address"], "172.30.0.10")
+            self.assertEqual(validators["services"]["explorer"]["environment"]["RPC_HTTP_URL"], "http://blockchain-rpc:8545")
+            self.assertEqual(validators["services"]["explorer"]["build"]["dockerfile"], "blockchain/dark-explorador/Dockerfile")
             storage_a = yaml.safe_load((output / "groups" / "storage-a" / "compose.yaml").read_text())
             storage_b = yaml.safe_load((output / "groups" / "storage-b" / "compose.yaml").read_text())
             self.assertNotEqual(storage_a["services"]["cluster"]["ports"][0], storage_b["services"]["cluster"]["ports"][0])
@@ -153,7 +156,7 @@ class DeploymentV2Tests(unittest.TestCase):
         plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-simple.json")
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary)
-            with mock.patch("deployment_v2.runner.run_preflight", return_value=[]), mock.patch("deployment_v2.runner._apply_group") as apply_group:
+            with mock.patch("deployment_v2.runner.run_preflight", return_value=[]), mock.patch("deployment_v2.runner._apply_group") as apply_group, mock.patch("deployment_v2.verify.verify", return_value={"ok": True}):
                 apply(plan, project)
                 self.assertEqual(apply_group.call_count, 5)
                 self.assertEqual([call.kwargs["phase"] for call in apply_group.call_args_list], ["full", "full", "bootstrap", "full", "runtime"])

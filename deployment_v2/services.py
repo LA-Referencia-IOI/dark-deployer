@@ -38,6 +38,16 @@ def _storage_hosts(plan: DeploymentPlan, group: Group, service_prefix: str) -> l
     return hosts
 
 
+def _rpc_url_for_group(plan: DeploymentPlan, group: Group) -> str:
+    """Use Docker DNS only when both groups live on the same Docker host."""
+    apps = next(item for item in plan.groups if item.kind == "apps")
+    provider = plan.machine(apps.machine_id)
+    consumer = plan.machine(group.machine_id)
+    if provider.id == consumer.id:
+        return "http://blockchain-rpc:8545"
+    return f"http://{provider.private_address}:8545"
+
+
 def _apps(plan: DeploymentPlan, group: Group) -> dict:
     machine = plan.machine(group.machine_id)
     network = _network(plan, group)
@@ -77,14 +87,14 @@ def _apps(plan: DeploymentPlan, group: Group) -> dict:
         "store-api": {**common, "build": _build(components, "services/dark-store-api/Dockerfile"), "env_file": ["./env/store-api.env"], "ports": [f"{bind}:8003:8003"], "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]},
         "minter-api": {**common, "build": minter_build, "env_file": minter_env, "ports": [f"{bind}:8001:8001"], "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "minter-migrate": {**common, "profiles": ["setup"], "build": minter_build, "command": ["migrate"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_healthy"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
-        "contracts-deploy": {**common, "profiles": ["setup"], "build": {"context": components, "dockerfile": "deployment_v2/Dockerfile.contracts"}, "environment": {"DARK_RPC_URL": "http://blockchain-rpc:8545", "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]), "CONTRACT_SIGNER_FILE": "/run/dark-secrets/contract-signer", "CONTRACT_HANDOFF_FILE": "/state/handoff.json", "CONTRACT_RUNTIME_ENV_FILE": "/state/contracts.env"}, "volumes": [f"{_secret_file(plan, machine.id, 'contract-signer')}:/run/dark-secrets/contract-signer:ro", f"{data}/contracts:/state"]},
+        "contracts-deploy": {**common, "profiles": ["setup"], "build": {"context": machine.workspace_root, "dockerfile": "deployment_v2/Dockerfile.contracts"}, "environment": {"DARK_RPC_URL": "http://blockchain-rpc:8545", "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]), "CONTRACT_SIGNER_FILE": "/run/dark-secrets/contract-signer", "CONTRACT_HANDOFF_FILE": "/state/handoff.json", "CONTRACT_RUNTIME_ENV_FILE": "/state/contracts.env"}, "volumes": [f"{_secret_file(plan, machine.id, 'contract-signer')}:/run/dark-secrets/contract-signer:ro", f"{data}/contracts:/state"]},
         "minter-metadata-worker": {**common, "build": minter_build, "command": ["metadata-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "minter-replication-worker": {**common, "build": minter_build, "command": ["replication-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "minter-chain-worker": {**common, "build": minter_build, "command": ["chain-worker"], "env_file": minter_env, "depends_on": {"postgres": {"condition": "service_started"}}, "volumes": [f"{data}/minter/metadata:/app/metadata_storage"]},
         "dashboard-mysql": {**common, "image": "mysql:8.0", "env_file": dashboard_db_env, "volumes": [f"{data}/dashboard/mysql:/var/lib/mysql"], "healthcheck": {"test": ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$$MYSQL_ROOT_PASSWORD\""], "interval": "3s", "timeout": "3s", "retries": 20}},
         "dashboard-redis": {**common, "image": "redis:7-alpine", "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{data}/dashboard/redis:/data"]},
         "dashboard": {**common, "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "ports": [f"{bind}:8081:8080"], "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},
-        "dashboard-migrate": {**common, "profiles": ["setup"], "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "depends_on": {"dashboard-mysql": {"condition": "service_healthy"}}, "command": ["sh", "-lc", "cd /var/www/app && php artisan migrate --force --seed"], "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},
+        "dashboard-migrate": {**common, "profiles": ["setup"], "image": "ambientum/php:8.0-nginx", "env_file": dashboard_env, "depends_on": {"dashboard-mysql": {"condition": "service_healthy"}}, "command": ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan migrate --force --seed && php artisan storage:link --force"], "volumes": [f"{components}/frontend/dashboard-web:/var/www/app"]},
     }
     return {
         "name": f"{plan.deployment_id}-{group.id}", "services": services,
@@ -97,7 +107,6 @@ def _validators(plan: DeploymentPlan, group: Group) -> dict:
     machine = plan.machine(group.machine_id)
     network = _network(plan, group)
     data = f"{machine.data_root}/{plan.deployment_id}/blockchain"
-    workspace = machine.workspace_root
     bind = host_bind_address(machine)
     node_addresses = chain_node_addresses(plan)
     services = {}
@@ -107,7 +116,17 @@ def _validators(plan: DeploymentPlan, group: Group) -> dict:
         port = base_port + node_order.index(node)
         services[node] = {"image": plan.raw["blockchain"]["besu_image"], "restart": "unless-stopped", "volumes": [f"{data}/config:/config:ro", f"{data}/{node}:/data"], "command": ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/data/nodekey", f"--p2p-port={port}", f"--p2p-host={node_addresses[node]}", "--rpc-http-enabled=false"], "ports": [f"{bind}:{port}:{port}/tcp", f"{bind}:{port}:{port}/udp"], "networks": {network: {"ipv4_address": node_addresses[node]}}}
     if group.explorer:
-        services["explorer"] = {"image": "nginx:alpine", "restart": "unless-stopped", "ports": [f"{bind}:25000:80"], "networks": [network]}
+        explorer_root = f"{machine.workspace_root}/components/blockchain/dark-explorador"
+        services["explorer"] = {
+            "build": _build(machine.workspace_root, "blockchain/dark-explorador/Dockerfile"),
+            "restart": "unless-stopped", "ports": [f"{bind}:25000:80"],
+            "environment": {"RPC_HTTP_URL": _rpc_url_for_group(plan, group)},
+            "volumes": [
+                f"{explorer_root}/default.conf.template:/etc/nginx/templates/default.conf.template:ro",
+                f"{explorer_root}/docker-entrypoint.sh:/docker-entrypoint.d/40-overwrite-infura.sh:ro",
+            ],
+            "networks": [network],
+        }
     return {"name": f"{plan.deployment_id}-{group.id}", "services": services, "networks": {network: {"name": network, "external": True}}}
 
 

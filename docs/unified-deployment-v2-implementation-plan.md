@@ -74,9 +74,13 @@ MySQL/Laravel, que deben llegar desde jobs y secretos privados.
 
 El mismo mecanismo ya modela Dashboard: `secrets-init` genera el entorno
 privado de Laravel/MySQL, el runner espera el healthcheck de MySQL y ejecuta
-`dashboard-migrate` antes de iniciar el contenedor web. La ejecución Docker
-real sigue pendiente, por lo que esta descripción no sustituye una prueba de
-compatibilidad de la imagen PHP/Laravel.
+`dashboard-migrate` antes de iniciar el contenedor web. El job instala las
+dependencias Composer, migra/siembra y crea el enlace de storage; no depende
+del instalador interno del componente. El explorador usa ahora su imagen real
+`dark-explorador` y recibe el RPC interno Docker o la IP privada de apps según
+la ubicación del grupo. La ejecución Docker real sigue pendiente, por lo que
+esta descripción no sustituye una prueba de compatibilidad de la imagen
+PHP/Laravel ni del explorador.
 
 El job `contracts-deploy` ya compila una imagen mínima con los artefactos
 versionados de Authority y dARK. Lee un firmante desde `secrets_root`, espera
@@ -94,6 +98,9 @@ reanudación no repite contratos ni migraciones que ya terminaron. `verify`
 consulta el estado Compose de cada grupo y, desde apps, prueba RPC mediante JSON
 RPC y los endpoints live de minter y Store. Falta ampliar esa evidencia a
 progreso de bloques, peers Cluster, contratos y conectividad remota cruzada.
+`apply` termina ejecutando esa verificación y solo deja el estado `verified`
+cuando obtiene evidencia sana; `resume` conserva las fases terminadas pero
+vuelve a verificar el conjunto completo.
 
 Solo pasó pruebas unitarias/estructurales y `docker compose config`; no usarlo
 aún para reemplazar la instalación actual. Están implementados la generación e
