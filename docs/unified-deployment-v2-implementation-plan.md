@@ -72,7 +72,8 @@ archivos faltantes, extra o modificados antes de usarlos.
 
 El renderer ya emite entornos públicos diferenciados para Store, Minter, Admin,
 Resolver y Dashboard. Deriva RPC, Store API, chain ID, política de réplica y
-endpoints Docker internos; no acepta esos valores repetidos en `.env`. Aún no
+endpoints Docker internos; el tuning Minter/Store es tipado, obligatorio y no
+usa defaults ocultos ni valores repetidos en `.env`. Aún no
 materializa las direcciones de contratos hasta que el job idempotente las
 confirma on-chain. Los firmantes y las credenciales MySQL/Laravel llegan por
 secretos privados provisionados fuera del bundle.

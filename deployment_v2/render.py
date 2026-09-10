@@ -46,9 +46,11 @@ def _service_environments(plan: DeploymentPlan, group: Group) -> dict[str, dict[
     common = _group_environment(plan, group)
     chain_id = str(plan.raw["blockchain"]["chain_id"])
     replication = plan.raw["storage"]["replication"]
-    minter_settings = plan.raw["settings"].get("minter", {})
-    if not isinstance(minter_settings, dict):
-        minter_settings = {}
+    minter_settings = plan.raw["settings"]["minter"]
+    metadata_settings = minter_settings["metadata"]
+    replication_settings = minter_settings["replication"]
+    chain_settings = minter_settings["chain"]
+    store_settings = plan.raw["settings"]["store"]
     rpc = "http://blockchain-rpc:8545"
     store = "http://store-api:8003"
     minter = {
@@ -59,12 +61,34 @@ def _service_environments(plan: DeploymentPlan, group: Group) -> dict[str, dict[
         "METADATA_STORE_API_URL": store,
         "REPLICATION_PUBLISH_AFTER_REPLICAS": str(replication["publish_after_replicas"]),
         "REPLICATION_TARGET_REPLICAS": str(replication["target_replicas"]),
-        "MINTER_SHOULDER": str(minter_settings.get("shoulder", "200")),
+        "MINTER_SHOULDER": minter_settings["shoulder"],
+        "METADATA_WORKER_PAGE_SIZE": str(metadata_settings["page_size"]),
+        "METADATA_WORKER_CONCURRENCY": str(metadata_settings["concurrency"]),
+        "METADATA_WORKER_MIN_CONCURRENCY": str(metadata_settings["min_concurrency"]),
+        "REPLICATION_WORKER_ENABLED": str(replication_settings["enabled"]).lower(),
+        "REPLICATION_WORKER_PAGE_SIZE": str(replication_settings["page_size"]),
+        "REPLICATION_WORKER_CONCURRENCY": str(replication_settings["concurrency"]),
+        "REPLICATION_STATUS_BATCH_SIZE": str(replication_settings["status_batch_size"]),
+        "REPLICATION_PROMOTION_BATCH_SIZE": str(replication_settings["promotion_batch_size"]),
+        "REPLICATION_PROMOTION_PRESSURE_HIGH_PERCENT": str(replication_settings["promotion_pressure_high_percent"]),
+        "REPLICATION_PROMOTION_PRESSURE_MEDIUM_PERCENT": str(replication_settings["promotion_pressure_medium_percent"]),
+        "REPLICATION_PROMOTION_MIN_BATCH_SIZE": str(replication_settings["promotion_min_batch_size"]),
+        "REPLICATION_MAINTENANCE_CYCLE_SECONDS": str(replication_settings["maintenance_cycle_seconds"]),
+        "REPLICATION_IDLE_SLEEP_SECONDS": str(replication_settings["idle_sleep_seconds"]),
+        "REPLICATION_FIRST_PIN_RECHECK_SECONDS": str(replication_settings["first_pin_recheck_seconds"]),
+        "REPLICATION_FIRST_PIN_SECOND_RECHECK_SECONDS": str(replication_settings["first_pin_second_recheck_seconds"]),
+        "REPLICATION_FIRST_PIN_MAX_RECHECK_SECONDS": str(replication_settings["first_pin_max_recheck_seconds"]),
+        "REPLICATION_DURABILITY_RECHECK_SECONDS": str(replication_settings["durability_recheck_seconds"]),
+        "REPLICATION_DURABILITY_SECOND_RECHECK_SECONDS": str(replication_settings["durability_second_recheck_seconds"]),
+        "REPLICATION_DURABILITY_MAX_RECHECK_SECONDS": str(replication_settings["durability_max_recheck_seconds"]),
+        "REPLICATION_WORKER_STORAGE_RETRY_SECONDS": str(replication_settings["storage_retry_seconds"]),
+        "CHAIN_WORKER_PAGE_SIZE": str(chain_settings["page_size"]),
+        "CHAIN_WORKER_RPC_BATCH_SIZE": str(chain_settings["rpc_batch_size"]),
     }
     values = {
         "admin-api": {**common, "ADMIN_API_HOST": "0.0.0.0", "ADMIN_API_PORT": "8000", "DARK_RPC_URL": rpc, "DARK_CHAIN_ID": chain_id},
         "resolver-api": {**common, "RESOLVER_API_HOST": "0.0.0.0", "RESOLVER_API_PORT": "8002", "DARK_RPC_URL": rpc, "DARK_CHAIN_ID": chain_id, "METADATA_STORAGE_TYPE": "store_api", "METADATA_STORE_API_URL": store},
-        "store-api": {**common, "STORE_API_HOST": "0.0.0.0", "STORE_API_PORT": "8003", "STORAGE_BACKEND": "ipfs_cluster", "STORAGE_ENDPOINTS_FILE": "/config/storage-endpoints.json", "REPLICATION_TARGET_REPLICAS": str(replication["target_replicas"])},
+        "store-api": {**common, "STORE_API_HOST": "0.0.0.0", "STORE_API_PORT": "8003", "STORAGE_BACKEND": "ipfs_cluster", "STORAGE_ENDPOINTS_FILE": "/config/storage-endpoints.json", "REPLICATION_TARGET_REPLICAS": str(replication["target_replicas"]), "STORE_ADD_CONCURRENCY": str(store_settings["add_concurrency"]), "STORE_STATUS_CONCURRENCY": str(store_settings["status_concurrency"]), "STORE_PROMOTION_CONCURRENCY": str(store_settings["promotion_concurrency"])},
         "minter": minter,
         "dashboard": {**common, "APP_ENV": "production", "APP_DEBUG": "false", "DB_CONNECTION": "mysql", "DB_HOST": "dashboard-mysql", "DB_PORT": "3306", "DB_DATABASE": "dark", "DB_USERNAME": "dark", "REDIS_HOST": "dashboard-redis", "ADMIN_API_BASE_URL": "http://admin-api:8000", "MINTER_BASE_URL": "http://minter-api:8001", "WORKER_STATUS_URL": "http://minter-api:8001/api/v1/worker/status", "RESOLVER_BASE_URL": "http://resolver-api:8002", "STORE_API_BASE_URL": store, "BLOCK_NUMBER": rpc},
         "dashboard-db": {**common, "MYSQL_DATABASE": "dark", "MYSQL_USER": "dark"},

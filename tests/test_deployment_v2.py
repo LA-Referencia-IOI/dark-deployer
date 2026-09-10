@@ -111,6 +111,10 @@ class DeploymentV2Tests(unittest.TestCase):
             minter_env = (output / "groups" / "apps" / "env" / "minter.env").read_text()
             self.assertIn("DARK_RPC_URL=http://blockchain-rpc:8545", minter_env)
             self.assertIn("REPLICATION_TARGET_REPLICAS=2", minter_env)
+            self.assertIn("REPLICATION_STATUS_BATCH_SIZE=200", minter_env)
+            self.assertIn("METADATA_WORKER_CONCURRENCY=4", minter_env)
+            store_env = (output / "groups" / "apps" / "env" / "store-api.env").read_text()
+            self.assertIn("STORE_STATUS_CONCURRENCY=6", store_env)
             dashboard_env = (output / "groups" / "apps" / "env" / "dashboard.env").read_text()
             self.assertIn("MINTER_BASE_URL=http://minter-api:8001", dashboard_env)
 
@@ -155,6 +159,20 @@ class DeploymentV2Tests(unittest.TestCase):
             path = Path(temporary) / "bad.json"
             path.write_text(json.dumps(document))
             with self.assertRaisesRegex(InventoryError, "block_period_seconds"):
+                load_inventory(path)
+
+    def test_rejects_incomplete_or_incompatible_runtime_settings(self):
+        document = json.loads((ROOT / "examples" / "deployment-v2" / "local-ha.json").read_text())
+        del document["settings"]["store"]["status_concurrency"]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "bad.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "settings.store is incomplete"):
+                load_inventory(path)
+            document = json.loads((ROOT / "examples" / "deployment-v2" / "local-ha.json").read_text())
+            document["settings"]["minter"]["metadata"]["min_concurrency"] = 5
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "metadata has incompatible"):
                 load_inventory(path)
 
     def test_greenfield_secret_init_generates_runtime_files_without_wallet(self):

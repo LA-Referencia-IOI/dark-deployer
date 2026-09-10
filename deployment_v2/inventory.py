@@ -222,6 +222,76 @@ def load_inventory(path: Path) -> tuple[dict[str, Any], tuple[Machine, ...], tup
     return raw, tuple(machines), tuple(groups), tuple(networks)
 
 
+def _positive_integer(value: Any, path: str) -> int:
+    if not isinstance(value, int) or value < 1:
+        raise _error(f"{path} must be a positive integer")
+    return value
+
+
+def _validate_settings(settings: dict[str, Any]) -> None:
+    """Keep emitted Minter and Store tuning explicit in the topology."""
+    _only_keys(settings, "settings", {"minter", "store"})
+    minter = _object(settings.get("minter"), "settings.minter")
+    _only_keys(minter, "settings.minter", {"shoulder", "metadata", "replication", "chain"})
+    shoulder = minter.get("shoulder")
+    if not isinstance(shoulder, str) or not re.fullmatch(r"2[0-9]{2}", shoulder):
+        raise _error("settings.minter.shoulder must use the 2MM format")
+
+    metadata = _object(minter.get("metadata"), "settings.minter.metadata")
+    metadata_required = {"page_size", "concurrency", "min_concurrency"}
+    _only_keys(metadata, "settings.minter.metadata", metadata_required)
+    if set(metadata) != metadata_required:
+        raise _error("settings.minter.metadata is incomplete")
+    page_size = _positive_integer(metadata["page_size"], "settings.minter.metadata.page_size")
+    concurrency = _positive_integer(metadata["concurrency"], "settings.minter.metadata.concurrency")
+    minimum = _positive_integer(metadata["min_concurrency"], "settings.minter.metadata.min_concurrency")
+    if page_size > 1_000 or minimum > concurrency:
+        raise _error("settings.minter.metadata has incompatible page size or concurrency")
+
+    replication = _object(minter.get("replication"), "settings.minter.replication")
+    replication_required = {
+        "enabled", "page_size", "concurrency", "status_batch_size", "promotion_batch_size",
+        "promotion_pressure_high_percent", "promotion_pressure_medium_percent",
+        "promotion_min_batch_size", "maintenance_cycle_seconds", "idle_sleep_seconds",
+        "first_pin_recheck_seconds", "first_pin_second_recheck_seconds", "first_pin_max_recheck_seconds",
+        "durability_recheck_seconds", "durability_second_recheck_seconds", "durability_max_recheck_seconds",
+        "storage_retry_seconds",
+    }
+    _only_keys(replication, "settings.minter.replication", replication_required)
+    if set(replication) != replication_required or not isinstance(replication.get("enabled"), bool):
+        raise _error("settings.minter.replication is incomplete or enabled is not boolean")
+    values = {
+        field: _positive_integer(replication[field], f"settings.minter.replication.{field}")
+        for field in replication_required.difference({"enabled"})
+    }
+    if values["page_size"] > 1_000 or values["status_batch_size"] > 200:
+        raise _error("settings.minter.replication page or status batch exceeds its supported limit")
+    if values["promotion_batch_size"] > values["page_size"] or values["promotion_min_batch_size"] > values["promotion_batch_size"]:
+        raise _error("settings.minter.replication promotion batch settings are incompatible")
+    if values["promotion_pressure_medium_percent"] > values["promotion_pressure_high_percent"] or values["promotion_pressure_high_percent"] > 100:
+        raise _error("settings.minter.replication promotion pressure percentages are invalid")
+    if not (values["first_pin_recheck_seconds"] <= values["first_pin_second_recheck_seconds"] <= values["first_pin_max_recheck_seconds"]):
+        raise _error("settings.minter.replication first-pin rechecks must be nondecreasing")
+    if not (values["durability_recheck_seconds"] <= values["durability_second_recheck_seconds"] <= values["durability_max_recheck_seconds"]):
+        raise _error("settings.minter.replication durability rechecks must be nondecreasing")
+
+    chain = _object(minter.get("chain"), "settings.minter.chain")
+    chain_required = {"page_size", "rpc_batch_size"}
+    _only_keys(chain, "settings.minter.chain", chain_required)
+    if set(chain) != chain_required:
+        raise _error("settings.minter.chain is incomplete")
+    for field in chain_required:
+        _positive_integer(chain[field], f"settings.minter.chain.{field}")
+
+    store = _object(settings.get("store"), "settings.store")
+    store_required = {"add_concurrency", "status_concurrency", "promotion_concurrency"}
+    _only_keys(store, "settings.store", store_required)
+    if set(store) != store_required:
+        raise _error("settings.store is incomplete")
+    for field in store_required:
+        _positive_integer(store[field], f"settings.store.{field}")
+
+
 def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
     apps = [group for group in groups if group.kind == "apps"]
     validator_groups = [group for group in groups if group.kind == "validators"]
@@ -280,6 +350,7 @@ def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
     target = replication.get("target_replicas")
     if not isinstance(publish, int) or not isinstance(target, int) or not 1 <= publish <= target <= len(node_ids):
         raise _error("storage replication must satisfy 1 <= publish_after_replicas <= target_replicas <= storage nodes")
+    _validate_settings(_object(raw["settings"], "settings"))
     components = _object(raw["components"], "components")
     missing = REQUIRED_COMPONENTS.difference(components)
     if missing:

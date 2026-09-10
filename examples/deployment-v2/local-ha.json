@@ -33,7 +33,7 @@
     "dashboard-web": {"repository_url": "git@github.com:LA-Referencia-IOI/dashboard-web.git", "branch": "main"},
     "dark-ipfs": {"repository_url": "git@github.com:LA-Referencia-IOI/dark-ipfs.git", "branch": "main"}
   },
-  "settings": {},
+  "settings": {"minter": {"shoulder": "200", "metadata": {"page_size": 100, "concurrency": 4, "min_concurrency": 2}, "replication": {"enabled": true, "page_size": 100, "concurrency": 2, "status_batch_size": 200, "promotion_batch_size": 100, "promotion_pressure_high_percent": 80, "promotion_pressure_medium_percent": 50, "promotion_min_batch_size": 20, "maintenance_cycle_seconds": 5, "idle_sleep_seconds": 2, "first_pin_recheck_seconds": 15, "first_pin_second_recheck_seconds": 60, "first_pin_max_recheck_seconds": 300, "durability_recheck_seconds": 300, "durability_second_recheck_seconds": 900, "durability_max_recheck_seconds": 3600, "storage_retry_seconds": 10}, "chain": {"page_size": 100, "rpc_batch_size": 50}}, "store": {"add_concurrency": 4, "status_concurrency": 6, "promotion_concurrency": 4}},
   "secrets": {
     "master-wallet": {"path": "blockchain/master-wallet", "consumers": ["apps", "chain-bootstrap"]},
     "contract-signer": {"path": "blockchain/contract-signer", "consumers": ["apps"]},

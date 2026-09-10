@@ -54,9 +54,10 @@ cuando el renderer v2 pueda generar todos los entornos y jobs operativos.
 | Cluster | peer name, bootstrap, cluster name, secret, factor de réplica | storage, placement, secrets |
 | Besu | genesis, node key, static nodes, P2P/RPC roles | artefactos de cadena y placement |
 
-## Tuning a trasladar a `settings`
+## Tuning de `settings`
 
-Los defaults actuales permanecen como referencia hasta que se tipen en schema:
+El contrato v2 ya tipa y exige los valores que actualmente se entregan a Minter
+y Store API. No hay defaults ocultos en el renderer:
 
 - `minter.metadata`: página, concurrencia, backoff y descanso.
 - `minter.replication`: tamaño de página/batch, intervalos de primer pin y
@@ -64,7 +65,8 @@ Los defaults actuales permanecen como referencia hasta que se tipen en schema:
 - `minter.chain`: página, lote RPC, backoff y adaptación.
 - `store`: concurrencias de add/status/promoción y TTL de health.
 - `ipfs`: concurrencia de pins Cluster.
-- `dashboard`: timeout HTTP y caché de diagnósticos.
+- Dashboard conserva por ahora sus valores de la aplicación; incorporar timeout
+  HTTP y caché solo cuando se confirme que el componente los consume desde env.
 
 No se deben trasladar variables de diagnóstico heredadas sin identificar su
 consumidor. La configuración v2 solo genera una variable cuando el código del
@@ -72,8 +74,8 @@ servicio la consume.
 
 ## Huecos que bloquean el corte
 
-1. Tipar `settings` y `exposure` en schema; ahora se conservan como objetos
-   libres para no bloquear el prototipo.
+1. Tipar `exposure` y los ajustes adicionales que cada componente consuma; el
+   núcleo Minter/Store ya es cerrado y validado.
 2. Comparar sistemáticamente los Compose generados contra los actuales:
    comandos, healthchecks, builds, permisos y volúmenes.
 3. Reducir `.env.example` al puntero de topología solo después de que los tres
