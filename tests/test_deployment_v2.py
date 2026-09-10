@@ -156,6 +156,7 @@ class DeploymentV2Tests(unittest.TestCase):
             self.assertIn("STORE_STATUS_CONCURRENCY=6", store_env)
             dashboard_env = (output / "groups" / "apps" / "env" / "dashboard.env").read_text()
             self.assertIn("MINTER_BASE_URL=http://minter-api:8001", dashboard_env)
+            self.assertIn("APP_ENV=local", dashboard_env)
 
     def test_preflight_is_read_only_and_reports_each_check(self):
         machine = Machine(

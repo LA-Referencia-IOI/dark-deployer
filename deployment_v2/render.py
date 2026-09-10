@@ -51,6 +51,7 @@ def _service_environments(plan: DeploymentPlan, group: Group) -> dict[str, dict[
     replication_settings = minter_settings["replication"]
     chain_settings = minter_settings["chain"]
     store_settings = plan.raw["settings"]["store"]
+    dashboard_environment = "local" if all(machine.execution == "local" for machine in plan.machines) else "production"
     rpc = "http://blockchain-rpc:8545"
     store = "http://store-api:8003"
     minter = {
@@ -90,7 +91,7 @@ def _service_environments(plan: DeploymentPlan, group: Group) -> dict[str, dict[
         "resolver-api": {**common, "RESOLVER_API_HOST": "0.0.0.0", "RESOLVER_API_PORT": "8002", "DARK_RPC_URL": rpc, "DARK_CHAIN_ID": chain_id, "METADATA_STORAGE_TYPE": "store_api", "METADATA_STORE_API_URL": store},
         "store-api": {**common, "STORE_API_HOST": "0.0.0.0", "STORE_API_PORT": "8003", "STORAGE_BACKEND": "ipfs_cluster", "STORAGE_ENDPOINTS_FILE": "/config/storage-endpoints.json", "REPLICATION_TARGET_REPLICAS": str(replication["target_replicas"]), "STORE_ADD_CONCURRENCY": str(store_settings["add_concurrency"]), "STORE_STATUS_CONCURRENCY": str(store_settings["status_concurrency"]), "STORE_PROMOTION_CONCURRENCY": str(store_settings["promotion_concurrency"])},
         "minter": minter,
-        "dashboard": {**common, "APP_ENV": "production", "APP_DEBUG": "false", "DB_CONNECTION": "mysql", "DB_HOST": "dashboard-mysql", "DB_PORT": "3306", "DB_DATABASE": "dark", "DB_USERNAME": "dark", "REDIS_HOST": "dashboard-redis", "ADMIN_API_BASE_URL": "http://admin-api:8000", "MINTER_BASE_URL": "http://minter-api:8001", "WORKER_STATUS_URL": "http://minter-api:8001/api/v1/worker/status", "RESOLVER_BASE_URL": "http://resolver-api:8002", "STORE_API_BASE_URL": store, "BLOCK_NUMBER": rpc},
+        "dashboard": {**common, "APP_ENV": dashboard_environment, "APP_DEBUG": "false", "DB_CONNECTION": "mysql", "DB_HOST": "dashboard-mysql", "DB_PORT": "3306", "DB_DATABASE": "dark", "DB_USERNAME": "dark", "REDIS_HOST": "dashboard-redis", "ADMIN_API_BASE_URL": "http://admin-api:8000", "MINTER_BASE_URL": "http://minter-api:8001", "WORKER_STATUS_URL": "http://minter-api:8001/api/v1/worker/status", "RESOLVER_BASE_URL": "http://resolver-api:8002", "STORE_API_BASE_URL": store, "BLOCK_NUMBER": rpc},
         "dashboard-db": {**common, "MYSQL_DATABASE": "dark", "MYSQL_USER": "dark"},
     }
     return values
