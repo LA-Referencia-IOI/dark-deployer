@@ -33,6 +33,24 @@ def _require(result, description: str) -> None:
         raise ApplyError(f"{description}: {detail}")
 
 
+def _prepare_postgres_data(executor, machine, plan: DeploymentPlan) -> None:
+    """Create the PostgreSQL bind mount and give it to the postgres UID.
+
+    Docker may create a bind-mounted directory as root (especially on Docker
+    Desktop).  The official image then cannot read its own cluster files when
+    it drops privileges to UID 999.  A short-lived postgres image performs the
+    ownership fix before the long-lived database container starts.
+    """
+    data_dir = Path(machine.data_root) / plan.deployment_id / "apps" / "minter" / "postgres"
+    _require(executor.run(("mkdir", "-p", str(data_dir))), "prepare PostgreSQL data directory")
+    command = (
+        "docker", "run", "--rm", "--user", "0:0",
+        "-v", f"{data_dir}:/var/lib/postgresql/data",
+        "postgres:15-alpine", "chown", "-R", "999:999", "/var/lib/postgresql/data",
+    )
+    _require(executor.run(command, timeout=120.0), "fix PostgreSQL data ownership")
+
+
 def _copy_if_absent_or_identical(executor, source: Path, destination: Path, description: str) -> None:
     """Install immutable chain material without replacing an existing identity.
 
@@ -140,6 +158,8 @@ def _effective_plan_for_apply(plan: DeploymentPlan, project_root: Path, run_dir:
 def _apply_group(plan: DeploymentPlan, group: Group, project_root: Path, run_dir: Path, bundle: Path, *, phase: str = "full") -> None:
     machine = plan.machine(group.machine_id)
     executor = resolve_executor(machine)
+    if group.kind == "apps" and phase in {"bootstrap", "full"}:
+        _prepare_postgres_data(executor, machine, plan)
     group_dir = bundle / "groups" / group.id
     if isinstance(executor, SshExecutor):
         destination = _remote_prepare(executor, machine, project_root, run_dir, group_dir)
