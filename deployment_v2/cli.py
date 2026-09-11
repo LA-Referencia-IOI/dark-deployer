@@ -143,7 +143,9 @@ def _install(args: argparse.Namespace, plan) -> None:
             elif args.create_master_wallet:
                 print(f"[INFO] Inventory wallet path does not exist yet: {candidate}")
                 args.master_wallet_file = candidate
-    if args.create_master_wallet and not args.master_wallet_file:
+    if args.create_master_wallet and (
+        not args.master_wallet_file or not Path(args.master_wallet_file).is_file()
+    ):
         wallet_script = project_root / "blockchain" / "scripts" / "create-master-wallet.sh"
         wallet_file = args.master_wallet_file or (project_root / "blockchain" / "master-wallet.txt")
         print("[INFO] Creating master wallet with the blockchain wallet generator...")
