@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,12 +20,51 @@ from deployment_v2.state import deployment_lock, run_root, write_status
 from deployment_v2.verify import verify
 from deployment_v2.sources import SourceError, require_matching_source_evidence, source_evidence
 from deployment_v2.cli import _write_install_report
+from deployment_v2.inventory_editor.document import InventoryDocument, InventoryDocumentError
+from deployment_v2.inventory_editor.templates import create_from_template, template_names
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentV2Tests(unittest.TestCase):
+    def test_inventory_document_rejects_invalid_section_without_mutating_original(self):
+        source = ROOT / "examples" / "deployment-v2" / "local-simple.json"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_bytes(source.read_bytes())
+            document = InventoryDocument.load(path)
+            original = document.section_text("storage")
+            with self.assertRaisesRegex(InventoryDocumentError, "target_replicas"):
+                document.replace_section_text(
+                    "storage", original.replace('"target_replicas": 1', '"target_replicas": 99')
+                )
+            self.assertEqual(document.section_text("storage"), original)
+
+    def test_inventory_document_saves_atomically_with_backup(self):
+        source = ROOT / "examples" / "deployment-v2" / "local-simple.json"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_bytes(source.read_bytes())
+            document = InventoryDocument.load(path)
+            deployment = json.loads(document.section_text("deployment"))
+            deployment["label"] = "Edited local deployment"
+            document.replace_section_text("deployment", json.dumps(deployment))
+            backup = document.save()
+            self.assertIsNotNone(backup)
+            self.assertTrue(backup.exists())
+            self.assertEqual(json.loads(path.read_text())["deployment"]["label"], "Edited local deployment")
+            load_inventory(path)
+
+    def test_inventory_templates_are_valid_and_refuse_implicit_overwrite(self):
+        self.assertEqual(set(template_names()), {"local-simple", "local-ha", "production-five-host"})
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            create_from_template("local-ha", path)
+            load_inventory(path)
+            with self.assertRaisesRegex(InventoryDocumentError, "refusing to overwrite"):
+                create_from_template("local-ha", path)
+
     def test_examples_validate_and_plan(self):
         for name, machines, groups in (("local-simple", 1, 4), ("local-ha", 1, 5), ("production-five-host", 5, 5)):
             path = ROOT / "examples" / "deployment-v2" / f"{name}.json"
@@ -407,6 +447,23 @@ class DeploymentV2Tests(unittest.TestCase):
         self.assertIn("--exclude", argv)
         self.assertIn(".git", argv)
         self.assertIn(".env", argv)
+
+
+@unittest.skipUnless(importlib.util.find_spec("textual"), "Textual optional dependency is not installed")
+class InventoryTextualTests(unittest.IsolatedAsyncioTestCase):
+    async def test_editor_opens_the_deployment_section(self):
+        from deployment_v2.inventory_editor.textual_app import _make_textual_app
+
+        source = ROOT / "examples" / "deployment-v2" / "local-simple.json"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_bytes(source.read_bytes())
+            document = InventoryDocument.load(path)
+            app = _make_textual_app(document)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                self.assertIn("Deployment", str(app.query_one("#title").render()))
+                self.assertIn('"id"', app.query_one("#section-json").text)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ fase posterior; este índice cubre primero el repositorio padre y su instalador.
 | Arquitectura completa | [`dark-technical-reference.md`](dark-technical-reference.md) y [`DARK_2.0_ARCHITECTURE.md`](../DARK_2.0_ARCHITECTURE.md) |
 | APIs y contratos | [`DARK_2.0_API_REFERENCE.md`](../DARK_2.0_API_REFERENCE.md) |
 | Operación del instalador | [`deployer-operations.md`](deployer-operations.md) |
+| Edición interactiva del inventario | [`inventory-editor-implementation-plan.md`](inventory-editor-implementation-plan.md) y [`OPERATIONS-MANUAL.md`](../OPERATIONS-MANUAL.md) |
 | Análisis del instalador local/remoto y unificación propuesta | [`installer-local-remote-unification-analysis.md`](installer-local-remote-unification-analysis.md) |
 | Producción y bundles por host | [`production-single-site-four-server-installation.md`](production-single-site-four-server-installation.md) |
 | Topología física y redes | [`production-single-site-four-server-installation.md`](production-single-site-four-server-installation.md) y [`dark-technical-reference.md`](dark-technical-reference.md) |
@@ -48,6 +49,12 @@ desde la configuración heredada hacia el inventario único. El motor ya renderi
 grupos, entornos y jobs, y dispone de runner local/SSH; todavía no sustituye la
 guía operativa instalada hasta completar una prueba Docker limpia y la matriz
 SSH.
+
+El editor terminal de inventarios ya cuenta con una primera implementación
+Textual: crea topologías desde las tres plantillas mantenidas, edita cada
+sección, usa la validación canónica y guarda con backup atómico. Su detalle de
+arquitectura, límites y siguientes iteraciones está en
+[`inventory-editor-implementation-plan.md`](inventory-editor-implementation-plan.md).
 
 Los siguientes documentos conservan contexto útil, pero no deben usarse como
 instrucciones actuales sin contrastarlos con las referencias canónicas:

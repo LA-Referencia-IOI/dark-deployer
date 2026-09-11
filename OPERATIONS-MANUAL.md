@@ -65,6 +65,36 @@ venv/bin/python -m deployment_v2.cli render \
 Revisar especialmente roles `apps`, `validators-a`, `validators-b` y los dos
 grupos de storage.
 
+### Editor interactivo de inventario
+
+Para crear o editar la topología sin modificar JSON a mano, instalar la
+dependencia opcional de interfaz y abrir el editor:
+
+```bash
+venv/bin/python -m pip install -r requirements-tui.txt
+venv/bin/python deploy.py inventory-create \
+  --template local-ha \
+  --output deployment-topology.json \
+  --edit
+
+# Para un inventario existente:
+venv/bin/python deploy.py inventory-edit \
+  --inventory deployment-topology.json
+```
+
+El editor organiza la topología por secciones: deployment, defaults, redes,
+máquinas, grupos, blockchain, storage, componentes, settings, secretos y
+exposure. Cada sección se valida con las mismas reglas semánticas que usa el
+instalador antes de incorporarla al documento. `Ctrl+V` valida la sección,
+`Ctrl+S` guarda y `Ctrl+Q` sale.
+
+El guardado valida el inventario completo y crea una copia
+`deployment-topology.json.bak-AAAAMMDD-HHMMSSZ` antes de reemplazarlo de forma
+atómica. La interfaz no inicia Docker, no clona repositorios y nunca muestra ni
+escribe contenidos de secretos; solo trabaja con las referencias declaradas.
+Los comandos `validate`, `plan`, `render` e `install` siguen siendo la vía
+correcta para comprobar o aplicar cambios.
+
 ## 3. Preflight e instalación local
 
 Para developer local, ejecutar el preflight y luego aplicar el bundle generado:

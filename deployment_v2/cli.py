@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -19,12 +20,14 @@ from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
 from .sources import SourceError
 from .acquire import AcquisitionError, acquire_components
+from .inventory_editor import InventoryDocument, InventoryDocumentError, create_from_template, template_names
+from .inventory_editor.textual_app import run_textual_editor
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "recreate", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init"):
+    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "recreate", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
@@ -67,6 +70,11 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--output", required=True, type=Path)
         if name == "chain-verify":
             command.add_argument("--artifact-root", required=True, type=Path)
+    create = actions.add_parser("inventory-create", help="create an inventory from a maintained template")
+    create.add_argument("--template", required=True, choices=template_names())
+    create.add_argument("--output", required=True, type=Path)
+    create.add_argument("--overwrite", action="store_true")
+    create.add_argument("--edit", action="store_true", help="open the new inventory in the interactive editor")
     return parser
 
 
@@ -204,9 +212,36 @@ def _write_install_report(root: Path, verification: dict, *, resumed: bool) -> P
     return destination
 
 
+def _run_inventory_editor(path: Path) -> None:
+    """Open the optional terminal UI without changing deployment state."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise InventoryDocumentError(
+            "inventory-edit requires an interactive terminal; use inventory-create, "
+            "a JSON editor, or the non-interactive deployment commands instead"
+        )
+    document = InventoryDocument.load(path)
+    result = run_textual_editor(document)
+    if result.saved:
+        message = f"[OK] Saved inventory: {path}"
+        if result.backup:
+            message += f" (backup: {result.backup})"
+        print(message)
+    else:
+        print("[INFO] Inventory editor closed without saving.")
+
+
 def main() -> None:
     args = _parser().parse_args()
     try:
+        if args.action == "inventory-create":
+            created = create_from_template(args.template, args.output, overwrite=args.overwrite)
+            print(f"[OK] Created inventory from {args.template}: {created}")
+            if args.edit:
+                _run_inventory_editor(created)
+            return
+        if args.action == "inventory-edit":
+            _run_inventory_editor(args.inventory)
+            return
         if args.action == "validate":
             raw, machines, groups, _ = load_inventory(args.inventory)
             print(f"[OK] {raw['deployment']['id']}: {len(machines)} machine(s), {len(groups)} group(s).")
@@ -292,7 +327,7 @@ def main() -> None:
             return
         rendered = render_plan(plan, args.output)
         print(f"[OK] Rendered public plan at {rendered}")
-    except (InventoryError, ExecutionError, ApplyError, ArtifactError, SecretError, VerifyError, SourceError, ValueError) as exc:
+    except (InventoryError, InventoryDocumentError, ExecutionError, ApplyError, ArtifactError, SecretError, VerifyError, SourceError, ValueError) as exc:
         raise SystemExit(f"[ERROR] {exc}") from exc
 
 
