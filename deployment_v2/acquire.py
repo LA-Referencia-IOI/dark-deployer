@@ -31,7 +31,7 @@ def _branch_exists(url: str, branch: str) -> bool:
     raise AcquisitionError(f"cannot inspect branch {branch} at {url}: {detail}")
 
 
-def acquire_components(plan: DeploymentPlan, project_root: Path) -> dict[str, str]:
+def acquire_components(plan: DeploymentPlan, project_root: Path, *, update_existing: bool = True) -> dict[str, str]:
     """Clone or fast-forward every component to the branch in the inventory.
 
     Existing working-tree changes are never overwritten.  A checkout is only
@@ -58,6 +58,16 @@ def acquire_components(plan: DeploymentPlan, project_root: Path) -> dict[str, st
             origin = _run(("git", "remote", "get-url", "origin"), cwd=target)
             if origin.rstrip("/").removesuffix(".git") != url.rstrip("/").removesuffix(".git"):
                 raise AcquisitionError(f"component {component_id} origin differs: {origin} != {url}")
+            if not update_existing:
+                local = _run(("git", "branch", "--show-current"), cwd=target)
+                if local != branch:
+                    raise AcquisitionError(
+                        f"component {component_id} is on '{local or 'detached HEAD'}'; "
+                        f"switch to '{branch}' or choose update"
+                    )
+                commits[component_id] = _run(("git", "rev-parse", "HEAD"), cwd=target)
+                print(f"[OK] Source kept: {component_id} ({branch}) {commits[component_id][:12]}")
+                continue
             dirty = subprocess.run(("git", "status", "--porcelain"), cwd=target, capture_output=True, text=True)
             if dirty.stdout.strip():
                 print(f"[WARNING] {component_id} has local changes; preserving them while updating the branch")

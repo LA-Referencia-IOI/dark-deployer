@@ -115,7 +115,11 @@ def _install(args: argparse.Namespace, plan) -> None:
         raise ApplyError("installation preflight failed: " + json.dumps(failed, sort_keys=True))
     if not args.skip_acquire:
         try:
-            acquire_components(plan, project_root)
+            update_existing = args.yes or args.non_interactive
+            if not update_existing:
+                answer = input("Existing component checkouts found. Update them from their configured branches? [Y/n]: ").strip().lower()
+                update_existing = answer in {"", "y", "yes"}
+            acquire_components(plan, project_root, update_existing=update_existing)
         except AcquisitionError as exc:
             raise ApplyError(f"component acquisition failed: {exc}") from exc
     # Apply uses a staged local destination for local machines. Prepare the

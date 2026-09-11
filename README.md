@@ -106,7 +106,7 @@ tests/                    # deployer tests
 ```
 
 See [`OPERATIONS-MANUAL.md`](OPERATIONS-MANUAL.md) for the complete procedure
-and [`docs/README.md`](docs/README.md) for the documentation map. Run tests with:
+and [`docs/history.md`](docs/history.md) for the historical archive. Run tests with:
 
 ```bash
 venv/bin/python -m unittest discover -s tests -v
