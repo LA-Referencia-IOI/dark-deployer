@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -41,6 +42,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--dry-run", action="store_true")
             command.add_argument("--master-wallet-address")
             command.add_argument("--master-wallet-file", type=Path)
+            command.add_argument("--create-master-wallet", action="store_true",
+                                 help="generate blockchain/master-wallet.txt when no wallet file is supplied")
             command.add_argument("--contract-signer-file", type=Path)
             command.add_argument("--chain-artifact", type=Path,
                                  help="existing complete chain artifact; otherwise generate one for a new local chain")
@@ -118,6 +121,40 @@ def _install(args: argparse.Namespace, plan) -> None:
     # Apply uses a staged local destination for local machines. Prepare the
     # same private tree it will consume before invoking the runner.
     local_machines = [m for m in plan.machines if m.execution == "local"]
+    if not args.master_wallet_file:
+        wallet_definition = plan.raw.get("secrets", {}).get("master-wallet", {})
+        source_path = wallet_definition.get("source_path")
+        if source_path:
+            candidate = Path(source_path)
+            if not candidate.is_absolute():
+                candidate = project_root / candidate
+            if candidate.is_file():
+                print(f"[INFO] Master wallet found at inventory path: {candidate}")
+                if args.non_interactive or args.yes:
+                    args.master_wallet_file = candidate
+                else:
+                    answer = input(f"Use the master wallet at '{candidate}'? [Y/n]: ").strip().lower()
+                    if answer in {"", "y", "yes"}:
+                        args.master_wallet_file = candidate
+            elif args.create_master_wallet:
+                print(f"[INFO] Inventory wallet path does not exist yet: {candidate}")
+                args.master_wallet_file = candidate
+    if args.create_master_wallet and not args.master_wallet_file:
+        wallet_script = project_root / "blockchain" / "scripts" / "create-master-wallet.sh"
+        wallet_file = args.master_wallet_file or (project_root / "blockchain" / "master-wallet.txt")
+        print("[INFO] Creating master wallet with the blockchain wallet generator...")
+        try:
+            subprocess.run(["bash", str(wallet_script)], cwd=str(project_root / "blockchain"), check=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ApplyError(f"master wallet creation failed: {exc}") from exc
+        generated = project_root / "blockchain" / "master-wallet.txt"
+        if wallet_file != generated:
+            wallet_file.parent.mkdir(parents=True, exist_ok=True)
+            if wallet_file.exists():
+                raise ApplyError(f"refusing to replace existing wallet: {wallet_file}")
+            shutil.copy2(generated, wallet_file)
+        args.master_wallet_file = wallet_file
+        print(f"[OK] Master wallet created: {wallet_file}")
     # In the common local setup one master-wallet.txt supplies both runtime
     # credentials. Explicit signer/address arguments still take precedence.
     signer_file = args.contract_signer_file or args.master_wallet_file
@@ -171,6 +208,8 @@ def _install(args: argparse.Namespace, plan) -> None:
                 if address_match:
                     address = address_match.group(1)
             if not address and not args.non_interactive:
+                print("[INFO] No master wallet address is configured.")
+                print("       Re-run with --create-master-wallet to generate one automatically.")
                 address = input("Master wallet public address for a new chain (0x...): ").strip()
             if not address:
                 raise ApplyError("missing master wallet address; use --master-wallet-address or provision a chain artifact")

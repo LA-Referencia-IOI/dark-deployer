@@ -415,10 +415,14 @@ def _validate_domain(raw: dict[str, Any], groups: list[Group]) -> None:
     for secret_id, definition in secrets.items():
         _identifier(secret_id, f"secrets.{secret_id}")
         definition = _object(definition, f"secrets.{secret_id}")
-        _only_keys(definition, f"secrets.{secret_id}", {"path", "consumers", "format"})
+        _only_keys(definition, f"secrets.{secret_id}", {"path", "consumers", "format", "source_path"})
         relative = _string(definition.get("path"), f"secrets.{secret_id}.path")
         if Path(relative).is_absolute() or ".." in Path(relative).parts:
             raise _error(f"secrets.{secret_id}.path must be a safe path relative to secrets_root")
+        if "source_path" in definition:
+            source_path = _string(definition["source_path"], f"secrets.{secret_id}.source_path")
+            if Path(source_path).is_absolute() is False and ".." in Path(source_path).parts:
+                raise _error(f"secrets.{secret_id}.source_path must not escape the project")
         consumers = definition.get("consumers", [])
         if not isinstance(consumers, list) or not all(isinstance(item, str) for item in consumers):
             raise _error(f"secrets.{secret_id}.consumers must be a string list")

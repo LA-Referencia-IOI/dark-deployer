@@ -49,6 +49,9 @@ dependency order, and verifies the result. Existing checkouts are updated with
 For an existing chain, provision its private artifact and pass
 `--chain-artifact`. For a new local chain, `--master-wallet-file` is sufficient;
 the public address and signer are derived unless explicitly overridden.
+To generate a new wallet automatically during a local installation, add
+`--create-master-wallet`. The option is guarded and never overwrites an
+existing `blockchain/master-wallet.txt`.
 
 ## Inventory and operations
 
