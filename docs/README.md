@@ -23,7 +23,7 @@ fase posterior; este índice cubre primero el repositorio padre y su instalador.
 | Política de shoulders | [`minter-shoulder-policy.md`](minter-shoulder-policy.md) |
 
 Cuando dos documentos canónicos parezcan diferir, el código de `main`,
-`deployment-topology.example.json` y `.env.example` tienen precedencia sobre
+Las plantillas de `examples/deployment-v2/` y `.env.example` tienen precedencia sobre
 el texto. Los valores generados (`.env.integration`, runtime JSON y bundles)
 son derivados y no fuentes de configuración.
 

@@ -1,4 +1,9 @@
-# Análisis del instalador local y remoto
+# Análisis del instalador local y remoto (histórico)
+
+> Este análisis describe una arquitectura anterior. No es una guía de
+> instalación: el flujo vigente usa `deploy.py` y un único inventario de
+> `examples/deployment-v2/`; las rutas `dark_deployer`, `compose/` y el
+> instalador raíz que aparecen abajo ya no son componentes activos.
 
 ## Propósito
 
@@ -142,7 +147,7 @@ secretos y crea los directorios de bind mount cuando corresponde.
 
 ### Topología de producción
 
-`deployment-topology.example.json` es schema 1 y contiene:
+El antiguo archivo de ejemplo de topología v1 (eliminado) era schema 1 y contenía:
 
 - identidad, entorno, chain ID y versión Besu;
 - defaults SSH y directorio remoto;
@@ -566,7 +571,7 @@ duplicada, secreto faltante y pérdida de conectividad durante `apply`.
 - `install.py`
 - `dark_deployer/deployment.py`
 - `dark_deployer/storage.py`
-- `deployment-topology.example.json`
+- El ejemplo de topología v1 (eliminado)
 - `.env.example`
 - `compose/apps.yml`
 - `compose/blockchain-a.yml`

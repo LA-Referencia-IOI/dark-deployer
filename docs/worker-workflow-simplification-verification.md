@@ -1,5 +1,8 @@
 # Handoff: recreate and verify the simplified minter workflow
 
+> Los comandos de instalación y Compose de este registro son históricos y no
+> representan el flujo vigente del deployer v2.
+
 > **Estado: procedimiento histórico de verificación.** Úselo como evidencia
 > de pruebas anteriores; para la operación actual prevalecen el código de
 > `main` y [`worker-cycle-evidence.md`](worker-cycle-evidence.md).

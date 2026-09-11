@@ -1,4 +1,8 @@
-# Plan de implementación del despliegue unificado v2
+# Plan de implementación del despliegue unificado v2 (histórico)
+
+> La implementación vigente se opera con `deploy.py` y los inventarios de
+> `examples/deployment-v2/`. Referencias a `dark_deployer`, `install.py` o
+> topologías raíz describen decisiones previas y no son comandos actuales.
 
 Estado: primera candidata estable para prueba Docker; la instalación real v2
 aún no está certificada.
@@ -633,7 +637,7 @@ No llamar validación multiservidor a cinco proyectos en un único daemon.
 ## 11. Corte y retirada
 
 Durante desarrollo usar `examples/deployment-v2/*.json`. Tras aceptación,
-`deployment-topology.example.json` pasa a v2; inventario activo del usuario se
+El antiguo ejemplo de topología pasa a v2; el inventario activo del usuario se
 recrea explícitamente, nunca se sobrescribe automáticamente.
 
 Retirar entradas operativas `compose/*-production.yml`, `apps.yml`,

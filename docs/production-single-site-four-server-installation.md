@@ -9,11 +9,11 @@ secretos, claves privadas ni identidades de nodos.
 ## Preparación
 
 ```bash
-cp deployment-topology.example.json deployment-topology.json
+venv/bin/python deploy.py inventory-create --template production-five-host --output deployment-topology.json
 # Ajuste hosts, ramas y rutas de secretos.
-python3.12 install.py topology validate --file deployment-topology.json
-python3.12 install.py topology render --file deployment-topology.json --output dist/production
-python3.12 install.py deployment verify --bundle dist/production
+venv/bin/python deploy.py validate --inventory deployment-topology.json
+venv/bin/python deploy.py render --inventory deployment-topology.json --output dist/production
+venv/bin/python deploy.py verify --inventory deployment-topology.json
 ```
 
 El renderer genera exactamente cinco bundles. Deriva una topología compacta de
@@ -27,8 +27,8 @@ nodos con permisos 0600.
 Revise primero el plan seguro, que no abre conexiones:
 
 ```bash
-python3.12 install.py deployment push --bundle dist/production
-python3.12 install.py deployment apply --bundle dist/production
+venv/bin/python deploy.py push --inventory deployment-topology.json
+venv/bin/python deploy.py apply --inventory deployment-topology.json
 ```
 
 Agregue `--execute` sólo después de revisar las direcciones SSH y las rutas

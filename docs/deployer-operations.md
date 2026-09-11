@@ -1,11 +1,24 @@
 # dARK Deployer Operations
 
-This document describes the current operational behavior of `install.py` and
-the lifecycle scripts. It complements the architecture and API documentation;
+This document describes the current operational behavior of the v2 deployer.
+The old `install.py` lifecycle is historical only and is not an installation
+instruction. It complements the architecture and API documentation;
 it is the reference for configuration precedence, secrets, reproducible
 component versions, validation, upgrades, restarts, and cleanup.
 
 ## 1. Safe preflight commands
+
+Use the v2 CLI with one inventory. Templates live in
+`examples/deployment-v2/` and are copied into a deployment-specific path.
+
+```bash
+venv/bin/python deploy.py validate --inventory examples/deployment-v2/local-ha.json
+venv/bin/python deploy.py render --inventory examples/deployment-v2/local-ha.json
+venv/bin/python deploy.py verify --inventory examples/deployment-v2/local-ha.json
+```
+
+The `install.py` examples below are retained as historical notes and should
+not be used for new deployments.
 
 The following commands do not start Docker, clone repositories, or write
 configuration:

@@ -128,6 +128,25 @@ class DeploymentV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(InventoryError, "target_replicas"):
                 load_inventory(path)
 
+    def test_storage_nodes_must_match_storage_groups(self):
+        document = json.loads((ROOT / "examples" / "deployment-v2" / "local-ha.json").read_text())
+        document["storage"]["nodes"] = ["storage-a"]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "bad-storage.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "storage.nodes must exactly match"):
+                load_inventory(path)
+
+    def test_plan_derives_storage_and_blockchain_roles_from_inventory(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v2" / "local-ha.json")
+        self.assertEqual(plan.raw["storage"]["replication"], {
+            "publish_after_replicas": 1,
+            "target_replicas": 2,
+        })
+        self.assertEqual(plan.group("apps").members, ("rpc01",))
+        self.assertEqual(plan.group("validators-a").members, ("validator01", "validator02"))
+        self.assertEqual(plan.group("validators-b").members, ("validator03", "validator04"))
+
     def test_rejects_unknown_nested_fields(self):
         source = ROOT / "examples" / "deployment-v2" / "local-ha.json"
         document = json.loads(source.read_text())

@@ -1,4 +1,8 @@
-# Propuesta: instalador modular por servidor y topología canónica
+# Propuesta: instalador modular por servidor y topología canónica (histórica)
+
+> La propuesta fue sustituida por `deployment_v2`. Use `deploy.py` con un
+> inventario de `examples/deployment-v2/`; los nombres antiguos se conservan
+> solo para explicar la evolución.
 
 > **Estado: propuesta superada.** La topología canónica y los bundles por host
 > ya están implementados en `deployment-topology.json` y en `dark-deployer`.

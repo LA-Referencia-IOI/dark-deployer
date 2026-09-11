@@ -320,9 +320,9 @@ hosts, roles, ramas, grupos de acceso y selectores de nodo. Las direcciones de
 storage se declaran una sola vez en su sección `storage`.
 
 ~~~bash
-python3.12 install.py topology validate --file deployment-topology.json
+venv/bin/python deploy.py validate --inventory deployment-topology.json
 python3.12 install.py topology render \
-  --file deployment-topology.json \
+  --inventory deployment-topology.json \
   --output dist/dark-site-a-1
 python3.12 install.py deployment verify --bundle dist/dark-site-a-1
 python3.12 install.py host validate --config dist/dark-site-a-1/hosts/<host>/host.json

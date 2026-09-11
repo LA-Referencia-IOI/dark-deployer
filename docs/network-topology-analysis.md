@@ -1,5 +1,9 @@
 # Análisis de topología de redes por sede
 
+> Las referencias a `dark_deployer`, `install.py` y Compose de este análisis
+> son históricas. La topología operativa actual se define en el inventario v2
+> y se aplica mediante `deploy.py`.
+
 > **Documento histórico de transición.** La arquitectura vigente se describe
 > en [`decoupled-infrastructure.md`](decoupled-infrastructure.md),
 > [`ipfs-architecture.md`](ipfs-architecture.md) y el índice de
