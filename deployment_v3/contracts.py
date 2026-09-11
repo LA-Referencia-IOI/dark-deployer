@@ -1,4 +1,4 @@
-"""Idempotent Authority + dARK deployment job used by the v2 apps Compose group."""
+"""Idempotent Authority + dARK deployment job used by the v3 apps machine."""
 
 from __future__ import annotations
 

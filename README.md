@@ -2,22 +2,24 @@
 
 Declarative deployment tooling for the dARK blockchain, application services,
 dashboard, and IPFS storage. The supported entry point is `deploy.py`; the
-single source of deployment configuration is a v2 inventory JSON.
+single source of deployment configuration is a version 3 inventory JSON.
 
 ## Architecture
 
-The inventory describes hosts, networks, Besu roles, storage peers, component
-branches, and secret references. The standard production layout is:
+The inventory describes hosts, named LAN/VPN networks, explicit inter-host
+routes with an explicit protocol, central infrastructure port policies, Besu roles, storage peers,
+component branches, secret distribution and the edge proxy. The standard
+production layout is:
 
-| Group | Services |
+| Machine | Services |
 | --- | --- |
-| `apps` | non-validator RPC, contracts, Admin, Minter, Resolver, Store API, dashboard |
-| `validators-a` | validators 01/02 and explorer |
-| `validators-b` | validators 03/04 |
-| `storage` | Kubo and IPFS Cluster peers |
+| `apps` | non-validator RPC, Minter API, PostgreSQL, all Minter workers, Admin, Resolver, Store API, dashboard and edge proxy |
+| `blockchain-a` | validators 01/02 and explorer |
+| `blockchain-b` | validators 03/04 |
+| `storage-1`, `storage-2` | one Kubo and one IPFS Cluster peer each |
 
-Developer templates simulate these groups on one Docker host. Maintained
-templates are in [`examples/deployment-v2/`](examples/deployment-v2/):
+Developer templates simulate these machines on one Docker host. Maintained
+templates are in [`examples/deployment-v3/`](examples/deployment-v3/):
 `local-simple.json`, `local-ha.json`, and `production-five-host.json`.
 
 ## Requirements
@@ -25,7 +27,7 @@ templates are in [`examples/deployment-v2/`](examples/deployment-v2/):
 - Python 3.10+ (3.12 recommended)
 - Docker Engine and Compose v2 for local execution
 - SSH and reachable private/VPN addresses for remote hosts
-- Secret files provisioned at paths declared by the inventory
+- Controller-side secret files declared by the inventory; `install` transfers each only to its declared consumer hosts
 
 Never commit private keys or generated runtime files.
 
@@ -41,8 +43,10 @@ venv/bin/python deploy.py plan --inventory deployment-topology.json
 venv/bin/python deploy.py install --inventory deployment-topology.json
 ```
 
-`install` acquires component repositories, renders groups, starts them in
-dependency order, and verifies the result. Existing checkouts are updated with
+`install` acquires component repositories, records the resolved commits,
+renders one Compose bundle per machine, transfers narrowly scoped secrets,
+starts service instances in functional phases, and runs its final verification
+before reporting success. Existing checkouts are updated with
 `fetch` and `merge --ff-only`; divergent local changes stop safely. Use
 `--skip-acquire` to reuse prepared checkouts.
 
@@ -63,6 +67,10 @@ venv/bin/python -m pip install -r requirements-tui.txt
 venv/bin/python deploy.py inventory-edit --inventory deployment-topology.json
 ```
 
+See [explicit service placement](docs/deployment-v3-service-placement.md) for
+the service graph, endpoint derivation, and the intentional Minter co-location
+constraint.
+
 The lifecycle commands are:
 
 ```bash
@@ -75,12 +83,13 @@ venv/bin/python deploy.py verify --inventory deployment-topology.json
 ```
 
 For remote inventories, `push` transfers public bundles and `apply` executes
-them on declared hosts. `resume` continues an interrupted deployment. Rebuild
-one service without restarting its group with:
+them on declared hosts. `resume` revalidates uncertain readiness gates before
+continuing. Rebuild
+one service without restarting other services on its machine with:
 
 ```bash
 venv/bin/python deploy.py recreate --inventory deployment-topology.json \
-  --group apps --service dashboard --build
+  --service dashboard --build
 ```
 
 ## Blockchain and storage
@@ -97,8 +106,8 @@ replication and payload purging run afterwards as maintenance.
 
 ```text
 deploy.py                 # supported CLI
-deployment_v2/            # inventory, rendering and execution
-examples/deployment-v2/   # maintained inventory templates
+deployment_v3/            # inventory, rendering and execution
+examples/deployment-v3/   # maintained inventory templates
 blockchain/               # internal Besu runtime
 components/               # component source repositories
 docs/                     # architecture and operations

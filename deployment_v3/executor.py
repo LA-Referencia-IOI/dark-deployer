@@ -31,7 +31,12 @@ class Executor:
 
 class LocalExecutor(Executor):
     def run(self, argv: Sequence[str], *, timeout: float = 30.0) -> CommandResult:
-        completed = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout)
+        try:
+            completed = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = (exc.stderr or "") + f"\ncommand timed out after {timeout:.0f}s"
+            return CommandResult(tuple(argv), 124, stdout if isinstance(stdout, str) else stdout.decode(errors="replace"), stderr)
         return CommandResult(tuple(argv), completed.returncode, completed.stdout, completed.stderr)
 
 
@@ -56,7 +61,9 @@ class SshExecutor(Executor):
             command[-1] += " " + shlex.join(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
         for pattern in excludes:
             command.extend(("--exclude", pattern))
-        command.extend([f"{source}/", f"{ssh.user}@{self.machine.management_address}:{destination}/"])
+        source_spec = f"{source}/" if source.is_dir() else str(source)
+        destination_spec = f"{ssh.user}@{self.machine.management_address}:{destination}/"
+        command.extend([source_spec, destination_spec])
         completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         return CommandResult(tuple(command), completed.returncode, completed.stdout, completed.stderr)
 
@@ -101,6 +108,9 @@ def run_preflight(machine: Machine) -> list[dict[str, str | bool]]:
     # destination paths such as /srv/dark must not gate a local Docker test.
     if machine.execution != "local":
         commands.update({
+            # data_root is intentionally created by apply; measure the
+            # existing parent during this read-only preflight instead.
+            "disk_space": ("sh", "-lc", f"test $(df -Pk {shlex.quote(str(Path(machine.data_root).parent))} | awk 'NR==2 {{print $4}}') -gt 1048576"),
             "workspace_parent": ("test", "-d", str(Path(machine.workspace_root).parent)),
             "workspace_parent_writable": ("test", "-w", str(Path(machine.workspace_root).parent)),
             "data_parent": ("test", "-d", str(Path(machine.data_root).parent)),
@@ -108,6 +118,7 @@ def run_preflight(machine: Machine) -> list[dict[str, str | bool]]:
             "secrets_parent": ("test", "-d", str(Path(machine.secrets_root).parent)),
             "secrets_parent_writable": ("test", "-w", str(Path(machine.secrets_root).parent)),
         })
+        commands.update({f"address:{network}": ("sh", "-lc", f"ip -4 addr show | grep -q 'inet {address}/'") for network, address in machine.addresses.items()})
     results: list[dict[str, str | bool]] = []
     for name, argv in commands.items():
         result = executor.run(argv)

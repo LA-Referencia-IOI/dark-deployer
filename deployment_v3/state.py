@@ -1,4 +1,4 @@
-"""Atomic local journal for deployment v2 runs; it never stores secret values."""
+"""Atomic local journal for deployment v3 runs; it never stores secret values."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class StateLockError(RuntimeError):
 
 
 def run_root(project_root: Path, deployment_id: str) -> Path:
-    return project_root / ".generated" / "deployment-v2" / deployment_id
+    return project_root / ".generated" / "deployment-v3" / deployment_id
 
 
 @contextmanager

@@ -21,7 +21,7 @@ def template_names() -> tuple[str, ...]:
 
 
 def _examples_root() -> Path:
-    return Path(__file__).resolve().parents[2] / "examples" / "deployment-v2"
+    return Path(__file__).resolve().parents[2] / "examples" / "deployment-v3"
 
 
 def create_from_template(template: str, output: Path, *, overwrite: bool = False) -> Path:

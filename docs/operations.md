@@ -26,7 +26,7 @@ deferred while metadata or first-pin work exists.
 
 ## Logs and monitoring
 
-Inspect the container logs for the affected group and preserve JSON status,
+Inspect the container logs for the affected service and preserve JSON status,
 verification output, bundle hashes and worker-cycle evidence. The lightweight
 status endpoint must not perform RPC, IPFS, Store API or ARK-count scans. Full
 diagnostics are on demand and bounded. Monitor CPU, memory, SQL latency, Store
@@ -44,9 +44,21 @@ projects and volumes.
 ## Production layout
 
 The normal deployment has apps, blockchain-a, blockchain-b and two storage
-hosts. RPC is private and available to APIs through the apps network; the
-explorer reaches it through the authorized private/VPN route. Storage peers
-share Cluster state, while each host keeps its own Docker network.
+hosts. RPC is private and available to APIs through the apps network and the
+explorer reaches it through the authorized LAN/VPN route. Storage peers share
+Cluster state, while each host keeps its own local Docker network. The
+`edge-proxy` in apps publishes dashboard and explorer over HTTP; direct public
+exposure is otherwise avoided.
+
+Every cross-host connection in the inventory names the shared LAN/VPN and its
+protocol; Docker DNS is never assumed between hosts. The renderer emits a
+firewall suggestion per machine with the declared private/public exposures and
+the policy-derived Besu, Kubo and Cluster P2P ports.
+
+Each cross-host connection is declared with its network and protocol in the
+inventory; Docker DNS is never used between hosts. The rendered firewall
+suggestion includes the declared private/public exposures plus the
+policy-derived Besu, Kubo and Cluster P2P ports.
 
 ## Routine lifecycle and security
 

@@ -1,0 +1,629 @@
+"""Strict loading and semantic validation for deployment topology v3."""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from jsonschema import Draft202012Validator
+
+from .model import Group, Machine, Network, ServiceInstance, SshSettings
+
+
+class InventoryError(ValueError):
+    """The inventory is malformed or describes an impossible deployment."""
+
+
+ROOT = Path(__file__).resolve().parent
+IDENTIFIER = re.compile(r"[a-z][a-z0-9-]*$")
+REQUIRED_COMPONENTS = frozenset(
+    {
+        "dark-dapp", "dark-explorador", "dark-core-lib", "dark-core-admin-api",
+        "dark-core-resolver-api", "dark-store-api", "dark-core-minter-api",
+        "dashboard-web", "dark-ipfs",
+    }
+)
+SERVICE_TYPES = frozenset({
+    "besu-rpc", "besu-validator", "explorer", "minter-api", "minter-worker",
+    "minter-postgres", "minter-migrate", "admin-api", "resolver-api", "store-api",
+    "dashboard", "dashboard-mysql", "dashboard-redis", "dashboard-migrate",
+    "ipfs-kubo", "ipfs-cluster", "contracts-deploy", "rpc-probe", "edge-proxy",
+})
+
+# The inventory is a typed connection graph, not a bag of strings.  Keeping
+# the contract here makes renderer errors actionable before anything is copied
+# or started on a host.
+CONNECTION_CONTRACTS = {
+    "explorer": {"rpc": "besu-rpc"},
+    "minter-api": {"database": "minter-postgres", "store_api": "store-api", "rpc": "besu-rpc", "contracts": "contracts-deploy", "migration": "minter-migrate"},
+    "minter-worker": {"database": "minter-postgres", "store_api": "store-api", "rpc": "besu-rpc", "contracts": "contracts-deploy", "migration": "minter-migrate"},
+    "minter-migrate": {"database": "minter-postgres"},
+    "admin-api": {"rpc": "besu-rpc", "contracts": "contracts-deploy"},
+    "resolver-api": {"rpc": "besu-rpc", "store_api": "store-api", "contracts": "contracts-deploy"},
+    "dashboard": {"database": "dashboard-mysql", "redis": "dashboard-redis", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api", "migration": "dashboard-migrate"},
+    "dashboard-migrate": {"database": "dashboard-mysql", "redis": "dashboard-redis", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api"},
+    "ipfs-cluster": {"kubo": "ipfs-kubo"},
+    "edge-proxy": {"dashboard": "dashboard", "explorer": "explorer"},
+    "contracts-deploy": {"rpc": "besu-rpc"},
+    "rpc-probe": {"rpc": "besu-rpc"},
+}
+
+
+def _load_schema() -> dict[str, Any]:
+    return json.loads((ROOT / "schema.json").read_text())
+
+
+def _error(message: str) -> InventoryError:
+    return InventoryError(f"deployment topology v3: {message}")
+
+
+def _identifier(value: Any, path: str) -> str:
+    if not isinstance(value, str) or not IDENTIFIER.fullmatch(value):
+        raise _error(f"{path} must be a lowercase identifier")
+    return value
+
+
+def _string(value: Any, path: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _error(f"{path} must be a non-empty string")
+    return value.strip()
+
+
+def _absolute_path(value: Any, path: str) -> str:
+    raw = _string(value, path)
+    if not Path(raw).is_absolute():
+        raise _error(f"{path} must be an absolute path")
+    return raw
+
+
+def _ipv4(value: Any, path: str) -> str:
+    try:
+        parsed = ipaddress.ip_address(_string(value, path))
+    except ValueError as exc:
+        raise _error(f"{path} must be an IPv4 address") from exc
+    if parsed.version != 4:
+        raise _error(f"{path} must be an IPv4 address")
+    return str(parsed)
+
+
+def _cidr(value: Any, path: str) -> str:
+    try:
+        parsed = ipaddress.ip_network(_string(value, path), strict=True)
+    except ValueError as exc:
+        raise _error(f"{path} must be a CIDR network") from exc
+    if parsed.version != 4:
+        raise _error(f"{path} must be an IPv4 CIDR")
+    return str(parsed)
+
+
+def _object(value: Any, path: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise _error(f"{path} must be an object")
+    return value
+
+
+def _only_keys(value: dict[str, Any], path: str, allowed: set[str]) -> None:
+    unknown = sorted(set(value).difference(allowed))
+    if unknown:
+        raise _error(f"{path} contains unknown field(s): " + ", ".join(unknown))
+
+
+def _validate_schema(document: dict[str, Any]) -> None:
+    errors = sorted(Draft202012Validator(_load_schema()).iter_errors(document), key=str)
+    if errors:
+        error = errors[0]
+        location = ".".join(str(part) for part in error.absolute_path) or "root"
+        raise _error(f"{location}: {error.message}")
+
+
+def _ssh(raw: dict[str, Any], defaults: dict[str, Any], path: str) -> SshSettings:
+    _only_keys(raw, path, {"user", "port", "private_key_file", "known_hosts_file"})
+    merged = dict(defaults)
+    merged.update(raw)
+    port = merged.get("port")
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise _error(f"{path}.port must be a TCP port")
+    known_hosts = merged.get("known_hosts_file")
+    return SshSettings(
+        user=_string(merged.get("user"), f"{path}.user"),
+        port=port,
+        private_key_file=_absolute_path(merged.get("private_key_file"), f"{path}.private_key_file"),
+        known_hosts_file=_absolute_path(known_hosts, f"{path}.known_hosts_file") if known_hosts else None,
+    )
+
+
+def load_inventory(path: Path) -> tuple[dict[str, Any], tuple[Machine, ...], tuple[ServiceInstance, ...], tuple[Network, ...]]:
+    """Load v3 JSON and return canonical domain objects without side effects."""
+    try:
+        raw = json.loads(path.read_text())
+    except FileNotFoundError as exc:
+        raise _error(f"inventory not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise _error(f"invalid JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise _error("root must be an object")
+    _validate_schema(raw)
+
+    infrastructure = _object(raw["infrastructure"], "infrastructure")
+    _only_keys(infrastructure, "infrastructure", {"besu", "ipfs", "cluster", "web"})
+    for name, fields in {
+        "besu": {"network", "p2p_port_start", "rpc_port"},
+        "ipfs": {"network", "api_port", "swarm_port"},
+        "cluster": {"network", "api_port", "p2p_port"},
+        "web": {"http_port"},
+    }.items():
+        definition = _object(infrastructure.get(name), f"infrastructure.{name}")
+        _only_keys(definition, f"infrastructure.{name}", fields)
+        for field in fields:
+            if field not in definition:
+                raise _error(f"infrastructure.{name}.{field} is required")
+
+    deployment = _object(raw["deployment"], "deployment")
+    _only_keys(deployment, "deployment", {"id", "label"})
+    _identifier(deployment.get("id"), "deployment.id")
+    defaults = _object(raw["defaults"], "defaults")
+    _only_keys(defaults, "defaults", {"ssh", "paths", "docker"})
+    defaults_ssh = _object(defaults.get("ssh"), "defaults.ssh")
+    defaults_paths = _object(defaults.get("paths"), "defaults.paths")
+    _only_keys(defaults_ssh, "defaults.ssh", {"user", "port", "private_key_file", "known_hosts_file"})
+    _only_keys(defaults_paths, "defaults.paths", {"workspace_root", "data_root", "secrets_root"})
+    for field in ("workspace_root", "data_root", "secrets_root"):
+        _absolute_path(defaults_paths.get(field), f"defaults.paths.{field}")
+    docker = _object(defaults.get("docker"), "defaults.docker")
+    _only_keys(docker, "defaults.docker", {"subnet_pool", "subnet_prefix"})
+    subnet_pool = _cidr(docker.get("subnet_pool"), "defaults.docker.subnet_pool")
+    prefix = docker.get("subnet_prefix")
+    if not isinstance(prefix, int) or not 20 <= prefix <= 30:
+        raise _error("defaults.docker.subnet_prefix must be an integer from 20 to 30")
+    if prefix < ipaddress.ip_network(subnet_pool).prefixlen:
+        raise _error("defaults.docker.subnet_prefix cannot be wider than subnet_pool")
+
+    networks: list[Network] = []
+    for network_id, definition in _object(raw["networks"], "networks").items():
+        _identifier(network_id, f"networks.{network_id}")
+        definition = _object(definition, f"networks.{network_id}")
+        _only_keys(definition, f"networks.{network_id}", {"kind", "cidr", "interface"})
+        kind = definition.get("kind")
+        if kind not in {"lan", "vpn"}:
+            raise _error(f"networks.{network_id}.kind must be lan or vpn")
+        networks.append(Network(network_id, kind, _cidr(definition.get("cidr"), f"networks.{network_id}.cidr")))
+    if not networks:
+        raise _error("networks cannot be empty")
+    network_ids = {network.id for network in networks}
+    for name in ("besu", "ipfs", "cluster"):
+        selected = _identifier(infrastructure[name]["network"], f"infrastructure.{name}.network")
+        if selected not in network_ids:
+            raise _error(f"infrastructure.{name}.network references unknown network {selected}")
+    for name, field in (("besu", "p2p_port_start"), ("besu", "rpc_port"), ("ipfs", "api_port"), ("ipfs", "swarm_port"), ("cluster", "api_port"), ("cluster", "p2p_port"), ("web", "http_port")):
+        value = infrastructure[name][field]
+        if not isinstance(value, int) or not 1 <= value <= 65535:
+            raise _error(f"infrastructure.{name}.{field} must be a TCP/UDP port")
+    if infrastructure["besu"]["p2p_port_start"] + 4 > 65535:
+        raise _error("infrastructure.besu.p2p_port_start leaves no room for five Besu nodes")
+    machines: list[Machine] = []
+    addresses_seen: dict[str, set[str]] = {network.id: set() for network in networks}
+    for machine_id, definition in _object(raw["machines"], "machines").items():
+        _identifier(machine_id, f"machines.{machine_id}")
+        definition = _object(definition, f"machines.{machine_id}")
+        _only_keys(definition, f"machines.{machine_id}", {"execution", "management_address", "addresses", "paths", "docker", "ssh"})
+        execution = definition.get("execution")
+        if execution not in {"local", "ssh", "auto"}:
+            raise _error(f"machines.{machine_id}.execution must be local, ssh or auto")
+        addresses = _object(definition.get("addresses"), f"machines.{machine_id}.addresses")
+        _only_keys(addresses, f"machines.{machine_id}.addresses", {network.id for network in networks})
+        if not addresses:
+            raise _error(f"machines.{machine_id}.addresses cannot be empty")
+        canonical_addresses: dict[str, str] = {}
+        for network in networks:
+            if network.id not in addresses:
+                continue
+            address = _ipv4(addresses[network.id], f"machines.{machine_id}.addresses.{network.id}")
+            if address in addresses_seen[network.id]:
+                raise _error(f"machines.{machine_id} duplicates address {address} on {network.id}")
+            if ipaddress.ip_address(address) not in ipaddress.ip_network(network.cidr):
+                raise _error(f"machines.{machine_id} address {address} is outside {network.id}")
+            addresses_seen[network.id].add(address)
+            canonical_addresses[network.id] = address
+        override_paths = dict(defaults_paths)
+        local_paths = _object(definition.get("paths", {}), f"machines.{machine_id}.paths")
+        _only_keys(local_paths, f"machines.{machine_id}.paths", {"workspace_root", "data_root", "secrets_root"})
+        override_paths.update(local_paths)
+        machine_docker = _object(definition.get("docker", {}), f"machines.{machine_id}.docker")
+        _only_keys(machine_docker, f"machines.{machine_id}.docker", {"subnet"})
+        declared_subnet = machine_docker.get("subnet")
+        if declared_subnet:
+            declared_subnet = _cidr(declared_subnet, f"machines.{machine_id}.docker.subnet")
+        machines.append(Machine(
+            id=machine_id,
+            execution=execution,
+            management_address=_string(definition.get("management_address"), f"machines.{machine_id}.management_address"),
+            addresses=canonical_addresses,
+            ssh=_ssh(_object(definition.get("ssh", {}), f"machines.{machine_id}.ssh"), defaults_ssh, f"machines.{machine_id}.ssh"),
+            workspace_root=_absolute_path(override_paths["workspace_root"], f"machines.{machine_id}.paths.workspace_root"),
+            data_root=_absolute_path(override_paths["data_root"], f"machines.{machine_id}.paths.data_root"),
+            secrets_root=_absolute_path(override_paths["secrets_root"], f"machines.{machine_id}.paths.secrets_root"),
+            docker_subnet=declared_subnet,
+        ))
+
+    services: list[ServiceInstance] = []
+    for service_id, definition in _object(raw["services"], "services").items():
+        _identifier(service_id, f"services.{service_id}")
+        definition = _object(definition, f"services.{service_id}")
+        _only_keys(definition, f"services.{service_id}", {"type", "machine", "connections", "configuration", "exposure"})
+        service_type = _string(definition.get("type"), f"services.{service_id}.type")
+        if service_type not in SERVICE_TYPES:
+            raise _error(f"services.{service_id}.type is unknown: {service_type}")
+        machine_id = _string(definition.get("machine"), f"services.{service_id}.machine")
+        if machine_id not in {machine.id for machine in machines}:
+            raise _error(f"services.{service_id}.machine references unknown machine {machine_id}")
+        raw_connections = _object(definition.get("connections", {}), f"services.{service_id}.connections")
+        connections: dict[str, dict[str, str]] = {}
+        for name, value in raw_connections.items():
+            if not isinstance(name, str):
+                raise _error(f"services.{service_id}.connections keys must be strings")
+            if isinstance(value, str):
+                # V3 intentionally does not retain the ambiguous shorthand.
+                raise _error(f"services.{service_id}.connections.{name} must declare service and network")
+            item = _object(value, f"services.{service_id}.connections.{name}")
+            _only_keys(item, f"services.{service_id}.connections.{name}", {"service", "network", "protocol"})
+            provider = _identifier(item.get("service"), f"services.{service_id}.connections.{name}.service")
+            network = item.get("network")
+            if network is not None:
+                network = _identifier(network, f"services.{service_id}.connections.{name}.network")
+                if network not in {entry.id for entry in networks}:
+                    raise _error(f"services.{service_id}.connections.{name}.network references unknown network {network}")
+            protocol = item.get("protocol")
+            if protocol is not None and protocol not in {"tcp", "udp"}:
+                raise _error(f"services.{service_id}.connections.{name}.protocol must be tcp or udp")
+            connections[name] = {
+                "service": provider,
+                **({"network": network} if network else {}),
+                **({"protocol": protocol} if protocol else {}),
+            }
+        configuration = _object(definition.get("configuration", {}), f"services.{service_id}.configuration")
+        exposure = definition.get("exposure")
+        if exposure is not None:
+            exposure = _object(exposure, f"services.{service_id}.exposure")
+            _only_keys(exposure, f"services.{service_id}.exposure", {"mode", "network", "port", "protocols"})
+            if exposure.get("mode") not in {"none", "loopback", "private", "public"}:
+                raise _error(f"services.{service_id}.exposure.mode must be none, loopback, private or public")
+            if exposure.get("mode") != "none" and (not isinstance(exposure.get("port"), int) or not 1 <= exposure["port"] <= 65535):
+                raise _error(f"services.{service_id}.exposure.port must be a TCP port")
+            protocols = exposure.get("protocols", ["tcp"])
+            if not isinstance(protocols, list) or not protocols or any(item not in {"tcp", "udp"} for item in protocols):
+                raise _error(f"services.{service_id}.exposure.protocols must contain tcp and/or udp")
+            exposure["protocols"] = list(dict.fromkeys(protocols))
+            if exposure.get("mode") == "private":
+                network = _identifier(exposure.get("network"), f"services.{service_id}.exposure.network")
+                if network not in {entry.id for entry in networks}:
+                    raise _error(f"services.{service_id}.exposure.network references unknown network {network}")
+                if network not in next(machine.addresses for machine in machines if machine.id == machine_id):
+                    raise _error(f"services.{service_id}.exposure.network is not available on {machine_id}")
+            elif exposure.get("network") is not None:
+                raise _error(f"services.{service_id}.exposure.network is only valid for private exposure")
+        services.append(ServiceInstance(service_id, service_type, machine_id, dict(connections), dict(configuration), exposure))
+    _validate_domain(raw, services, machines)
+    return raw, tuple(machines), tuple(services), tuple(networks)
+
+
+def groups_for_inventory(raw: dict[str, Any], machines: tuple[Machine, ...], services: tuple[ServiceInstance, ...]) -> tuple[Group, ...]:
+    """Return explicit logical servers, with a compatibility fallback.
+
+    Older v3 inventories only had ``services.*.machine``.  They remain valid
+    and are represented as one synthetic server group per machine.  New
+    inventories can use ``groups`` to preserve the v2 five-server topology
+    while keeping service placement and all network/port values centralized.
+    """
+    machine_ids = {machine.id for machine in machines}
+    by_service = {service.id: service for service in services}
+    if "groups" not in raw:
+        return tuple(
+            Group(machine.id, "server", machine.id, tuple(service.id for service in services if service.machine_id == machine.id), tuple(service.id for service in services if service.machine_id == machine.id))
+            for machine in machines
+        )
+    definitions = raw["groups"]
+    if not isinstance(definitions, dict) or not definitions:
+        raise _error("groups must be a non-empty object")
+    groups: list[Group] = []
+    assigned: dict[str, str] = {}
+    for group_id, definition in definitions.items():
+        _identifier(group_id, f"groups.{group_id}")
+        definition = _object(definition, f"groups.{group_id}")
+        _only_keys(definition, f"groups.{group_id}", {"kind", "machine", "members", "services"})
+        kind = definition.get("kind")
+        if kind not in {"apps", "validators", "storage"}:
+            raise _error(f"groups.{group_id}.kind must be apps, validators or storage")
+        machine_id = _string(definition.get("machine"), f"groups.{group_id}.machine")
+        if machine_id not in machine_ids:
+            raise _error(f"groups.{group_id}.machine references unknown machine {machine_id}")
+        members = definition.get("members", [])
+        if not isinstance(members, list) or not members or any(not isinstance(item, str) or not item for item in members):
+            raise _error(f"groups.{group_id}.members must be a non-empty list of strings")
+        service_ids = definition.get("services")
+        if service_ids is not None:
+            if not isinstance(service_ids, list) or any(item not in by_service for item in service_ids):
+                raise _error(f"groups.{group_id}.services must contain known service IDs")
+        else:
+            service_ids = []
+            for member in members:
+                if member in by_service:
+                    service_ids.append(member)
+                    continue
+                matches = [service.id for service in services if service.configuration.get("node_id") == member or service.configuration.get("peer_name") == member]
+                if not matches:
+                    raise _error(f"groups.{group_id}.members references unknown node or service {member}")
+                service_ids.extend(matches)
+        if not service_ids:
+            raise _error(f"groups.{group_id} must resolve at least one service")
+        for service_id in service_ids:
+            if by_service[service_id].machine_id != machine_id:
+                raise _error(f"groups.{group_id}.services.{service_id} is assigned to another machine")
+            if service_id in assigned:
+                raise _error(f"service {service_id} belongs to both groups.{assigned[service_id]} and groups.{group_id}")
+            assigned[service_id] = group_id
+        groups.append(Group(group_id, kind, machine_id, tuple(dict.fromkeys(members)), tuple(dict.fromkeys(service_ids))))
+    # When a machine has exactly one group, the remaining services on that
+    # machine belong to it implicitly. This keeps production inventories
+    # readable while still requiring explicit service lists when several
+    # simulated groups share one local Docker daemon.
+    groups_by_machine: dict[str, list[int]] = {}
+    for index, group in enumerate(groups):
+        groups_by_machine.setdefault(group.machine_id, []).append(index)
+    mutable_services = [list(group.service_ids) for group in groups]
+    for service_id, service in by_service.items():
+        if service_id in assigned:
+            continue
+        candidates = groups_by_machine.get(service.machine_id, [])
+        if len(candidates) != 1:
+            raise _error("groups do not assign service unambiguously: " + service_id)
+        index = candidates[0]
+        mutable_services[index].append(service_id)
+        assigned[service_id] = groups[index].id
+    groups = [Group(group.id, group.kind, group.machine_id, group.members, tuple(dict.fromkeys(mutable_services[index]))) for index, group in enumerate(groups)]
+    return tuple(groups)
+
+
+def _positive_integer(value: Any, path: str) -> int:
+    if not isinstance(value, int) or value < 1:
+        raise _error(f"{path} must be a positive integer")
+    return value
+
+
+def _validate_settings(settings: dict[str, Any]) -> None:
+    """Keep emitted Minter and Store tuning explicit in the topology."""
+    _only_keys(settings, "settings", {"minter", "store"})
+    minter = _object(settings.get("minter"), "settings.minter")
+    _only_keys(minter, "settings.minter", {"shoulder", "metadata", "replication", "chain"})
+    shoulder = minter.get("shoulder")
+    if not isinstance(shoulder, str) or not re.fullmatch(r"2[0-9]{2}", shoulder):
+        raise _error("settings.minter.shoulder must use the 2MM format")
+
+    metadata = _object(minter.get("metadata"), "settings.minter.metadata")
+    metadata_required = {"page_size", "concurrency", "min_concurrency"}
+    _only_keys(metadata, "settings.minter.metadata", metadata_required)
+    if set(metadata) != metadata_required:
+        raise _error("settings.minter.metadata is incomplete")
+    page_size = _positive_integer(metadata["page_size"], "settings.minter.metadata.page_size")
+    concurrency = _positive_integer(metadata["concurrency"], "settings.minter.metadata.concurrency")
+    minimum = _positive_integer(metadata["min_concurrency"], "settings.minter.metadata.min_concurrency")
+    if page_size > 1_000 or minimum > concurrency:
+        raise _error("settings.minter.metadata has incompatible page size or concurrency")
+
+    replication = _object(minter.get("replication"), "settings.minter.replication")
+    replication_required = {
+        "enabled", "page_size", "concurrency", "status_batch_size", "promotion_batch_size",
+        "promotion_pressure_high_percent", "promotion_pressure_medium_percent",
+        "promotion_min_batch_size", "maintenance_cycle_seconds", "idle_sleep_seconds",
+        "first_pin_recheck_seconds", "first_pin_second_recheck_seconds", "first_pin_max_recheck_seconds",
+        "durability_recheck_seconds", "durability_second_recheck_seconds", "durability_max_recheck_seconds",
+        "storage_retry_seconds",
+    }
+    _only_keys(replication, "settings.minter.replication", replication_required)
+    if set(replication) != replication_required or not isinstance(replication.get("enabled"), bool):
+        raise _error("settings.minter.replication is incomplete or enabled is not boolean")
+    values = {
+        field: _positive_integer(replication[field], f"settings.minter.replication.{field}")
+        for field in replication_required.difference({"enabled"})
+    }
+    if values["page_size"] > 1_000 or values["status_batch_size"] > 200:
+        raise _error("settings.minter.replication page or status batch exceeds its supported limit")
+    if values["promotion_batch_size"] > values["page_size"] or values["promotion_min_batch_size"] > values["promotion_batch_size"]:
+        raise _error("settings.minter.replication promotion batch settings are incompatible")
+    if values["promotion_pressure_medium_percent"] > values["promotion_pressure_high_percent"] or values["promotion_pressure_high_percent"] > 100:
+        raise _error("settings.minter.replication promotion pressure percentages are invalid")
+    if not (values["first_pin_recheck_seconds"] <= values["first_pin_second_recheck_seconds"] <= values["first_pin_max_recheck_seconds"]):
+        raise _error("settings.minter.replication first-pin rechecks must be nondecreasing")
+    if not (values["durability_recheck_seconds"] <= values["durability_second_recheck_seconds"] <= values["durability_max_recheck_seconds"]):
+        raise _error("settings.minter.replication durability rechecks must be nondecreasing")
+
+    chain = _object(minter.get("chain"), "settings.minter.chain")
+    chain_required = {"page_size", "rpc_batch_size"}
+    _only_keys(chain, "settings.minter.chain", chain_required)
+    if set(chain) != chain_required:
+        raise _error("settings.minter.chain is incomplete")
+    for field in chain_required:
+        _positive_integer(chain[field], f"settings.minter.chain.{field}")
+
+    store = _object(settings.get("store"), "settings.store")
+    store_required = {"add_concurrency", "status_concurrency", "promotion_concurrency"}
+    _only_keys(store, "settings.store", store_required)
+    if set(store) != store_required:
+        raise _error("settings.store is incomplete")
+    for field in store_required:
+        _positive_integer(store[field], f"settings.store.{field}")
+
+
+def _provider_id(connection: dict[str, str]) -> str:
+    return connection["service"]
+
+
+def _validate_domain(raw: dict[str, Any], services: list[ServiceInstance], machines: list[Machine] | None = None) -> None:
+    by_id = {service.id: service for service in services}
+    by_type: dict[str, list[ServiceInstance]] = {}
+    for service in services:
+        by_type.setdefault(service.type, []).append(service)
+    for service in services:
+        for name, connection in service.connections.items():
+            provider_id = _provider_id(connection)
+            if provider_id not in by_id:
+                raise _error(f"services.{service.id}.connections.{name} references unknown service {provider_id}")
+    for service in services:
+        contract = CONNECTION_CONTRACTS.get(service.type, {})
+        if service.type == "store-api":
+            # Store is the sole cross-host consumer of all Cluster APIs.  Make
+            # every edge explicit instead of deriving a hidden storage route.
+            providers = [by_id.get(_provider_id(connection)) for connection in service.connections.values()]
+            clusters = by_type.get("ipfs-cluster", [])
+            if not providers or any(provider is None or provider.type != "ipfs-cluster" for provider in providers):
+                raise _error(f"services.{service.id}.connections must contain only ipfs-cluster services")
+            if {provider.id for provider in providers} != {cluster.id for cluster in clusters}:
+                raise _error(f"services.{service.id}.connections must name every ipfs-cluster service exactly once")
+        else:
+            if set(service.connections) != set(contract):
+                expected = ", ".join(sorted(contract)) or "none"
+                raise _error(f"services.{service.id}.connections must contain exactly: {expected}")
+            for name, provider_type in contract.items():
+                provider = by_id.get(_provider_id(service.connections[name]))
+                if provider and provider.type != provider_type:
+                    raise _error(f"services.{service.id}.connections.{name} must reference {provider_type}")
+    required = {"besu-rpc", "minter-api", "minter-postgres", "store-api", "admin-api", "resolver-api", "dashboard", "ipfs-kubo", "ipfs-cluster"}
+    missing_types = sorted(item for item in required if not by_type.get(item))
+    if missing_types:
+        raise _error("services missing required types: " + ", ".join(missing_types))
+    infrastructure = raw["infrastructure"]
+    policy_ports = {
+        "besu-rpc": infrastructure["besu"]["rpc_port"],
+        "ipfs-kubo": infrastructure["ipfs"]["api_port"],
+        "ipfs-cluster": infrastructure["cluster"]["api_port"],
+        "edge-proxy": infrastructure["web"]["http_port"],
+    }
+    for service_type, expected_port in policy_ports.items():
+        for service in by_type.get(service_type, []):
+            if service.exposure and service.exposure.get("mode") == "private" and int(service.exposure["port"]) != expected_port:
+                raise _error(f"services.{service.id}.exposure.port must match infrastructure policy ({expected_port})")
+    workers = by_type.get("minter-worker", [])
+    worker_kinds = {item.configuration.get("worker") for item in workers}
+    if worker_kinds != {"metadata", "replication", "chain"}:
+        raise _error("services must contain exactly metadata, replication and chain minter workers")
+    minter_machine = by_type["minter-api"][0].machine_id
+    colocated = [*by_type["minter-api"], *by_type["minter-postgres"], *workers]
+    if any(service.machine_id != minter_machine for service in colocated):
+        raise _error("minter-api, minter-postgres and all minter workers must share one machine because metadata storage is local")
+    for worker in workers:
+        if _provider_id(worker.connections["database"]) not in {service.id for service in by_type["minter-postgres"]}:
+            raise _error(f"services.{worker.id} must connect to minter-postgres")
+    minter = by_type["minter-api"][0]
+    if _provider_id(minter.connections["database"]) not in {service.id for service in by_type["minter-postgres"]}:
+        raise _error(f"services.{minter.id} must connect to minter-postgres")
+    ports: dict[tuple[str, str, int], str] = {}
+    for service in services:
+        if not service.exposure or service.exposure.get("mode") == "none":
+            continue
+        key = (service.machine_id, str(service.exposure["mode"]), str(service.exposure.get("network", "")), int(service.exposure["port"]))
+        if key in ports:
+            raise _error(f"services.{service.id}.exposure duplicates {ports[key]} on {key[0]}:{key[-1]}")
+        ports[key] = service.id
+    if machines is not None:
+        machine_by_id = {machine.id: machine for machine in machines}
+        for consumer in services:
+            for name, connection in consumer.connections.items():
+                provider = by_id[_provider_id(connection)]
+                if consumer.machine_id == provider.machine_id:
+                    if "network" in connection or "protocol" in connection:
+                        raise _error(f"services.{consumer.id}.connections.{name}.network/protocol are only valid between hosts")
+                    continue
+                network = connection.get("network")
+                if not network:
+                    raise _error(f"services.{consumer.id}.connections.{name}.network is required between hosts")
+                protocol = connection.get("protocol")
+                if protocol not in {"tcp", "udp"}:
+                    raise _error(f"services.{consumer.id}.connections.{name}.protocol must be tcp or udp between hosts")
+                if network not in machine_by_id[consumer.machine_id].addresses or network not in machine_by_id[provider.machine_id].addresses:
+                    raise _error(f"services.{consumer.id}.connections.{name}.network is not shared by both hosts")
+                if not provider.exposure or provider.exposure.get("mode") != "private":
+                    raise _error(f"services.{provider.id} must expose a private endpoint for {consumer.id}")
+                if provider.exposure.get("network") != network:
+                    raise _error(f"services.{consumer.id}.connections.{name}.network does not match {provider.id} exposure")
+                if protocol not in provider.exposure.get("protocols", ["tcp"]):
+                    raise _error(f"services.{consumer.id}.connections.{name}.protocol is not exposed by {provider.id}")
+    blockchain = _object(raw["blockchain"], "blockchain")
+    _only_keys(blockchain, "blockchain", {"chain_id", "besu_image", "nodes", "qbft", "artifact"})
+    artifact = _object(blockchain.get("artifact", {}), "blockchain.artifact")
+    if artifact:
+        _only_keys(artifact, "blockchain.artifact", {"path", "source"})
+        artifact_path = _string(artifact.get("path"), "blockchain.artifact.path")
+        if Path(artifact_path).is_absolute() or ".." in Path(artifact_path).parts:
+            raise _error("blockchain.artifact.path must be relative to secrets_root")
+        if "source" in artifact:
+            _string(artifact["source"], "blockchain.artifact.source")
+    qbft = _object(blockchain.get("qbft"), "blockchain.qbft")
+    _only_keys(qbft, "blockchain.qbft", {"block_period_seconds", "epoch_length", "request_timeout_seconds"})
+    for field in ("block_period_seconds", "epoch_length", "request_timeout_seconds"):
+        value = qbft.get(field)
+        if not isinstance(value, int) or value < 1:
+            raise _error(f"blockchain.qbft.{field} must be a positive integer")
+    nodes = _object(blockchain.get("nodes"), "blockchain.nodes")
+    validators = []
+    rpc = []
+    for node_id, item in nodes.items():
+        definition = _object(item, f"blockchain.nodes.{node_id}")
+        _only_keys(definition, f"blockchain.nodes.{node_id}", {"validator", "p2p_port"})
+        if definition.get("validator") is True:
+            validators.append(node_id)
+        elif definition.get("validator") is False:
+            rpc.append(node_id)
+    if len(validators) != 4 or len(rpc) != 1:
+        raise _error("blockchain.nodes requires four validators and one non-validator RPC")
+    declared_nodes = {service.configuration.get("node_id") for service in by_type.get("besu-validator", []) + by_type.get("besu-rpc", [])}
+    if set(validators + rpc) != declared_nodes:
+        raise _error("blockchain nodes must match besu service instances")
+    storage = _object(raw["storage"], "storage")
+    _only_keys(storage, "storage", {"cluster_name", "nodes", "replication"})
+    node_ids = storage.get("nodes")
+    kubo_peers = {service.configuration.get("peer_name") for service in by_type.get("ipfs-kubo", [])}
+    if not isinstance(node_ids, list) or set(node_ids) != kubo_peers:
+        raise _error("storage.nodes must exactly match ipfs-kubo peer names")
+    replication = _object(storage.get("replication"), "storage.replication")
+    _only_keys(replication, "storage.replication", {"publish_after_replicas", "target_replicas"})
+    publish = replication.get("publish_after_replicas")
+    target = replication.get("target_replicas")
+    if not isinstance(publish, int) or not isinstance(target, int) or not 1 <= publish <= target <= len(node_ids):
+        raise _error("storage replication must satisfy 1 <= publish_after_replicas <= target_replicas <= storage nodes")
+    _validate_settings(_object(raw["settings"], "settings"))
+    components = _object(raw["components"], "components")
+    missing = REQUIRED_COMPONENTS.difference(components)
+    if missing:
+        raise _error("components missing: " + ", ".join(sorted(missing)))
+    for component, definition in components.items():
+        definition = _object(definition, f"components.{component}")
+        _only_keys(definition, f"components.{component}", {"repository_url", "branch"})
+        _string(definition.get("repository_url"), f"components.{component}.repository_url")
+        branch = definition.get("branch")
+        if branch is not None:
+            branch = _string(branch, f"components.{component}.branch")
+            if branch.startswith("-") or ".." in branch or branch.endswith("/"):
+                raise _error(f"components.{component}.branch is not a safe Git branch name")
+
+    secrets = _object(raw["secrets"], "secrets")
+    for secret_id, definition in secrets.items():
+        _identifier(secret_id, f"secrets.{secret_id}")
+        definition = _object(definition, f"secrets.{secret_id}")
+        _only_keys(definition, f"secrets.{secret_id}", {"path", "consumers", "format", "source", "mode"})
+        relative = _string(definition.get("path"), f"secrets.{secret_id}.path")
+        if Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise _error(f"secrets.{secret_id}.path must be a safe path relative to secrets_root")
+        if "source" in definition:
+            source_path = _string(definition["source"], f"secrets.{secret_id}.source")
+            if Path(source_path).is_absolute() is False and ".." in Path(source_path).parts:
+                raise _error(f"secrets.{secret_id}.source must not escape the project")
+        if "mode" in definition and definition["mode"] != "0600":
+            raise _error(f"secrets.{secret_id}.mode must be 0600")
+        consumers = definition.get("consumers", [])
+        if not isinstance(consumers, list) or not all(isinstance(item, str) for item in consumers):
+            raise _error(f"secrets.{secret_id}.consumers must be a string list")
+        unknown_consumers = sorted(set(consumers).difference(by_id))
+        if unknown_consumers:
+            raise _error(f"secrets.{secret_id}.consumers references unknown service(s): " + ", ".join(unknown_consumers))

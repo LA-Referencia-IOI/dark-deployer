@@ -26,7 +26,7 @@ from .inventory_editor.textual_app import run_textual_editor
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v2")
+    parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
     for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "recreate", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit"):
         command = actions.add_parser(name)
@@ -50,7 +50,6 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--skip-acquire", action="store_true",
                                  help="reuse existing component checkouts instead of cloning/updating them")
         if name == "recreate":
-            command.add_argument("--group", required=True)
             command.add_argument("--service", required=True)
             command.add_argument("--build", action="store_true")
         if name == "chain-bootstrap":
@@ -89,7 +88,7 @@ def _install(args: argparse.Namespace, plan) -> None:
     the deployment run directory.
     """
     project_root = Path(__file__).resolve().parents[1]
-    root = project_root / ".generated" / "deployment-v2" / plan.deployment_id
+    root = project_root / ".generated" / "deployment-v3" / plan.deployment_id
     if args.dry_run:
         print(f"Deployment: {plan.deployment_id}")
         print("Mode: " + ", ".join(f"{m.id}={m.execution}" for m in plan.machines))
@@ -101,7 +100,7 @@ def _install(args: argparse.Namespace, plan) -> None:
         if answer not in {"", "y", "yes"}:
             print("[INFO] Installation cancelled.")
             return
-    # Fail before rendering or starting any group when a destination cannot
+    # Fail before rendering or starting any service when a destination cannot
     # execute the required Docker/Compose toolchain.  This is deliberately a
     # read-only preflight; filesystem creation and secret checks remain part
     # of apply, where the complete inventory context is available.
@@ -127,7 +126,7 @@ def _install(args: argparse.Namespace, plan) -> None:
     local_machines = [m for m in plan.machines if m.execution == "local"]
     if not args.master_wallet_file:
         wallet_definition = plan.raw.get("secrets", {}).get("master-wallet", {})
-        source_path = wallet_definition.get("source_path")
+        source_path = wallet_definition.get("source")
         if source_path:
             candidate = Path(source_path)
             if not candidate.is_absolute():
@@ -222,6 +221,12 @@ def _install(args: argparse.Namespace, plan) -> None:
             initialize_chain(plan, artifact_root, address)
         else:
             verify_artifact_manifest(artifact_root)
+    # A fresh install must not reuse a bundle rendered by an earlier code
+    # version. Persistent service data remains untouched; only the generated
+    # public Compose/config bundle is rebuilt.
+    bundle = root / "bundle"
+    if bundle.exists() and not args.resume:
+        shutil.rmtree(bundle)
     output = apply(plan, project_root, resume=args.resume, defer_verification=True)
     report = _verify_with_retries(plan, project_root)
     _write_install_report(root, report, resumed=args.resume)
@@ -246,11 +251,15 @@ def _verify_with_retries(plan, project_root: Path, attempts: int = 120) -> dict:
 def _write_install_report(root: Path, verification: dict, *, resumed: bool) -> Path:
     """Persist a public completion report without copying secret material."""
     root.mkdir(parents=True, exist_ok=True)
+    status = json.loads((root / "status.json").read_text(encoding="utf-8")) if (root / "status.json").exists() else {}
     report = {
         "deployment_id": verification.get("deployment_id"),
         "state": "verified" if verification.get("ok") else "failed",
         "resumed": resumed,
         "verification": verification,
+        "sources": status.get("sources", {}),
+        "readiness": status.get("readiness", {}),
+        "chain_artifacts": status.get("chain_artifacts", {}),
     }
     destination = root / "install-report.json"
     destination.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -288,8 +297,8 @@ def main() -> None:
             _run_inventory_editor(args.inventory)
             return
         if args.action == "validate":
-            raw, machines, groups, _ = load_inventory(args.inventory)
-            print(f"[OK] {raw['deployment']['id']}: {len(machines)} machine(s), {len(groups)} group(s).")
+            raw, machines, services, _ = load_inventory(args.inventory)
+            print(f"[OK] {raw['deployment']['id']}: {len(machines)} machine(s), {len(services)} service(s).")
             return
         plan = build_plan(args.inventory)
         if args.action == "preflight":
@@ -299,11 +308,13 @@ def main() -> None:
                 raise SystemExit(2)
             return
         if args.action == "plan":
-            value = {"deployment_id": plan.deployment_id, "docker_subnets": plan.docker_subnets, "endpoints": [endpoint.__dict__ | {"url": endpoint.url} for endpoint in plan.endpoints], "steps": [step.__dict__ for step in plan.steps]}
+            value = {"deployment_id": plan.deployment_id, "docker_subnets": plan.docker_subnets, "groups": [group.__dict__ for group in plan.groups], "endpoints": [endpoint.__dict__ | {"url": endpoint.url} for endpoint in plan.endpoints], "steps": [step.__dict__ for step in plan.steps]}
             if args.json:
                 print(json.dumps(value, indent=2, sort_keys=True))
             else:
                 print(f"Deployment: {plan.deployment_id}")
+                for group in plan.groups:
+                    print(f"group:{group.id}: {group.kind} on {group.machine_id} ({', '.join(group.service_ids)})")
                 for step in plan.steps:
                     print(f"{step.id}: {step.description}")
             return
@@ -312,8 +323,8 @@ def main() -> None:
             return
         if args.action == "recreate":
             project_root = Path(__file__).resolve().parents[1]
-            recreate_service(plan, project_root, args.group, args.service, build=args.build)
-            print(f"[OK] Recreated service {args.service} in group {args.group}")
+            recreate_service(plan, project_root, args.service, build=args.build)
+            print(f"[OK] Recreated service {args.service}")
             return
         if args.action == "push":
             project_root = Path(__file__).resolve().parents[1]
@@ -327,7 +338,7 @@ def main() -> None:
             return
         if args.action == "status":
             project_root = Path(__file__).resolve().parents[1]
-            status_file = project_root / ".generated" / "deployment-v2" / plan.deployment_id / "status.json"
+            status_file = project_root / ".generated" / "deployment-v3" / plan.deployment_id / "status.json"
             if not status_file.exists():
                 raise ValueError(f"no deployment status found: {status_file}")
             print(status_file.read_text(), end="")

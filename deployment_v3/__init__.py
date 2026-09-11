@@ -1,4 +1,4 @@
-"""Declarative deployment v2: inventory, plan, render and execution."""
+"""Declarative deployment v3: inventory, plan, render and execution."""
 
 from .inventory import InventoryError, load_inventory
 from .planner import DeploymentPlan, build_plan

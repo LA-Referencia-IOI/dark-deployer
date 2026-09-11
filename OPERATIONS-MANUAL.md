@@ -15,19 +15,22 @@ docker compose version
 ```
 
 No guardar claves privadas en Git ni dentro de `deployment-topology.json`.
-Preparar las rutas de secretos indicadas por la topología.
+Preparar en el controlador los archivos fuente de secretos indicados por la
+topología. Cada entrada declara su archivo `source`, sus consumidores, su
+destino por host y el modo `0600`; no guardar valores en Git.
 
 ## 2. Topología
 
-Usar un inventario JSON v2 (por ejemplo uno de `examples/deployment-v2/`) y
+Usar un inventario JSON v3 (por ejemplo uno de `examples/deployment-v3/`) y
 adaptarlo al entorno. La topología es la fuente de verdad para hosts, redes,
-roles, blockchain, storage, ramas y referencias de secretos.
+roles, blockchain, storage, ramas, política de puertos, secretos y rutas LAN/VPN
+por dependencia.
 
 Para la instalación normal se puede ejecutar directamente:
 
 ```bash
 venv/bin/python deploy.py install \
-  --inventory examples/deployment-v2/local-ha.json
+  --inventory examples/deployment-v3/local-ha.json
 ```
 
 El comando coordina validación, secretos runtime, artefacto blockchain,
@@ -53,12 +56,12 @@ cambios explícitamente.
 Validar antes de generar cualquier bundle:
 
 ```bash
-venv/bin/python -m deployment_v2.cli validate \
-  --inventory examples/deployment-v2/local-ha.json
-venv/bin/python -m deployment_v2.cli plan \
-  --inventory examples/deployment-v2/local-ha.json
-venv/bin/python -m deployment_v2.cli render \
-  --inventory examples/deployment-v2/local-ha.json
+venv/bin/python -m deployment_v3.cli validate \
+  --inventory examples/deployment-v3/local-ha.json
+venv/bin/python -m deployment_v3.cli plan \
+  --inventory examples/deployment-v3/local-ha.json
+venv/bin/python -m deployment_v3.cli render \
+  --inventory examples/deployment-v3/local-ha.json
 ```
 
 `plan` no debe modificar Docker, repositorios ni el filesystem operativo.
@@ -83,8 +86,8 @@ venv/bin/python deploy.py inventory-edit \
 ```
 
 El editor organiza la topología por secciones: deployment, defaults, redes,
-máquinas, grupos, blockchain, storage, componentes, settings, secretos y
-exposure. Cada sección se valida con las mismas reglas semánticas que usa el
+máquinas, servicios, infraestructura, blockchain, storage, componentes,
+settings y secretos. Cada sección se valida con las mismas reglas semánticas que usa el
 instalador antes de incorporarla al documento. `Ctrl+V` valida la sección,
 `Ctrl+S` guarda y `Ctrl+Q` sale.
 
@@ -100,13 +103,18 @@ correcta para comprobar o aplicar cambios.
 Para developer local, ejecutar el preflight y luego aplicar el bundle generado:
 
 ```bash
-venv/bin/python -m deployment_v2.cli preflight \
-  --inventory examples/deployment-v2/local-ha.json
-venv/bin/python -m deployment_v2.cli apply \
-  --inventory examples/deployment-v2/local-ha.json
+venv/bin/python -m deployment_v3.cli preflight \
+  --inventory examples/deployment-v3/local-ha.json
+venv/bin/python -m deployment_v3.cli apply \
+  --inventory examples/deployment-v3/local-ha.json
 ```
 
-El orden esperado es validators-a, validators-b, apps/RPC, storage y APIs.
+El orden funcional es validadores, quórum RPC, contratos, storage, datos,
+aplicaciones y proxy. Cada barrera comprueba disponibilidad funcional antes de
+abrir la fase siguiente.
+Las rutas entre hosts declaran siempre la red y el protocolo; la política
+central de infraestructura deriva los puertos P2P y el archivo de firewall
+sugerido por máquina.
 `deploy.py` es la única entrada soportada y genera los archivos de ejecución
 desde el inventario; no se editan manualmente los `.env.integration`.
 
@@ -116,16 +124,17 @@ En un inventario con hosts SSH, revisar primero el plan y el preflight de cada
 máquina. Después transferir y aplicar el mismo bundle:
 
 ```bash
-venv/bin/python -m deployment_v2.cli push --inventory deployment-topology.json
-venv/bin/python -m deployment_v2.cli apply --inventory deployment-topology.json
+venv/bin/python -m deployment_v3.cli push --inventory deployment-topology.json
+venv/bin/python -m deployment_v3.cli apply --inventory deployment-topology.json
 ```
 
-Las claves y artefactos privados deben existir previamente en las rutas
-declaradas. Si una transferencia se interrumpe, usar `resume` después de
-corregir la causa:
+El controlador distribuye por SSH exclusivamente los secretos y fragmentos de
+artefacto Besu declarados para cada consumidor; los bundles públicos no los
+contienen. Cada copia se comprueba por hash y permisos. Si una transferencia se
+interrumpe, usar `resume` después de corregir la causa:
 
 ```bash
-venv/bin/python -m deployment_v2.cli resume \
+venv/bin/python -m deployment_v3.cli resume \
   --inventory deployment-topology.json
 ```
 
@@ -135,10 +144,10 @@ Inicializar o verificar los artefactos solo cuando corresponda a una cadena
 nueva:
 
 ```bash
-venv/bin/python -m deployment_v2.cli chain-init --inventory deployment-topology.json
-venv/bin/python -m deployment_v2.cli chain-static-nodes --inventory deployment-topology.json
-venv/bin/python -m deployment_v2.cli chain-export --inventory deployment-topology.json
-venv/bin/python -m deployment_v2.cli chain-verify --inventory deployment-topology.json
+venv/bin/python -m deployment_v3.cli chain-init --inventory deployment-topology.json
+venv/bin/python -m deployment_v3.cli chain-static-nodes --inventory deployment-topology.json
+venv/bin/python -m deployment_v3.cli chain-export --inventory deployment-topology.json
+venv/bin/python -m deployment_v3.cli chain-verify --inventory deployment-topology.json
 ```
 
 No regenerar genesis ni identidades en una cadena existente sin una decisión
@@ -147,8 +156,8 @@ operativa explícita.
 ## 6. Verificación posterior
 
 ```bash
-venv/bin/python -m deployment_v2.cli status --inventory deployment-topology.json
-venv/bin/python -m deployment_v2.cli verify --inventory deployment-topology.json
+venv/bin/python -m deployment_v3.cli status --inventory deployment-topology.json
+venv/bin/python -m deployment_v3.cli verify --inventory deployment-topology.json
 ```
 
 Comprobar además manualmente:
@@ -158,21 +167,21 @@ Comprobar además manualmente:
 - Dos peers IPFS/Cluster visibles desde Store API.
 - `/health` y `/health/live` de Admin, Minter, Resolver y Store.
 - Los tres workers del Minter vivos; no existe Recovery Worker.
-- Dashboard accesible y usando las APIs internas.
+- Proxy de `apps` accesible por HTTP, sirviendo dashboard y `/explorer/` sin
+  publicar directamente esos contenedores.
 
-Para actualizar o recrear un único servicio sin reiniciar el resto del grupo:
+Para actualizar o recrear un único servicio sin reiniciar el resto de la
+máquina:
 
 ```bash
 venv/bin/python deploy.py recreate \
-  --inventory examples/deployment-v2/local-ha.json \
-  --group apps \
+  --inventory examples/deployment-v3/local-ha.json \
   --service dashboard \
   --build
 ```
 
-`--build` es opcional. El comando valida que el servicio pertenezca al grupo y
-ejecuta Compose únicamente para ese servicio; también funciona con grupos en
-hosts SSH.
+`--build` es opcional. El comando valida el servicio y ejecuta Compose
+únicamente para ese servicio; también funciona en hosts SSH.
 
 ## 7. Prueba funcional manual
 

@@ -11,10 +11,12 @@ owned by PostgreSQL and the workers.
 
 ## Services
 
-The `apps` group contains the non-validator RPC, Admin API, Store API, Minter
-API and its three workers (metadata, replication, chain), Resolver API and
-dashboard. Besu validators run in two validator groups; the explorer runs with
-validators-a. Storage nodes run Kubo and IPFS Cluster peers. Cluster provides a
+The `apps` machine contains the non-validator RPC, Admin API, Store API, Minter
+API, its PostgreSQL database, and its three workers (metadata, replication,
+chain), Resolver API and dashboard. The inventory enforces this co-location so
+metadata payload storage never crosses a host boundary. Besu validators run on
+`blockchain-a` and `blockchain-b`; the explorer runs on `blockchain-a`. Storage
+nodes run Kubo and IPFS Cluster peers. Cluster provides a
 global pinset; Store API talks to the local endpoint pool and does not coordinate
 replication between sites.
 
