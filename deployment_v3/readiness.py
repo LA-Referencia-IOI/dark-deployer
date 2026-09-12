@@ -56,6 +56,78 @@ def _rpc(plan, root):
     return peers >= 4, f"RPC peers={peers}; expected at least 4"
 
 
+def _json_stream(payload: str) -> list[dict]:
+    """Decode the consecutive JSON objects emitted by ``peers ls --enc json``."""
+    decoder = json.JSONDecoder()
+    offset = 0
+    values = []
+    while offset < len(payload):
+        while offset < len(payload) and payload[offset].isspace():
+            offset += 1
+        if offset >= len(payload):
+            break
+        value, offset = decoder.raw_decode(payload, offset)
+        if not isinstance(value, dict):
+            raise ValueError("peer response contains a non-object JSON value")
+        values.append(value)
+    return values
+
+
+def _cluster_membership_problem(expected_names: set[str], peers: list[dict]) -> str | None:
+    """Return a precise topology error, or ``None`` for a converged cluster."""
+    by_name = {str(peer.get("peername", "")): peer for peer in peers}
+    observed_names = set(by_name) - {""}
+    missing = expected_names - observed_names
+    unexpected = observed_names - expected_names
+    duplicates = len(by_name) != len(peers)
+    if missing or unexpected or duplicates:
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(sorted(missing)))
+        if unexpected:
+            details.append("unexpected " + ", ".join(sorted(unexpected)))
+        if duplicates:
+            details.append("duplicate or unnamed peer")
+        return "IPFS Cluster membership does not match inventory: " + "; ".join(details)
+
+    peer_ids = {str(peer.get("id", "")) for peer in peers}
+    if "" in peer_ids or len(peer_ids) != len(peers):
+        return "IPFS Cluster membership contains missing or duplicate peer IDs"
+    for name, peer in sorted(by_name.items()):
+        cluster_error = str(peer.get("error", "")).strip()
+        kubo_error = str(peer.get("ipfs", {}).get("error", "")).strip()
+        if cluster_error:
+            return f"IPFS Cluster peer {name} reports an error: {cluster_error}"
+        if kubo_error:
+            return f"IPFS Cluster peer {name} cannot reach its Kubo peer: {kubo_error}"
+        visible_ids = {str(value) for value in peer.get("cluster_peers", [])}
+        if visible_ids != peer_ids:
+            return f"IPFS Cluster peer {name} has not converged on all declared peers"
+    return None
+
+
+def _cluster_topology(plan, root, cluster) -> tuple[bool, str]:
+    expected_names = {str(service.configuration["peer_name"]) for service in cluster}
+    for service in cluster:
+        result = _run(
+            plan,
+            plan.machine(service.machine_id),
+            root,
+            service.id,
+            "ipfs-cluster-ctl --host /ip4/127.0.0.1/tcp/9094 --enc json peers ls",
+        )
+        if result.returncode:
+            return False, f"{service.id} did not answer its Cluster membership probe"
+        try:
+            peers = _json_stream(result.stdout)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return False, f"{service.id} returned invalid Cluster membership JSON: {exc}"
+        problem = _cluster_membership_problem(expected_names, peers)
+        if problem:
+            return False, f"{service.id}: {problem}"
+    return True, f"IPFS Cluster converged with all declared peers: {', '.join(sorted(expected_names))}"
+
+
 def check_phase(plan, project_root: Path, phase: str) -> tuple[bool, str]:
     from .state import run_root
     root = run_root(project_root, plan.deployment_id)
@@ -72,12 +144,12 @@ def check_phase(plan, project_root: Path, phase: str) -> tuple[bool, str]:
     if phase == "storage":
         kubo = [item for item in effective.services if item.type == "ipfs-kubo"]
         cluster = [item for item in effective.services if item.type == "ipfs-cluster"]
-        for service in [*kubo, *cluster]:
-            cmd = "ipfs --api /ip4/127.0.0.1/tcp/5001 id" if service.type == "ipfs-kubo" else "ipfs-cluster-ctl --host /ip4/127.0.0.1/tcp/9094 id"
+        for service in kubo:
+            cmd = "ipfs --api /ip4/127.0.0.1/tcp/5001 id"
             result = _run(effective, effective.machine(service.machine_id), root, service.id, cmd)
             if result.returncode:
                 return False, f"{service.id} did not answer its local peer probe"
-        return True, "Kubo and Cluster peers answer local probes"
+        return _cluster_topology(effective, root, cluster)
     if phase == "data":
         store = next(item for item in effective.services if item.type == "store-api")
         # Store's root is intentionally not a health endpoint (it returns
