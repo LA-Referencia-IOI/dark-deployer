@@ -8,7 +8,7 @@ replicación entre sí.
 ## Fuente de verdad
 
 La topología de producción se escribe una sola vez en la sección `storage` de
-`deployment-topology.json`. El instalador distribuye ese mismo archivo; no
+`deployment-inventory.json`. El instalador distribuye ese mismo archivo; no
 crea ni acepta un archivo de topología de storage paralelo en producción:
 
 ```json
@@ -186,7 +186,7 @@ Referencias: [arquitectura CRDT de IPFS Cluster](https://ipfscluster.io/document
 ### Persistencia en el host
 
 Kubo y IPFS Cluster usan bind mounts, no volúmenes Docker anónimos. Cada host
-declara `storage_data_root` para su nodo en `deployment-topology.json`; el
+declara `storage_data_root` para su nodo en `deployment-inventory.json`; el
 instalador valida que sea una ruta absoluta, crea `<root>/<storage_node_id>/ipfs`,
 `export` y `cluster` si faltan y genera `STORAGE_DATA_ROOT` en el entorno del
 peer. En developer la ruta se genera bajo `.generated/storage/data`; en

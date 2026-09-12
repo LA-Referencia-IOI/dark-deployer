@@ -315,14 +315,14 @@ debe asumir habilitado.
 | storage-node | Un Kubo y un peer Cluster. |
 | all | Los tres roles; sólo escenarios restringidos/no productivos. |
 
-`deployment-topology.json` reúne CIDR VPN, referencias SSH, rutas de secretos,
+El inventario de despliegue reúne CIDR VPN, referencias SSH, rutas de secretos,
 hosts, roles, ramas, grupos de acceso y selectores de nodo. Las direcciones de
 storage se declaran una sola vez en su sección `storage`.
 
 ~~~bash
-venv/bin/python deploy.py validate --inventory deployment-topology.json
+venv/bin/python deploy.py validate --inventory deployment-inventory.json
 python3.12 install.py topology render \
-  --inventory deployment-topology.json \
+  --inventory deployment-inventory.json \
   --output dist/dark-site-a-1
 python3.12 install.py deployment verify --bundle dist/dark-site-a-1
 python3.12 install.py host validate --config dist/dark-site-a-1/hosts/<host>/host.json

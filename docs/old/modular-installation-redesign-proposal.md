@@ -5,7 +5,7 @@
 > solo para explicar la evolución.
 
 > **Estado: propuesta superada.** La topología canónica y los bundles por host
-> ya están implementados en `deployment-topology.json` y en `dark-deployer`.
+> ya están implementados en el inventario de despliegue y en `dark-deployer`.
 > Este archivo se conserva como historial de decisiones; para operar el
 > sistema use [`deployer-operations.md`](deployer-operations.md) y
 > [`production-single-site-four-server-installation.md`](production-single-site-four-server-installation.md).
@@ -103,7 +103,7 @@ eliminar:
 ### Capas de configuración
 
 ```text
-deployment-topology.json        hechos de infraestructura y política
+deployment-inventory.json       hechos de infraestructura y política
           |
           | render
           v
@@ -133,13 +133,13 @@ canónico, pero en secciones separadas. Así no se confunde una dirección de
 administración usada por SSH con una dirección privada usada por IPFS Cluster,
 ni una rama de código con una decisión de red.
 
-Se propone que `deployment-topology.json` sea ese documento. No debe contener
+Se propone que el inventario de despliegue sea ese documento. No debe contener
 secretos; en cambio contiene referencias seguras a secretos que deben existir
 en cada host. El renderizador es el único programa autorizado a transformar
 este documento en `.env.public`, Compose runtime y bundles por host.
 
 ```text
-deployment-topology.json
+deployment-inventory.json
   ├─ release: qué código se instala
   ├─ deployment: cómo llegar y aplicar en cada host
   ├─ network: cómo se comunican los roles entre hosts
@@ -158,7 +158,7 @@ manual controlada sin cambiar las direcciones ni el modelo de roles.
 
 | Fuente | Responsabilidad | Ejemplos | No contiene |
 | --- | --- | --- | --- |
-| `deployment-topology.json` | Fuente canónica de infraestructura, release y método de entrega. | Hosts, roles, IPs privadas, DNS, usuario SSH, puerto, referencia a clave, ramas, secretos requeridos. | Contenido de claves, `.env` por componente, aliases Docker, estado efímero. |
+| Inventario de despliegue | Fuente canónica de infraestructura, release y método de entrega. | Hosts, roles, IPs privadas, DNS, usuario SSH, puerto, referencia a clave, ramas, secretos requeridos. | Contenido de claves, `.env` por componente, aliases Docker, estado efímero. |
 | `secrets/` externo o gestor de secretos | Material sensible por controlador/host. | `ssh_private_key`, `master-wallet.key`, swarm key, Cluster secret. | Topología ni valores de runtime no sensibles. |
 | bundle renderizado | Vista verificable por host. | `.env.public`, runtime IPFS, política de firewall, manifiesto. | Secreto y decisiones de hosts no necesarios para ese rol. |
 | `.env` de componente | Runtime generado, local al componente. | `RPC_URL`, bind, endpoint Store. | Selección manual de host, credenciales SSH, IPs de otros roles repetidas. |
@@ -212,11 +212,11 @@ Semántica propuesta:
 El comando de orquestación futuro podría ser:
 
 ```text
-deployment connect-check --topology deployment-topology.json
-deployment render --topology deployment-topology.json --output dist/<id>
-deployment push --topology deployment-topology.json --bundle dist/<id>
-deployment apply --topology deployment-topology.json --hosts site-a-storage-01
-deployment verify --topology deployment-topology.json
+deployment connect-check --inventory deployment-inventory.json
+deployment render --inventory deployment-inventory.json --output dist/<id>
+deployment push --inventory deployment-inventory.json --bundle dist/<id>
+deployment apply --inventory deployment-inventory.json --hosts site-a-storage-01
+deployment verify --inventory deployment-inventory.json
 ```
 
 `push` no instala nada: copia solamente bundles públicos y valida la identidad
@@ -262,7 +262,7 @@ Esto cubre tres identidades que no deben mezclarse:
 La nueva estructura elimina la actual precedencia difícil de seguir entre
 `.env`, `.env.integration` y valores derivados. La única precedencia es:
 
-1. `deployment-topology.json` firmado/revisado.
+1. Inventario de despliegue firmado/revisado.
 2. Bundle renderizado cuyo hash coincide con la topología.
 3. Secreto externo presente en la ruta requerida por el bundle.
 4. Runtime generado localmente a partir del bundle.
@@ -274,7 +274,7 @@ marcados como locales de desarrollo.
 
 | Capa | Contenido permitido | No debe contener |
 | --- | --- | --- |
-| `deployment-topology.json` | hosts, roles, direcciones privadas, DNS público opcional, topología IPFS, política de réplica, exposición de servicios, cadena y referencias de versión. | secretos, URLs Docker, valores `localhost`, CIDs o estado generado. |
+| Inventario de despliegue | hosts, roles, direcciones privadas, DNS público opcional, topología IPFS, política de réplica, exposición de servicios, cadena y referencias de versión. | secretos, URLs Docker, valores `localhost`, CIDs o estado generado. |
 | `profiles/developer-*.json` | definición abstracta de hosts simulados y número de nodos. | IPs de producción o secretos reales. |
 | `hosts/<id>/host.json` | identidad del host, rol, hashes, archivos y requisitos de secretos. | configuración de otros hosts no necesaria para aplicar el rol. |
 | `hosts/<id>/.env.public` | variables derivadas que consumen componentes del host. | claves privadas, swarm key, Cluster secret. |
@@ -354,7 +354,7 @@ debe ser una tabla independiente editada a mano.
 ## Modelo de topología canónica propuesto
 
 Se propone sustituir los inventarios separados por un único
-`deployment-topology.json`, schema v1.
+inventario de despliegue, schema v1.
 El renderizador puede generar una vista mínima exclusiva para Store API, pero
 esta no es una fuente editable.
 
@@ -498,8 +498,8 @@ El rediseño sustituye la secuencia global fija por operaciones explícitas.
 Los nombres siguientes son propuestas de CLI, no comandos existentes.
 
 ```text
-1. topology validate --file deployment-topology.json
-2. topology render --file deployment-topology.json --output dist/<id>
+1. inventory validate --file deployment-inventory.json
+2. inventory render --file deployment-inventory.json --output dist/<id>
 3. host validate --bundle dist/<id>/hosts/<host-id>
 4. host apply --bundle dist/<id>/hosts/<host-id>
 5. deployment verify --bundle dist/<id>
@@ -507,8 +507,8 @@ Los nombres siguientes son propuestas de CLI, no comandos existentes.
 
 ### Fase A: preparar y renderizar
 
-1. El operador crea o modifica solo `deployment-topology.json`.
-2. `topology validate` comprueba cardinalidad, direcciones, secreto requerido,
+1. El operador crea o modifica solo el inventario de despliegue.
+2. `inventory validate` comprueba cardinalidad, direcciones, secreto requerido,
    capacidad de réplica, referencias de repositorio y exposición de puertos.
 3. `topology render` produce bundles inmutables por host con hashes.
 4. El operador distribuye el bundle público y provisiona los secretos en las

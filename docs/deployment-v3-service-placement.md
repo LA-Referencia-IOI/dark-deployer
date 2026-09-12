@@ -28,9 +28,9 @@ selected LAN/VPN. A loopback exposure is never accepted for a remote consumer.
 Store API follows the same rule: it explicitly lists every IPFS Cluster peer it
 uses, so no inter-host storage endpoint is inferred implicitly.
 
-## Five-server topology
+## Five-server deployment shape
 
-The maintained HA topology keeps the v2 operational units visible even when
+The maintained HA inventory keeps the v2 operational units visible even when
 they run on one local Docker daemon:
 
 | Group | Role |
@@ -78,7 +78,7 @@ placeable service means changing its `machine` and declaring the required
 private exposure and connection. The planner derives startup order from those
 connections.
 
-## Generated runtime topology
+## Generated runtime layout
 
 Each machine receives an aggregate Compose file for compatibility and one
 separate Compose project per named group, with environment files only for its

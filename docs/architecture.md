@@ -45,9 +45,9 @@ CID; publication requires a confirmed pin for L1 and L2. Chain failures remain
 recorded as structured errors and are retried only according to the worker
 policy; no Recovery Worker is part of the current design.
 
-## IPFS and topology
+## IPFS layout
 
-Each storage node has one Kubo daemon and one Cluster peer. The topology's
+Each storage node has one Kubo daemon and one Cluster peer. The inventory's
 `publish_after_replicas` and `target_replicas` define critical availability and
 later durability. Peer names are logical; libp2p peer IDs are generated at
 runtime. Docker aliases are local-development conveniences, while production

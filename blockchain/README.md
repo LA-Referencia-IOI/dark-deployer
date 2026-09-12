@@ -30,5 +30,5 @@ to initialize a role host without that directory.
 
 Artifacts must share the same genesis, chain ID and static nodes. Verify this
 before a rollout; never copy node private keys to another host. Production P2P
-uses VPN addresses recorded in `deployment-topology.json`, while the Docker
+uses VPN addresses recorded in the deployment inventory, while the Docker
 `dark-backbone` network is solely a developer HA simulation.

@@ -5,9 +5,9 @@ directory, replace all placeholder network, SSH, repository, and secret values,
 then validate it before installation:
 
 ```bash
-cp examples/deployment-v3/production-five-host.json deployment-topology.json
-venv/bin/python deploy.py validate --inventory deployment-topology.json
-venv/bin/python deploy.py render --inventory deployment-topology.json --output /tmp/dark-render
+cp examples/deployment-v3/production-five-host.json deployment-inventory.json
+venv/bin/python deploy.py validate --inventory deployment-inventory.json
+venv/bin/python deploy.py render --inventory deployment-inventory.json --output /tmp/dark-render
 ```
 
 The inventory contains no secret values. Each `secrets` entry declares its
@@ -20,11 +20,11 @@ bundles contain neither their values nor their hashes.
 | Template | Intended use | Machines | Storage target |
 | --- | --- | ---: | ---: |
 | `local-simple.json` | Lightweight local functional test | 1 local Docker host | 1 copy |
-| `local-ha.json` | Full topology simulated on one Docker host | 1 local Docker host | 2 copies |
+| `local-ha.json` | Full deployment shape simulated on one Docker host | 1 local Docker host | 2 copies |
 | `production-five-host.json` | Production reference to adapt for a LAN/VPN | 5 SSH hosts | 2 copies |
 
 `local-simple` retains one local IPFS peer and exercises the Store API and
-Cluster topology with a one-copy target. It is not a replication or two-host
+Cluster layout with a one-copy target. It is not a replication or two-host
 failure test. `local-ha` retains both peers and uses a two-copy target.
 
 The component key remains `dark-explorador` because that is the local checkout

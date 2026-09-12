@@ -19,7 +19,7 @@ venv/bin/python local-infra/generate-lima-inventory.py \
   --store /Volumes/Test/dark-lab
 ```
 
-The command defaults to the production topology example as input and writes
+The command defaults to the production inventory example as input and writes
 `examples/deployment-v3/lima-five-host.json`. Both paths can be overridden:
 
 ```bash

@@ -3,7 +3,7 @@
 ## Objetivo
 
 Incorporar un editor interactivo de terminal para crear y modificar los inventarios
-`deployment-topology.json` de `deployment_v2`, cubriendo todas las opciones que
+de inventario de despliegue de `deployment_v2`, cubriendo todas las opciones que
 acepta el instalador. El editor debe ayudar a una persona a configurar un
 despliegue local, developer HA o producción sin editar JSON manualmente.
 
@@ -25,10 +25,10 @@ Estado de la primera entrega:
 ## Comandos propuestos
 
 ```text
-venv/bin/python deploy.py inventory-create --template local-simple --output deployment-topology.json
-venv/bin/python deploy.py inventory-create --template local-ha --output deployment-topology.json
-venv/bin/python deploy.py inventory-create --template production-five-host --output deployment-topology.json
-venv/bin/python deploy.py inventory-edit --inventory deployment-topology.json
+venv/bin/python deploy.py inventory-create --template local-simple --output deployment-inventory.json
+venv/bin/python deploy.py inventory-create --template local-ha --output deployment-inventory.json
+venv/bin/python deploy.py inventory-create --template production-five-host --output deployment-inventory.json
+venv/bin/python deploy.py inventory-edit --inventory deployment-inventory.json
 ```
 
 El editor debe permitir seleccionar un archivo existente o crear uno desde una

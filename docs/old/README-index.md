@@ -30,7 +30,7 @@ son derivados y no fuentes de configuración.
 ## Estado actual que debe reflejar la documentación
 
 - `dark-deployer` contiene el runtime blockchain y la orquestación Compose.
-- `deployment-topology.json` es la única fuente de infraestructura e inventario
+- El inventario de despliegue es la única fuente de infraestructura e inventario
   del despliegue; no existen archivos auxiliares de inventario o de storage.
 - La instalación productiva se divide en `apps`, `blockchain-a`,
   `blockchain-b` y dos `storage-node`.
@@ -82,5 +82,5 @@ debe resumirse en `implementation-history.md` y enlazarse desde allí.
 
 La siguiente fase revisará los README y arquitecturas dentro de cada
 componente. En particular, se eliminarán referencias operativas a `dark-env`,
-se alinearán los ejemplos con `deployment-topology.json` y se corregirán los
+se alinearán los ejemplos con el inventario de despliegue y se corregirán los
 diagramas que todavía muestran Compose o redes anteriores.

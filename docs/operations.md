@@ -14,10 +14,10 @@ run:
 
 ```bash
 venv/bin/python deploy.py inventory-resolve \
-  --inventory deployment-topology.json --output resolved-topology.json
+  --inventory deployment-inventory.json --output resolved-inventory.json
 venv/bin/python deploy.py inventory-explain \
-  --inventory deployment-topology.json --path /settings/minter/shoulder
-venv/bin/python deploy.py plan --inventory deployment-topology.json --json
+  --inventory deployment-inventory.json --path /settings/minter/shoulder
+venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
 ```
 
 The compact Minter shoulder is set under

@@ -10,35 +10,36 @@ document before validation, planning, rendering or execution. `.env` is
 optional runtime input, not a second inventory.
 
 Both formats contain no secret values. They may contain controller-side source
-paths for private material. The generated `shared/deployment-topology.json` in
-every bundle is always the fully resolved v3 document.
+paths for private material. The generated `shared/deployment-topology.json` is
+the fully resolved v3 inventory; its filename is retained only for bundle
+compatibility and is not the name of the inventory model.
 
 ## CLI
 
 ```bash
-venv/bin/python deploy.py inventory-create --template local-ha --output deployment-topology.json
-venv/bin/python deploy.py validate --inventory deployment-topology.json
-venv/bin/python deploy.py plan --inventory deployment-topology.json
-venv/bin/python deploy.py render --inventory deployment-topology.json
-venv/bin/python deploy.py preflight --inventory deployment-topology.json
-venv/bin/python deploy.py install --inventory deployment-topology.json
-venv/bin/python deploy.py status --inventory deployment-topology.json
-venv/bin/python deploy.py verify --inventory deployment-topology.json
+venv/bin/python deploy.py inventory-create --template local-ha --output deployment-inventory.json
+venv/bin/python deploy.py validate --inventory deployment-inventory.json
+venv/bin/python deploy.py plan --inventory deployment-inventory.json
+venv/bin/python deploy.py render --inventory deployment-inventory.json
+venv/bin/python deploy.py preflight --inventory deployment-inventory.json
+venv/bin/python deploy.py install --inventory deployment-inventory.json
+venv/bin/python deploy.py status --inventory deployment-inventory.json
+venv/bin/python deploy.py verify --inventory deployment-inventory.json
 ```
 
 For a compact operator inventory:
 
 ```bash
 venv/bin/python deploy.py inventory-create \
-  --template operator-local-ha --output deployment-topology.json
+  --template operator-local-ha --output deployment-inventory.json
 venv/bin/python deploy.py inventory-resolve \
-  --inventory deployment-topology.json --output resolved-topology.json
+  --inventory deployment-inventory.json --output resolved-inventory.json
 venv/bin/python deploy.py inventory-explain \
-  --inventory deployment-topology.json --path /services/store-api
+  --inventory deployment-inventory.json --path /services/store-api
 venv/bin/python deploy.py inventory-diff \
-  --before previous.json --after deployment-topology.json
-venv/bin/python deploy.py validate --inventory deployment-topology.json
-venv/bin/python deploy.py plan --inventory deployment-topology.json --json
+  --before previous-inventory.json --after deployment-inventory.json
+venv/bin/python deploy.py validate --inventory deployment-inventory.json
+venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
 ```
 
 These inspection commands are offline. They do not access Docker, SSH, Git or
@@ -85,6 +86,13 @@ Remote apply transfers public bundles over SSH and then transfers each secret
 only to its declared consumer hosts. Chain artifacts are filtered by node, so a
 machine receives only genesis, static nodes and its own node key. Private
 values never enter public bundles or reports.
+
+Docker bridge networks are named `<deployment-id>-<machine-id>` and are reused
+only when that exact network already has the subnet derived from the inventory.
+If another empty bridge network overlaps the requested subnet, `install`,
+`apply`, and `resume` can remove it only with the explicit
+`--clean-empty-network-conflicts` option. A network with attached containers is
+never removed automatically.
 
 The default order is validators, RPC quorum, contracts, storage peers, data
 services, applications, and the edge proxy. `recreate` targets one service
@@ -133,9 +141,9 @@ The value must use the current `2MM` format. The resolver validates the whole
 expanded document before a plan is built. Invalid shoulders, missing groups,
 unsupported peers, ambiguous routes and invalid replica counts fail early.
 
-The current catalogue supports the fixed dARK topology: four validators, one
+The current catalogue supports the fixed dARK deployment shape: four validators, one
 RPC, the Minter stack, dashboard, Store, and one or two storage peers named
-`storage-a` and `storage-b`. Use the complete v3 format for a topology outside
+`storage-a` and `storage-b`. Use the complete v3 format for a deployment shape outside
 that catalogue.
 
 Same-machine dependencies use Docker DNS. A remote dependency receives the
@@ -150,7 +158,7 @@ not make APIs public automatically.
 
 The resolver records the input digest, catalogue digest and resolver version.
 Rendering writes this evidence to `shared/inventory-resolution.json` alongside
-the fully resolved topology.
+the fully resolved inventory.
 
 The Textual editor detects compact inventories and presents decision-oriented
 sections for placement, storage, routing, access and overrides. It validates
@@ -191,7 +199,7 @@ declared API/web exposures and the policy-derived P2P ports.
 `requirements-tui.txt` enables the Textual editor:
 
 ```bash
-venv/bin/python deploy.py inventory-edit --inventory deployment-topology.json
+venv/bin/python deploy.py inventory-edit --inventory deployment-inventory.json
 ```
 
 The editor validates the complete document and saves atomically with a backup.

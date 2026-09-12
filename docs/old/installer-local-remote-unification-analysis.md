@@ -8,14 +8,15 @@
 ## Propósito
 
 Este documento reúne evidencia del comportamiento actual de `install.py`,
-`dark_deployer/deployment.py`, `deployment-topology.json`, los Compose del
+`dark_deployer/deployment.py`, el inventario de despliegue, los Compose del
 repositorio padre y los scripts de blockchain/storage. Sirve como base para
 unificar en el futuro la instalación local y la instalación en servidores
 Linux remotos. No cambia código ni propone todavía una migración ejecutable.
 
-**Convención de nombres:** aquí, “inventario de despliegue” e
-`deployment-topology.json` significan exactamente el mismo artefacto. Ese es
-el único nombre de archivo válido; no se mantienen inventarios auxiliares.
+**Convención de nombres actualizada:** “inventario de despliegue” nombra el
+artefacto. Los ejemplos usan `deployment-inventory.json`; no se mantienen
+inventarios auxiliares. Los bundles heredados pueden conservar el nombre
+interno `deployment-topology.json` por compatibilidad.
 
 ## Conclusión ejecutiva
 
@@ -28,7 +29,7 @@ El instalador actual ya tiene dos mecanismos parcialmente convergentes:
 
 Pero no son el mismo flujo. La instalación local usa variables prefijadas
 (`DEVELOPER_*`, `SANDBOX_*`, `PRODUCTION_*`), mientras que la entrega remota
-usa `deployment-topology.json` y vuelve a materializar un `.env` por host.
+usa el inventario de despliegue y vuelve a materializar un `.env` por host.
 Además, `developer` tiene presets especiales de almacenamiento y blockchain,
 pero no representa realmente cinco hosts Linux; `production` sí valida cinco
 hosts, aunque la aplicación remota sigue necesitando un checkout del deployer
@@ -112,7 +113,7 @@ intercalar varios servidores ni un grafo de dependencias transportable.
 
 `simple` genera un peer; `ha` genera dos peers con aliases, redes e identidades
 distintas. Estos archivos son presets locales, no una representación de hosts
-remotos. El mismo `deployment-topology.json` no gobierna actualmente el
+remotos. El mismo inventario de despliegue no gobierna actualmente el
 preset developer de storage.
 
 ### Blockchain
@@ -171,7 +172,7 @@ secretos, ramas y componentes requeridos.
 
 ```text
 bundle/
-├── shared/deployment-topology.json
+├── shared/deployment-topology.json  # nombre heredado de compatibilidad
 ├── shared/deployment-endpoints.json
 ├── shared/firewall-policy.json
 ├── hosts/<host-id>/.env.public
@@ -210,7 +211,7 @@ materializado desde un bundle.
 ### Aplicación del host
 
 `host apply` valida hashes, rama, topología y secretos; copia el `.env.public`
-al `.env` local y materializa `.generated/deployment-topology.json`. Después
+al `.env` local y materializa el inventario generado. Después
 entra en el flujo normal de `install.py`, que vuelve a resolver el perfil y
 ejecuta los Compose del host.
 
@@ -222,7 +223,7 @@ para remoto.
 
 | Aspecto | Developer local | Sandbox/production local | Production remoto |
 | --- | --- | --- | --- |
-| Fuente principal | `.env` + presets | `.env` + handoffs | `deployment-topology.json` + bundle |
+| Fuente principal | `.env` + presets | `.env` + handoffs | inventario de despliegue + bundle |
 | Selección | wizard/perfil | wizard/perfil | rol del host renderizado |
 | Transporte | proceso local | proceso local | SSH + rsync |
 | Docker | máquina del operador | máquina del operador | Docker del host Linux |
@@ -258,7 +259,7 @@ en cuatro grupos, y eliminar progresivamente los grupos que sean derivados:
 3. **Secretos:** solo rutas o referencias a almacenes seguros.
 4. **Derivados:** ramas, URLs entre servicios, nodos, peers, redes, rutas de
    datos y comandos de componentes; deben proceder de
-   `deployment-topology.json` o de un bundle generado.
+   el inventario de despliegue o de un bundle generado.
 
 Preguntas que el agente debe resolver antes de simplificar `.env.example`:
 
@@ -359,7 +360,7 @@ Ese es el punto de acoplamiento principal que debe resolver la unificación.
 
 ### Fuente única
 
-Usar `deployment-topology.json` también para developer, con un campo de
+Usar el inventario de despliegue también para developer, con un campo de
 destino por host:
 
 ```json

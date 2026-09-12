@@ -2,18 +2,18 @@
 
 Una sede usa cinco hosts VPN: `apps`, `blockchain-a`, `blockchain-b` y dos
 `storage-node`. El único archivo que un operador edita es
-`deployment-topology.json`; contiene direcciones de gestión/VPN, referencias
+`deployment-inventory.json`; contiene direcciones de gestión/VPN, referencias
 SSH, ramas de componentes, política IPFS y rutas de secretos. No contiene
 secretos, claves privadas ni identidades de nodos.
 
 ## Preparación
 
 ```bash
-venv/bin/python deploy.py inventory-create --template production-five-host --output deployment-topology.json
+venv/bin/python deploy.py inventory-create --template production-five-host --output deployment-inventory.json
 # Ajuste hosts, ramas y rutas de secretos.
-venv/bin/python deploy.py validate --inventory deployment-topology.json
-venv/bin/python deploy.py render --inventory deployment-topology.json --output dist/production
-venv/bin/python deploy.py verify --inventory deployment-topology.json
+venv/bin/python deploy.py validate --inventory deployment-inventory.json
+venv/bin/python deploy.py render --inventory deployment-inventory.json --output dist/production
+venv/bin/python deploy.py verify --inventory deployment-inventory.json
 ```
 
 El renderer genera exactamente cinco bundles. Deriva una topología compacta de
@@ -27,8 +27,8 @@ nodos con permisos 0600.
 Revise primero el plan seguro, que no abre conexiones:
 
 ```bash
-venv/bin/python deploy.py push --inventory deployment-topology.json
-venv/bin/python deploy.py apply --inventory deployment-topology.json
+venv/bin/python deploy.py push --inventory deployment-inventory.json
+venv/bin/python deploy.py apply --inventory deployment-inventory.json
 ```
 
 Agregue `--execute` sólo después de revisar las direcciones SSH y las rutas

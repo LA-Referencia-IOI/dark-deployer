@@ -157,7 +157,7 @@ SSH, locks/hashes de artefactos y la retirada del instalador legado.
 
 ## 1. Resultado obligatorio y límites
 
-Construir un único motor que lea `deployment-topology.json`, resuelva dónde
+Construir un único motor que lea el inventario de despliegue, resuelva dónde
 vive cada grupo de servicios, genere configuración y ejecute Docker Compose
 en el destino correspondiente. Local, LAN y VPN usan el mismo plan y el mismo
 runner. El transporte cambia; la definición de servicios no.

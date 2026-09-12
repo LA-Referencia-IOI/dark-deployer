@@ -3,7 +3,7 @@
 Estado: inventario de transición. Fecha: 2026-09-10.
 
 Este documento delimita qué variables existentes debe absorber
-`deployment-topology.json` v2 y cuáles deben dejar de ser entradas manuales.
+el inventario de despliegue v2 y cuáles deben dejar de ser entradas manuales.
 No autoriza todavía retirar `.env` ni `install.py`: la migración ocurrirá solo
 cuando el renderer v2 pueda generar todos los entornos y jobs operativos.
 

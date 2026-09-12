@@ -232,7 +232,7 @@ En producción estas redes son locales a sus respectivos servidores. La comunica
 
 ## Store API como puente
 
-Store API es el único componente que necesita conocer la infraestructura IPFS. En producción se ejecuta en el servidor apps y recibe del inventario `deployment-topology.json` los endpoints privados/VPN de los peers de almacenamiento.
+Store API es el único componente que necesita conocer la infraestructura IPFS. En producción se ejecuta en el servidor apps y recibe del inventario de despliegue los endpoints privados/VPN de los peers de almacenamiento.
 
 El dashboard, minter, resolver y admin no deben conocer directamente Kubo o Cluster.
 
@@ -326,7 +326,7 @@ Estos nombres solo deben existir en la red developer correspondiente.
 
 ### Producción
 
-Usar direcciones privadas/VPN derivadas exclusivamente de `deployment-topology.json`:
+Usar direcciones privadas/VPN derivadas exclusivamente del inventario de despliegue:
 
 ```text
 http://10.20.0.20:8545
@@ -635,7 +635,7 @@ topología.
 
 ## Fuente central prevista para producción
 
-La fuente de verdad debe ser `deployment-topology.json`, compartida por el
+La fuente de verdad debe ser el inventario de despliegue, compartido por el
 deployer y distribuida byte a byte a los hosts. Debe declarar, por sede:
 
 - identificador de host y rol (`apps`, `blockchain`, `storage`);
@@ -678,7 +678,7 @@ Antes de desplegar una sede en producción deben completarse estos puntos.
 
 ### 1. Topología y direccionamiento
 
-- Crear y versionar el archivo central de topología de despliegue, separado de
+- Crear y versionar el inventario central de despliegue, separado de
   los `.env` de cada host.
 - Definir allí los hosts de Apps, Blockchain y Storage, sus IPs privadas/VPN,
   los validadores, el RPC no validador y los puertos permitidos.

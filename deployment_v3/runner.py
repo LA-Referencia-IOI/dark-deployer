@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import ipaddress
 import shlex
 import shutil
 import time
@@ -71,6 +72,73 @@ def _reject_existing_chain_data(plan: DeploymentPlan, *, resume: bool, clean: bo
 
 def _require(result, description):
     if result.returncode: raise ApplyError(f"{description}: {result.stderr.strip() or result.stdout.strip() or 'no command output'}")
+
+
+def _network_conflicts(executor, subnet: str) -> list[tuple[str, str, int]]:
+    """Return bridge networks whose subnet overlaps ``subnet`` on one host."""
+    requested = ipaddress.ip_network(subnet)
+    listed = executor.run(("docker", "network", "ls", "--filter", "driver=bridge", "--format", "{{.Name}}"))
+    if listed.returncode:
+        return []
+    conflicts: list[tuple[str, str, int]] = []
+    for name in filter(None, listed.stdout.splitlines()):
+        inspected = executor.run(("docker", "network", "inspect", name, "--format", "{{range .IPAM.Config}}{{.Subnet}}{{end}}"))
+        if inspected.returncode:
+            continue
+        for candidate in filter(None, inspected.stdout.split()):
+            try:
+                overlaps = requested.overlaps(ipaddress.ip_network(candidate))
+            except ValueError:
+                continue
+            if not overlaps:
+                continue
+            containers = executor.run(("docker", "network", "inspect", name, "--format", "{{len .Containers}}"))
+            count = int(containers.stdout.strip()) if containers.returncode == 0 and containers.stdout.strip().isdigit() else -1
+            conflicts.append((name, candidate, count))
+    return conflicts
+
+
+def _ensure_machine_network(plan, machine, executor, *, clean_empty_conflicts: bool, prompt_cleanup_empty_conflicts: bool) -> None:
+    """Reuse the expected network or create it without hiding subnet conflicts."""
+    name = f"{plan.deployment_id}-{machine.id}"
+    subnet = plan.docker_subnets[machine.id]
+    existing = executor.run(("docker", "network", "inspect", name, "--format", "{{range .IPAM.Config}}{{.Subnet}}{{end}}"))
+    if existing.returncode == 0:
+        actual = existing.stdout.strip()
+        if actual != subnet:
+            raise ApplyError(
+                f"Docker network {name!r} already exists with subnet {actual or 'unknown'}, "
+                f"but this inventory requires {subnet}; remove or reconcile that deployment explicitly"
+            )
+        return
+
+    created = executor.run(("docker", "network", "create", "--driver", "bridge", "--subnet", subnet, name))
+    if created.returncode == 0:
+        return
+    conflicts = _network_conflicts(executor, subnet)
+    removable = [item for item in conflicts if item[2] == 0]
+    occupied = [item for item in conflicts if item[2] != 0]
+    should_clean = clean_empty_conflicts
+    if not should_clean and prompt_cleanup_empty_conflicts and removable and not occupied:
+        names = ", ".join(item[0] for item in removable)
+        answer = input(
+            f"Docker subnet {subnet} is blocked by empty network(s): {names}. "
+            "Remove them and continue? [y/N]: "
+        ).strip().lower()
+        should_clean = answer in {"y", "yes"}
+    if should_clean and removable and not occupied:
+        for conflict_name, _, _ in removable:
+            _require(executor.run(("docker", "network", "rm", conflict_name)), f"remove empty conflicting network {conflict_name}")
+        _require(executor.run(("docker", "network", "create", "--driver", "bridge", "--subnet", subnet, name)), f"create network {machine.id}")
+        return
+    details = ", ".join(f"{conflict_name} ({conflict_subnet}, containers={count if count >= 0 else 'unknown'})" for conflict_name, conflict_subnet, count in conflicts)
+    hint = ""
+    if removable and not occupied:
+        hint = " Re-run with --clean-empty-network-conflicts to remove only these empty conflicting networks."
+    raise ApplyError(
+        f"create network {machine.id}: Docker subnet {subnet} conflicts with "
+        f"{details or 'an existing Docker network'}.{hint}"
+    )
 
 
 def _ignore_source_entries(directory: str, names: list[str]) -> set[str]:
@@ -173,12 +241,16 @@ def _distribute_chain_artifact(plan, project_root: Path) -> dict[str, dict[str, 
     return delivered
 
 
-def _apply_service(plan, machine, service, root, bundle, *, verbose=False):
+def _apply_service(plan, machine, service, root, bundle, *, verbose=False, clean_empty_network_conflicts=False, prompt_cleanup_empty_network_conflicts=False):
     executor = resolve_executor(machine); directory = _compose_directory(plan, machine, root, service.id)
     if not directory.exists() and not isinstance(executor, SshExecutor): directory = _stage(machine, Path.cwd(), root, bundle / "machines" / machine.id)
-    network=f"{plan.deployment_id}-{machine.id}"
-    if executor.run(("docker", "network", "inspect", network)).returncode:
-        _require(executor.run(("docker", "network", "create", "--driver", "bridge", "--subnet", plan.docker_subnets[machine.id], network)), f"create network {machine.id}")
+    _ensure_machine_network(
+        plan,
+        machine,
+        executor,
+        clean_empty_conflicts=clean_empty_network_conflicts,
+        prompt_cleanup_empty_conflicts=prompt_cleanup_empty_network_conflicts,
+    )
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id), str(Path(machine.secrets_root)))), f"prepare data for {machine.id}")
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id / "contracts"))), f"prepare contract runtime for {machine.id}")
     if service.type in {"besu-rpc", "besu-validator"}:
@@ -254,7 +326,7 @@ def _apply_service(plan, machine, service, root, bundle, *, verbose=False):
         _require(executor.run((*compose, "up", "-d", "--build", service.id), timeout=1800), f"start {service.id}")
 
 
-def apply(plan, project_root: Path, *, resume=False, defer_verification=False, clean_chain_data=False, verbose=False):
+def apply(plan, project_root: Path, *, resume=False, defer_verification=False, clean_chain_data=False, clean_empty_network_conflicts=False, prompt_cleanup_empty_network_conflicts=False, verbose=False):
     root=run_root(project_root, plan.deployment_id)
     try:
         with deployment_lock(root):
@@ -299,7 +371,16 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                     if resume and status["services"].get(service.id) == "applied":
                         record(root,{"step":step.id,"state":"reused","service":service.id})
                     else:
-                        _apply_service(effective, effective.machine(service.machine_id), service, root, bundle, verbose=verbose)
+                        _apply_service(
+                            effective,
+                            effective.machine(service.machine_id),
+                            service,
+                            root,
+                            bundle,
+                            verbose=verbose,
+                            clean_empty_network_conflicts=clean_empty_network_conflicts,
+                            prompt_cleanup_empty_network_conflicts=prompt_cleanup_empty_network_conflicts,
+                        )
                         status["services"][service.id]="applied"; record(root,{"step":step.id,"state":"succeeded","service":service.id})
                 elif step.action == "readiness":
                     from .readiness import ReadinessError, wait_for_phase

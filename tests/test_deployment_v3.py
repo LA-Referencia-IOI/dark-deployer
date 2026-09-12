@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 
 from deployment_v3.inventory import InventoryError, load_inventory
@@ -15,12 +17,61 @@ from deployment_v3.planner import build_plan
 from deployment_v3.render import render_plan
 from deployment_v3.inventory_editor.textual_app import SECTIONS, SECTION_HELP
 from deployment_v3.inventory_resolver import OperatorInventoryError, resolve_inventory_path
+from deployment_v3.executor import CommandResult
+from deployment_v3 import runner as runner_module
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentV3Tests(unittest.TestCase):
+    def test_empty_overlapping_network_can_be_removed_only_when_requested(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.create_attempts = 0
+                self.removed = []
+
+            def run(self, argv, *, timeout=30):
+                command = tuple(argv)
+                if command[:3] == ("docker", "network", "ls"):
+                    return CommandResult(command, 0, "stale-local\n", "")
+                if command[:3] == ("docker", "network", "inspect") and command[3] == "new-local":
+                    return CommandResult(command, 1, "", "not found")
+                if command[:3] == ("docker", "network", "inspect") and command[3] == "stale-local":
+                    if command[-1] == "{{len .Containers}}":
+                        return CommandResult(command, 0, "0\n", "")
+                    return CommandResult(command, 0, "172.30.0.0/24\n", "")
+                if command[:3] == ("docker", "network", "create"):
+                    self.create_attempts += 1
+                    return CommandResult(command, 1 if self.create_attempts == 1 else 0, "", "pool overlaps")
+                if command[:3] == ("docker", "network", "rm"):
+                    self.removed.append(command[3])
+                    return CommandResult(command, 0, command[3], "")
+                raise AssertionError(command)
+
+        executor = FakeExecutor()
+        plan = SimpleNamespace(deployment_id="new", docker_subnets={"local": "172.30.0.0/24"})
+        runner_module._ensure_machine_network(
+            plan,
+            SimpleNamespace(id="local"),
+            executor,
+            clean_empty_conflicts=True,
+            prompt_cleanup_empty_conflicts=False,
+        )
+        self.assertEqual(executor.removed, ["stale-local"])
+        self.assertEqual(executor.create_attempts, 2)
+
+        prompted = FakeExecutor()
+        with patch("builtins.input", return_value="y"):
+            runner_module._ensure_machine_network(
+                plan,
+                SimpleNamespace(id="local"),
+                prompted,
+                clean_empty_conflicts=False,
+                prompt_cleanup_empty_conflicts=True,
+            )
+        self.assertEqual(prompted.removed, ["stale-local"])
+
     def test_editor_exposes_v3_services_and_help(self):
         identifiers = tuple(identifier for identifier, _ in SECTIONS)
         self.assertIn("services", identifiers)

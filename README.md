@@ -4,6 +4,35 @@ Declarative deployment tooling for the dARK blockchain, application services,
 dashboard, and IPFS storage. The supported entry point is `deploy.py`; the
 single source of deployment configuration is a version 3 inventory JSON.
 
+## Start here
+
+Choose the inventory that matches the deployment you are building:
+
+| Goal | Recommended template | What it proves |
+| --- | --- | --- |
+| Fast local functional test | `operator-local-simple` | One storage peer and the end-to-end service path |
+| Local replication simulation | `operator-local-ha` | Two peers and five logical groups on one Docker host |
+| Standard production shape | `operator-production-five-host` | Five SSH hosts with explicit LAN/VPN routing |
+| Non-standard service layout | `examples/deployment-v3/` | Direct control of the full v3 execution inventory |
+
+Create, inspect, validate, plan, and install a compact inventory:
+
+```bash
+venv/bin/python deploy.py inventory-create \
+  --template operator-local-simple \
+  --output deployment-inventory.json
+venv/bin/python deploy.py inventory-resolve \
+  --inventory deployment-inventory.json \
+  --output resolved-inventory.json
+venv/bin/python deploy.py validate --inventory deployment-inventory.json
+venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
+venv/bin/python deploy.py install --inventory deployment-inventory.json
+```
+
+The complete, scenario-based procedure is in
+[OPERATIONS-MANUAL.md](OPERATIONS-MANUAL.md). Read it before applying an SSH
+inventory or creating a new blockchain network.
+
 ## Architecture
 
 The inventory describes hosts, named LAN/VPN networks, explicit inter-host
@@ -43,10 +72,10 @@ Never commit private keys or generated runtime files.
 python3.12 -m venv venv
 venv/bin/python -m pip install -r requirements.txt
 venv/bin/python deploy.py inventory-create --template local-ha \
-  --output deployment-topology.json
-venv/bin/python deploy.py validate --inventory deployment-topology.json
-venv/bin/python deploy.py plan --inventory deployment-topology.json
-venv/bin/python deploy.py install --inventory deployment-topology.json
+  --output deployment-inventory.json
+venv/bin/python deploy.py validate --inventory deployment-inventory.json
+venv/bin/python deploy.py plan --inventory deployment-inventory.json
+venv/bin/python deploy.py install --inventory deployment-inventory.json
 ```
 
 `install` acquires component repositories, records the resolved commits,
@@ -65,27 +94,46 @@ existing `blockchain/master-wallet.txt`.
 
 ## Inventory and operations
 
+The operator inventory is intentionally small: it declares machines,
+group-to-machine placement, blockchain identity, storage peers and replication,
+networks and routing, operator access, secret sources, and typed overrides.
+The catalogue derives service instances, connections, secret consumers, and
+private endpoint exposure. Use `inventory-explain` to see why a resolved field
+exists; use `inventory-diff` before applying a configuration change.
+
 The optional Textual editor provides structured editing without exposing secret
 contents:
 
 ```bash
 venv/bin/python -m pip install -r requirements-tui.txt
-venv/bin/python deploy.py inventory-edit --inventory deployment-topology.json
+venv/bin/python deploy.py inventory-edit --inventory deployment-inventory.json
 ```
 
 See [explicit service placement](docs/deployment-v3-service-placement.md) for
 the service graph, endpoint derivation, and the intentional Minter co-location
 constraint.
 
+## Documentation map
+
+| Need | Document |
+| --- | --- |
+| Install, configure, recover, and verify | [Operations manual](OPERATIONS-MANUAL.md) |
+| CLI, inventory formats, and safety model | [Deployer reference](docs/deployer.md) |
+| v3 graph, endpoints, bundles, and artifacts | [Inventory and artifact flow](docs/deployment-v3-inventory-and-artifact-flow.md) |
+| Compact-format rationale and catalogue design | [Operator inventory design](docs/deployment-v3-operator-inventory-proposal.md) |
+| Runtime architecture and ARK lifecycle | [Architecture](docs/architecture.md) |
+| Lima five-host acceptance environment | [Lima guide](docs/lima-five-host-test.md) |
+| Historical decisions and superseded procedures | [Historical material](docs/history.md) |
+
 The lifecycle commands are:
 
 ```bash
-venv/bin/python deploy.py validate --inventory deployment-topology.json
-venv/bin/python deploy.py render --inventory deployment-topology.json
-venv/bin/python deploy.py preflight --inventory deployment-topology.json
-venv/bin/python deploy.py apply --inventory deployment-topology.json
-venv/bin/python deploy.py status --inventory deployment-topology.json
-venv/bin/python deploy.py verify --inventory deployment-topology.json
+venv/bin/python deploy.py validate --inventory deployment-inventory.json
+venv/bin/python deploy.py render --inventory deployment-inventory.json
+venv/bin/python deploy.py preflight --inventory deployment-inventory.json
+venv/bin/python deploy.py apply --inventory deployment-inventory.json
+venv/bin/python deploy.py status --inventory deployment-inventory.json
+venv/bin/python deploy.py verify --inventory deployment-inventory.json
 ```
 
 For remote inventories, `push` transfers public bundles and `apply` executes
@@ -94,7 +142,7 @@ continuing. Rebuild
 one service without restarting other services on its machine with:
 
 ```bash
-venv/bin/python deploy.py recreate --inventory deployment-topology.json \
+venv/bin/python deploy.py recreate --inventory deployment-inventory.json \
   --service dashboard --build
 ```
 

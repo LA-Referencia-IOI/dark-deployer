@@ -475,7 +475,7 @@ The storage layer handles all content-addressed metadata blobs. It is composed o
 **Key configuration:**
 - **Consensus**: CRDT (no leader election, eventually consistent)
 - **Replication**: configurable min/max factors (`CLUSTER_REPLICATION_MIN`/`MAX`, defaults 2/3)
-- **Startup order**: Kubo first, then its Cluster peer; bootstrap and peer discovery use generated topology values
+- **Startup order**: Kubo first, then its Cluster peer; bootstrap and peer discovery use generated inventory values
 - **CID version**: CIDv1 for all new content (`cid-version=1` on `/api/v0/add`)
 
 ### 7.2 `dark-store-api` — Storage Abstraction API

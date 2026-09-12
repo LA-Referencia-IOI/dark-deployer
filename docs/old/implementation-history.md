@@ -15,7 +15,7 @@ Este documento resume los cambios acumulados durante la actualización de la pla
 
 ## Deployer y topología
 
-El repositorio padre concentra la configuración por ramas, la generación de entornos y el inventario `deployment-topology.json`. Ese inventario es la fuente de verdad para hosts, peers IPFS/Cluster y réplicas; los entornos conservan únicamente el perfil, el selector local y los secretos. El instalador valida selectores, peers, direcciones y el mínimo de réplicas, genera `.env.integration` y aplica las ramas configuradas con fallback controlado a `main`.
+El repositorio padre concentra la configuración por ramas, la generación de entornos y el inventario de despliegue. Ese inventario es la fuente de verdad para hosts, peers IPFS/Cluster y réplicas; los entornos conservan únicamente el perfil, el selector local y los secretos. El instalador valida selectores, peers, direcciones y el mínimo de réplicas, genera `.env.integration` y aplica las ramas configuradas con fallback controlado a `main`.
 
 La documentación consolidada cubre operación del instalador, despliegue de producción, arquitectura IPFS, resolución de timeouts y el contrato de configuración. Los artefactos de ejecución locales, notebooks generados y directorios de build no forman parte de estos commits.
 

@@ -56,6 +56,11 @@ def _parser() -> argparse.ArgumentParser:
                                  help="reuse existing component checkouts instead of cloning/updating them")
             command.add_argument("--verbose", action="store_true",
                                  help="show detailed installation progress and readiness attempts")
+            command.add_argument("--clean-empty-network-conflicts", action="store_true",
+                                 help="remove only empty Docker bridge networks that overlap the requested deployment subnet")
+        if name in {"apply", "resume"}:
+            command.add_argument("--clean-empty-network-conflicts", action="store_true",
+                                 help="remove only empty Docker bridge networks that overlap the requested deployment subnet")
         if name == "recreate":
             command.add_argument("--service", required=True)
             command.add_argument("--build", action="store_true")
@@ -263,7 +268,16 @@ def _install(args: argparse.Namespace, plan) -> None:
             raise ApplyError("installation cancelled: existing Besu data was preserved")
         clean_chain_data = True
     progress("applying rendered deployment")
-    output = apply(plan, project_root, resume=args.resume, defer_verification=True, clean_chain_data=clean_chain_data, verbose=args.verbose)
+    output = apply(
+        plan,
+        project_root,
+        resume=args.resume,
+        defer_verification=True,
+        clean_chain_data=clean_chain_data,
+        clean_empty_network_conflicts=args.clean_empty_network_conflicts,
+        prompt_cleanup_empty_network_conflicts=not args.yes and not args.non_interactive,
+        verbose=args.verbose,
+    )
     progress("running final verification")
     report = _verify_with_retries(plan, project_root, verbose=args.verbose)
     _write_install_report(root, report, resumed=args.resume)
@@ -421,7 +435,12 @@ def main() -> None:
             return
         if args.action in {"apply", "resume"}:
             project_root = Path(__file__).resolve().parents[1]
-            output = apply(plan, project_root, resume=args.action == "resume")
+            output = apply(
+                plan,
+                project_root,
+                resume=args.action == "resume",
+                clean_empty_network_conflicts=args.clean_empty_network_conflicts,
+            )
             print(f"[OK] {'Resumed' if args.action == 'resume' else 'Applied'} deployment from {output}")
             return
         if args.action == "status":
