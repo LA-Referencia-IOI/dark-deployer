@@ -8,7 +8,7 @@ from pathlib import Path
 from .executor import resolve_executor
 from .runner import _compose_directory, _compose_project, _effective_plan, _machine_directory
 from .state import record, run_root, write_status
-from .readiness import _host_url, _curl, ReadinessError
+from .readiness import _host_url, _curl, store_health_probe, ReadinessError
 
 
 class VerifyError(RuntimeError):
@@ -95,7 +95,7 @@ def verify(plan, project_root: Path) -> dict:
     store_machine = effective.machine(store.machine_id)
     # The Store root deliberately returns 404; verify its write-readiness
     # aggregate and refresh the Cluster peer observation, as v2 did.
-    _append(report, store, "health", _curl(effective, store_machine, _store_health_url(store, store_machine)))
+    _append(report, store, "health", store_health_probe(effective, store_machine, root, store, refresh=True))
     worker_kind_cmd = {
         "metadata": "tr '\\0' ' ' < /proc/1/cmdline | grep -q metadata",
         "replication": "tr '\\0' ' ' < /proc/1/cmdline | grep -q replication",

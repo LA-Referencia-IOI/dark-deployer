@@ -33,7 +33,7 @@
       },
       "ssh": {
         "user": "lmatas",
-        "port": 53775,
+        "port": 56957,
         "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
         "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
       },
@@ -51,7 +51,7 @@
       },
       "ssh": {
         "user": "lmatas",
-        "port": 53789,
+        "port": 56967,
         "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
         "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
       },
@@ -69,7 +69,7 @@
       },
       "ssh": {
         "user": "lmatas",
-        "port": 53801,
+        "port": 56976,
         "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
         "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
       },
@@ -87,7 +87,7 @@
       },
       "ssh": {
         "user": "lmatas",
-        "port": 53814,
+        "port": 56985,
         "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
         "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
       },
@@ -105,7 +105,7 @@
       },
       "ssh": {
         "user": "lmatas",
-        "port": 53822,
+        "port": 56995,
         "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
         "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
       },

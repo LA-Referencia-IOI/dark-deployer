@@ -47,6 +47,23 @@ class DeploymentV3Tests(unittest.TestCase):
             copied = bundle / "machines" / service.machine_id / "groups" / "apps" / "artifacts" / "contracts"
             self.assertEqual(sorted(item.name for item in copied.iterdir()), sorted(item.name for item in artifacts.iterdir()))
 
+    def test_dashboard_uses_managed_runtime_mounts_shared_with_migration(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
+        machine = plan.machine("apps")
+        group = next(item for item in plan.groups if item.id == "apps")
+        services = tuple(plan.service(identifier) for identifier in group.service_ids)
+        spec = compose_document(plan, machine, services, "apps")
+        managed_runtime = {
+            f"{machine.data_root}/{plan.deployment_id}/dashboard/vendor:/var/www/app/vendor",
+            f"{machine.data_root}/{plan.deployment_id}/dashboard/storage:/var/www/app/storage",
+            f"{machine.data_root}/{plan.deployment_id}/dashboard/bootstrap-cache:/var/www/app/bootstrap/cache",
+        }
+        for service_id in ("dashboard", "dashboard-migrate"):
+            volumes = spec["services"][service_id]["volumes"]
+            self.assertTrue(managed_runtime.issubset(volumes))
+        migration = spec["services"]["dashboard-migrate"]
+        self.assertIn("php artisan optimize:clear", migration["command"][-1])
+
     def test_multihost_storage_renders_api_bootstrap_and_announced_p2p_endpoints(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
         with tempfile.TemporaryDirectory() as temporary:
@@ -378,6 +395,21 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(evidence, "Store API health is ready")
         self.assertEqual(calls, ["http://127.0.0.1:8003/health"])
+
+    def test_data_readiness_probes_unexposed_store_from_its_container(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
+        calls = []
+        original_run = readiness._run
+        try:
+            readiness._run = lambda _plan, _machine, _root, service_id, shell: calls.append((service_id, shell)) or type("Result", (), {"returncode": 0})()
+            ok, evidence = readiness.check_phase(plan, ROOT, "data")
+        finally:
+            readiness._run = original_run
+        self.assertTrue(ok)
+        self.assertEqual(evidence, "Store API health is ready")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "store-api")
+        self.assertIn("http://127.0.0.1:8003/health", calls[0][1])
 
     def test_verification_probes_store_health_not_root(self):
         plan = build_plan(ROOT / "examples" / "deployment-v3" / "local-ha.json")

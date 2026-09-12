@@ -99,9 +99,24 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
         elif service.type == "dashboard-redis":
             result[service.id] = {**common, "image": "redis:7-alpine", "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{service_data}:/data"]}
         elif service.type in {"dashboard", "dashboard-migrate"}:
-            item = {**common, "image": "ambientum/php:8.0-nginx", "env_file": env, "volumes": [f"{machine.workspace_root}/components/dashboard-web:/var/www/app"]}
+            # Composer runs as the image's unprivileged ``ambientum`` user.
+            # Keep its managed dependencies outside the synced component
+            # checkout so a host-owned development vendor tree cannot block
+            # production-style ``composer install --no-dev``.
+            dashboard_runtime = f"{data}/dashboard"
+            item = {
+                **common,
+                "image": "ambientum/php:8.0-nginx",
+                "env_file": env,
+                "volumes": [
+                    f"{machine.workspace_root}/components/dashboard-web:/var/www/app",
+                    f"{dashboard_runtime}/vendor:/var/www/app/vendor",
+                    f"{dashboard_runtime}/storage:/var/www/app/storage",
+                    f"{dashboard_runtime}/bootstrap-cache:/var/www/app/bootstrap/cache",
+                ],
+            }
             if service.type == "dashboard": item["ports"] = _ports(machine, service)
-            else: item["command"] = ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan migrate --force --seed"]
+            else: item["command"] = ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan optimize:clear && php artisan migrate --force --seed"]
             result[service.id] = item
         elif service.type == "ipfs-kubo":
             result[service.id] = {**common, "image": "ipfs/kubo:v0.41.0", "env_file": env, "ports": [*_ports(machine, service), *_ipfs_network_ports(plan, machine, service)], "volumes": [f"{machine.workspace_root}/components/dark-ipfs/scripts/ipfs-entrypoint.sh:/usr/local/bin/ipfs-entrypoint.sh:ro", f"{service_data}:/data/ipfs", f"{secret_path('ipfs-swarm-key')}:/run/secrets/ipfs-swarm-key:ro"], "entrypoint": ["/usr/local/bin/ipfs-entrypoint.sh"]}

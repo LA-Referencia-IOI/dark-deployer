@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import shlex
 import time
 from pathlib import Path
 
 from .executor import resolve_executor
 from .runner import _compose_directory, _compose_project, _effective_plan, _machine_directory
-from .network import endpoint_for, p2p_endpoint
+from .network import endpoint_for, internal_port, p2p_endpoint
 
 
 class ReadinessError(RuntimeError):
@@ -41,6 +42,22 @@ def _curl(plan, machine, url, payload: str | None = None):
         argv.extend(["-H", "Content-Type: application/json", "--data", payload])
     argv.append(url)
     return resolve_executor(machine).run(tuple(argv), timeout=15)
+
+
+def store_health_probe(plan, machine, root, service, *, refresh: bool = False):
+    """Probe Store without requiring an unnecessary host-published port.
+
+    Store is normally consumed only by application containers on the same
+    Docker host. In that topology it deliberately has no ``exposure``. Run
+    the HTTP request inside its Python image instead of opening a host port
+    solely for deployment readiness.
+    """
+    path = "/health?refresh=true" if refresh else "/health"
+    if service.exposure and service.exposure.get("mode") != "none":
+        return _curl(plan, machine, _host_url(service, machine) + path)
+    url = f"http://127.0.0.1:{internal_port(service)}{path}"
+    command = "import urllib.request; urllib.request.urlopen(" + repr(url) + ", timeout=5).read()"
+    return _run(plan, machine, root, service.id, "python -c " + shlex.quote(command))
 
 
 def _rpc(plan, root):
@@ -173,7 +190,7 @@ def check_phase(plan, project_root: Path, phase: str) -> tuple[bool, str]:
         # Store's root is intentionally not a health endpoint (it returns
         # 404).  Probe the compatibility health aggregate, as the v2 runner
         # did, so a live Store is not misclassified during data readiness.
-        result = _curl(effective, effective.machine(store.machine_id), _host_url(store, effective.machine(store.machine_id)) + "/health")
+        result = store_health_probe(effective, effective.machine(store.machine_id), root, store)
         return result.returncode == 0, "Store API health is ready" if result.returncode == 0 else "Store API health did not respond"
     if phase == "applications":
         return True, "application containers started; final verify performs HTTP and worker probes"
