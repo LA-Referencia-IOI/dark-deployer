@@ -16,9 +16,57 @@ from .render import render_plan
 from .secrets import SecretError, distribute_secrets
 from .state import StateLockError, deployment_lock, record, run_root, write_status
 from .sources import SourceError, source_evidence
+from .artifacts import ArtifactError, verify_artifact_compatibility, verify_artifact_manifest
 
 
 class ApplyError(RuntimeError): pass
+
+
+def persistent_data_inventory(plan: DeploymentPlan) -> list[tuple[str, bool]]:
+    """Return all managed persistent paths and whether they contain data."""
+    inventory = []
+    persistent_types = {
+        "besu-rpc", "besu-validator", "ipfs-kubo", "ipfs-cluster",
+        "minter-postgres", "dashboard-mysql", "dashboard-redis", "contracts-deploy",
+    }
+    for service in plan.services:
+        if service.type not in persistent_types:
+            continue
+        machine = plan.machine(service.machine_id)
+        data = Path(machine.data_root) / plan.deployment_id / service.id
+        probe = resolve_executor(machine).run(("sh", "-lc", f"if [ -d {shlex.quote(str(data))} ] && find {shlex.quote(str(data))} -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then printf present; fi"), timeout=20)
+        if probe.returncode == 0 and probe.stdout.strip() == "present":
+            inventory.append((f"{machine.id}:{service.id}:{service.type}:{data}", probe.returncode == 0 and probe.stdout.strip() == "present"))
+    return inventory
+
+
+def existing_chain_data(plan: DeploymentPlan) -> list[str]:
+    """Return non-empty persistent service directories for the deployment."""
+    return [item for item, present in persistent_data_inventory(plan) if present]
+
+
+def _reject_existing_chain_data(plan: DeploymentPlan, *, resume: bool, clean: bool = False) -> None:
+    """Prevent a normal install from mixing a new artifact with old Besu data."""
+    if resume:
+        return
+    existing = existing_chain_data(plan)
+    if existing:
+        if clean:
+            for item in existing:
+                machine_id, _, _, raw_path = item.split(":", 3)
+                machine = plan.machine(machine_id)
+                _require(resolve_executor(machine).run(("rm", "-rf", raw_path)), f"clean Besu data for {machine_id}")
+            contract = next((item for item in plan.services if item.type == "contracts-deploy"), None)
+            if contract:
+                machine = plan.machine(contract.machine_id)
+                runtime = Path(machine.data_root) / plan.deployment_id / "contracts"
+                _require(resolve_executor(machine).run(("rm", "-rf", str(runtime))), f"clean contract runtime for {machine.id}")
+            return
+        raise ApplyError(
+            "persistent deployment data already exists for a normal install: "
+            + ", ".join(existing)
+            + "; use --resume with the original deployment, or explicitly recreate/clean this deployment"
+        )
 
 
 def _require(result, description):
@@ -93,6 +141,11 @@ def _distribute_chain_artifact(plan, project_root: Path) -> dict[str, dict[str, 
     source = Path(source_ref)
     if not source.is_absolute(): source = project_root / source
     if not source.is_dir(): raise ApplyError(f"blockchain artifact source is not a directory: {source}")
+    try:
+        verify_artifact_manifest(source)
+        verify_artifact_compatibility(plan, source)
+    except ArtifactError as exc:
+        raise ApplyError(f"chain artifact validation failed: {exc}") from exc
     delivered: dict[str, dict[str, str]] = {}
     for service in (item for item in plan.services if item.type in {"besu-rpc", "besu-validator"}):
         machine = plan.machine(service.machine_id)
@@ -187,7 +240,7 @@ def _apply_service(plan, machine, service, root, bundle):
         _require(executor.run((*compose, "up", "-d", "--build", service.id), timeout=1800), f"start {service.id}")
 
 
-def apply(plan, project_root: Path, *, resume=False, defer_verification=False):
+def apply(plan, project_root: Path, *, resume=False, defer_verification=False, clean_chain_data=False):
     root=run_root(project_root, plan.deployment_id)
     try:
         with deployment_lock(root):
@@ -215,6 +268,7 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False):
             artifacts = _distribute_chain_artifact(effective, project_root)
             status["chain_artifacts"] = artifacts
             record(root, {"state": "chain_artifacts_distributed", "machines": sorted(artifacts)})
+            _reject_existing_chain_data(effective, resume=resume, clean=clean_chain_data)
             write_status(root, status)
             for machine in effective.machines:
                 _stage(machine, project_root, root, bundle / "machines" / machine.id)

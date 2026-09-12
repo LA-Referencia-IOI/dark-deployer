@@ -66,6 +66,26 @@ def verify_artifact_manifest(artifact_root: Path) -> dict[str, str]:
     return actual
 
 
+def verify_artifact_compatibility(plan: DeploymentPlan, artifact_root: Path, master_wallet_address: str | None = None) -> None:
+    """Ensure an artifact was generated for the current inventory topology."""
+    context_path = artifact_root / "chain-context.json"
+    if not context_path.exists():
+        raise ArtifactError(f"chain context missing: {context_path}; regenerate the artifact for this inventory")
+    try:
+        actual = json.loads(context_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ArtifactError(f"invalid chain context: {context_path}") from exc
+    expected = chain_context(plan, master_wallet_address or actual.get("master_wallet_address", ""))
+    if actual != expected:
+        differences = sorted({*actual.keys(), *expected.keys()})
+        changed = [key for key in differences if actual.get(key) != expected.get(key)]
+        detail = ", ".join(changed) or "unknown context difference"
+        raise ArtifactError(
+            f"chain artifact is incompatible with the current inventory ({detail}); "
+            "generate a new artifact or use the original inventory"
+        )
+
+
 def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
     if not _ADDRESS.fullmatch(master_wallet_address):
         raise ArtifactError("master wallet address must be a 20-byte hexadecimal address")

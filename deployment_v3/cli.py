@@ -15,8 +15,8 @@ from .inventory import InventoryError, load_inventory
 from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
-from .runner import ApplyError, apply, push, recreate_service
-from .artifacts import ArtifactError, export_chain_role, initialize_chain, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
+from .runner import ApplyError, _effective_plan, apply, existing_chain_data, persistent_data_inventory, push, recreate_service
+from .artifacts import ArtifactError, export_chain_role, initialize_chain, verify_artifact_compatibility, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
 from .sources import SourceError
@@ -221,13 +221,31 @@ def _install(args: argparse.Namespace, plan) -> None:
             initialize_chain(plan, artifact_root, address)
         else:
             verify_artifact_manifest(artifact_root)
+            verify_artifact_compatibility(plan, artifact_root, args.master_wallet_address)
     # A fresh install must not reuse a bundle rendered by an earlier code
     # version. Persistent service data remains untouched; only the generated
     # public Compose/config bundle is rebuilt.
     bundle = root / "bundle"
     if bundle.exists() and not args.resume:
         shutil.rmtree(bundle)
-    output = apply(plan, project_root, resume=args.resume, defer_verification=True)
+    effective_for_data = _effective_plan(plan, project_root, root)
+    existing = existing_chain_data(effective_for_data)
+    clean_chain_data = False
+    if existing and not args.resume:
+        print("[WARNING] Existing persistent deployment data found:")
+        print("Managed persistent directories:")
+        all_data = persistent_data_inventory(effective_for_data)
+        for index, (item, present) in enumerate(all_data, start=1):
+            machine, service, service_type, path = item.split(":", 3)
+            state = "EXISTS - will be deleted" if present else "does not exist - nothing to delete"
+            print(f"  {index}. {machine} / {service} ({service_type}) [{state}]")
+            print(f"     {path}")
+        print("This affects only the selected deployment's persistent data.")
+        answer = input("Proceed with this cleanup and create a fresh deployment? [y/N]: ").strip().lower()
+        if answer not in {"y", "yes"}:
+            raise ApplyError("installation cancelled: existing Besu data was preserved")
+        clean_chain_data = True
+    output = apply(plan, project_root, resume=args.resume, defer_verification=True, clean_chain_data=clean_chain_data)
     report = _verify_with_retries(plan, project_root)
     _write_install_report(root, report, resumed=args.resume)
     print(json.dumps(report, indent=2, sort_keys=True))
