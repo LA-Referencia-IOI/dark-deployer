@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .executor import resolve_executor
 from .runner import _compose_directory, _compose_project, _effective_plan, _machine_directory
+from .network import endpoint_for, p2p_endpoint
 
 
 class ReadinessError(RuntimeError):
@@ -124,7 +125,15 @@ def _cluster_topology(plan, root, cluster) -> tuple[bool, str]:
             return False, f"{service.id} returned invalid Cluster membership JSON: {exc}"
         problem = _cluster_membership_problem(expected_names, peers)
         if problem:
-            return False, f"{service.id}: {problem}"
+            routes = []
+            network = plan.raw["infrastructure"]["cluster"]["network"]
+            for peer in cluster:
+                if peer.id == service.id or peer.machine_id == service.machine_id:
+                    continue
+                address, port = p2p_endpoint(plan.machine(peer.machine_id), peer, network, plan.raw["infrastructure"]["cluster"]["p2p_port"])
+                routes.append(f"{service.id}->{peer.id} {address}:{port}")
+            suffix = "; expected P2P route(s): " + ", ".join(routes) if routes else ""
+            return False, f"{service.id}: {problem}{suffix}"
     return True, f"IPFS Cluster converged with all declared peers: {', '.join(sorted(expected_names))}"
 
 
@@ -149,6 +158,15 @@ def check_phase(plan, project_root: Path, phase: str) -> tuple[bool, str]:
             result = _run(effective, effective.machine(service.machine_id), root, service.id, cmd)
             if result.returncode:
                 return False, f"{service.id} did not answer its local peer probe"
+        for consumer in cluster:
+            for provider in cluster:
+                if provider.machine_id == consumer.machine_id:
+                    continue
+                connection = {"service": provider.id, "network": plan.raw["infrastructure"]["cluster"]["network"]}
+                endpoint = endpoint_for(provider, plan.machine(provider.machine_id), plan.machine(consumer.machine_id), connection)
+                result = _curl(effective, effective.machine(consumer.machine_id), endpoint.url + "/id")
+                if result.returncode:
+                    return False, f"{consumer.id} cannot reach {provider.id} Cluster API at {endpoint.url}"
         return _cluster_topology(effective, root, cluster)
     if phase == "data":
         store = next(item for item in effective.services if item.type == "store-api")

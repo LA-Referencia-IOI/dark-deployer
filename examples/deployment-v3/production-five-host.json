@@ -155,11 +155,6 @@
     "store-api": {
       "type": "store-api",
       "machine": "apps",
-      "exposure": {
-        "mode": "private",
-        "port": 8003,
-        "network": "vpn"
-      },
       "connections": {
         "cluster_cluster-storage-a": {
           "service": "cluster-storage-a",
@@ -192,11 +187,6 @@
         "migration": {
           "service": "minter-migrate"
         }
-      },
-      "exposure": {
-        "mode": "private",
-        "port": 8001,
-        "network": "vpn"
       }
     },
     "metadata-worker": {
@@ -281,11 +271,6 @@
         "contracts": {
           "service": "contracts-deploy"
         }
-      },
-      "exposure": {
-        "mode": "private",
-        "port": 8000,
-        "network": "vpn"
       }
     },
     "resolver-api": {
@@ -301,11 +286,6 @@
         "contracts": {
           "service": "contracts-deploy"
         }
-      },
-      "exposure": {
-        "mode": "private",
-        "port": 8002,
-        "network": "vpn"
       }
     },
     "dashboard-mysql": {

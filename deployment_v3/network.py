@@ -10,7 +10,7 @@ from .model import Endpoint, Machine, ServiceInstance
 DEFAULT_PORTS = {
     "besu-rpc": 8545, "admin-api": 8000, "minter-api": 8001,
     "resolver-api": 8002, "store-api": 8003, "dashboard": 8080,
-    "explorer": 80, "ipfs-kubo": 5001, "ipfs-cluster": 9094,
+    "explorer": 80, "edge-proxy": 80, "ipfs-kubo": 5001, "ipfs-cluster": 9094,
     "minter-postgres": 5432, "dashboard-mysql": 3306,
     "dashboard-redis": 6379,
 }
@@ -21,7 +21,11 @@ def allocate_docker_subnets(machines: tuple[Machine, ...], raw: dict) -> dict[st
     prefix = raw["defaults"]["docker"]["subnet_prefix"]
     candidates = iter(pool.subnets(new_prefix=prefix))
     allocated: dict[str, str] = {}
-    physical = [ipaddress.ip_network(item["cidr"]) for item in raw["networks"].values()]
+    physical = [
+        ipaddress.ip_network(cidr)
+        for item in raw["networks"].values()
+        for cidr in (item.get("cidrs") or [item["cidr"]])
+    ]
     for machine in sorted(machines, key=lambda item: item.id):
         network = ipaddress.ip_network(machine.docker_subnet) if machine.docker_subnet else next(candidates, None)
         if network is None or any(network.overlaps(item) for item in physical) or any(network.overlaps(ipaddress.ip_network(value)) for value in allocated.values()):
@@ -42,7 +46,13 @@ def endpoint_for(service: ServiceInstance, provider: Machine, consumer: Machine,
     network = connection.get("network")
     if not network or service.exposure.get("network") != network:
         raise InventoryError(f"deployment topology v3: {service.id} must expose on the selected connection network")
-    return Endpoint(service.id, provider.address_on(network), int(service.exposure["port"]), "private", network)
+    return Endpoint(
+        service.id,
+        str(service.exposure.get("advertise_address") or provider.address_on(network)),
+        int(service.exposure.get("advertise_port") or service.exposure["port"]),
+        "private",
+        network,
+    )
 
 
 def derive_endpoints(machines: tuple[Machine, ...], services: tuple[ServiceInstance, ...], raw: dict) -> tuple[Endpoint, ...]:
@@ -66,13 +76,27 @@ def host_bind_address(machine: Machine, exposure: dict | None) -> str | None:
     return machine.address_on(exposure["network"])
 
 
+def p2p_endpoint(machine: Machine, service: ServiceInstance, network_id: str, default_port: int) -> tuple[str, int]:
+    """Return the address peers should dial, distinct from Docker's bind IP."""
+    exposure = service.exposure or {}
+    host = str(exposure.get("advertise_address") or machine.address_on(network_id))
+    port = int(service.configuration.get("p2p_advertise_port", default_port))
+    return host, port
+
+
+def has_remote_peer(plan, service_types: set[str]) -> bool:
+    """Whether a peer family crosses a Docker host boundary."""
+    return len({service.machine_id for service in plan.services if service.type in service_types}) > 1
+
+
 def chain_node_addresses(plan) -> dict[str, str]:
-    """Use stable Docker addresses locally and private host addresses remotely."""
+    """Use Docker addresses only when every Besu node shares one host."""
     result = {}
+    remote = has_remote_peer(plan, {"besu-rpc", "besu-validator"})
     for index, service in enumerate((item for item in plan.services if item.type in {"besu-rpc", "besu-validator"}), start=10):
         machine = plan.machine(service.machine_id)
         node_id = service.configuration["node_id"]
-        if machine.execution == "local":
+        if not remote:
             subnet = ipaddress.ip_network(plan.docker_subnets[machine.id])
             result[node_id] = str(subnet.network_address + index)
         else:
@@ -80,3 +104,19 @@ def chain_node_addresses(plan) -> dict[str, str]:
             # policy. The validator rejects absent addresses before rendering.
             result[node_id] = machine.address_on(plan.raw["infrastructure"]["besu"]["network"])
     return result
+
+
+def chain_node_ports(plan) -> dict[str, int]:
+    """Return the host P2P port each Besu node announces to remote peers."""
+    start = int(plan.raw["infrastructure"]["besu"]["p2p_port_start"])
+    nodes = ("validator01", "validator02", "validator03", "validator04", "rpc01")
+    remote = has_remote_peer(plan, {"besu-rpc", "besu-validator"})
+    by_node = {
+        service.configuration["node_id"]: service
+        for service in plan.services
+        if service.type in {"besu-rpc", "besu-validator"}
+    }
+    return {
+        node: int(by_node[node].configuration.get("p2p_advertise_port", start + index if remote else 30303))
+        for index, node in enumerate(nodes)
+    }

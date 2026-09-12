@@ -24,5 +24,23 @@ exposures, secret consumers, and v3 groups. Review the resolved output or run
 `validate` are safe offline inspection commands; `install`, `push`, and
 `apply` are operational actions.
 
+`routes` declares a directional route already provided by the site network;
+it does not configure a router or firewall. `networking.services` is reserved
+for endpoints that differ from their bind address, such as NAT:
+
+```json
+"routes": [{"from": "apps-lan", "to": "storage-vpn", "via": "site-vpn"}],
+"networking": {
+  "services": {
+    "rpc01": {"advertise_address": "203.0.113.20", "advertise_port": 18545},
+    "ipfs-storage-a": {"p2p_advertise_port": 4101}
+  }
+}
+```
+
+API advertise fields require a private endpoint derived from a remote
+dependency. `p2p_advertise_port` is available only to Besu, Kubo and Cluster;
+the rendered Compose port mapping and Besu chain artifact use the same value.
+
 For the complete workflow and examples of local, HA, remote, storage, routing,
 and override configuration, see [the operations manual](../../OPERATIONS-MANUAL.md).

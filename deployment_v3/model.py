@@ -66,6 +66,11 @@ class Network:
     id: str
     kind: Literal["lan", "vpn"]
     cidr: str
+    cidrs: tuple[str, ...] = ()
+
+    def contains(self, address: str) -> bool:
+        import ipaddress
+        return any(ipaddress.ip_address(address) in ipaddress.ip_network(cidr) for cidr in (self.cidrs or (self.cidr,)))
 
 
 @dataclass(frozen=True)

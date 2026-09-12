@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 from .model import DeploymentPlan, Machine, ServiceInstance
-from .network import endpoint_for
+from .network import endpoint_for, has_remote_peer, p2p_endpoint
 from .services import compose_document
 from .inventory_resolver import resolve_inventory_path
 
@@ -93,14 +93,17 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
                 bootstrap.append(f"/dns4/{peer.id}/tcp/{plan.raw['infrastructure']['ipfs']['api_port']}")
             else:
                 machine = plan.machine(peer.machine_id)
-                bootstrap.append(f"/ip4/{machine.address_on(network)}/tcp/{plan.raw['infrastructure']['ipfs']['api_port']}")
+                address, port = p2p_endpoint(machine, peer, network, plan.raw['infrastructure']['ipfs']['swarm_port'])
+                api_port = int((peer.exposure or {}).get("advertise_port") or plan.raw['infrastructure']['ipfs']['api_port'])
+                bootstrap.append(f"/ip4/{address}/tcp/{api_port}@{port}")
         kubo_services = sorted((item for item in plan.services if item.type == "ipfs-kubo"), key=lambda item: item.id)
         is_seed = kubo_services and service.id == kubo_services[0].id
-        if plan.machine(service.machine_id).execution == "local":
+        if not has_remote_peer(plan, {"ipfs-kubo"}):
             announce = f"/dns4/{service.id}/tcp/{plan.raw['infrastructure']['ipfs']['swarm_port']}"
         else:
-            announce = f"/ip4/{plan.machine(service.machine_id).address_on(network)}/tcp/{plan.raw['infrastructure']['ipfs']['swarm_port']}"
-        values |= {"NODE_NAME": str(service.configuration["peer_name"]), "IPFS_SWARM_KEY_FILE": "/run/secrets/ipfs-swarm-key", "IPFS_BOOTSTRAP_MULTIADDRESSES": " ".join(bootstrap), "IPFS_ANNOUNCE_MULTIADDRESS": announce, "CLUSTER_SEED": "true" if is_seed else "false"}
+            address, port = p2p_endpoint(plan.machine(service.machine_id), service, network, plan.raw['infrastructure']['ipfs']['swarm_port'])
+            announce = f"/ip4/{address}/tcp/{port}"
+        values |= {"NODE_NAME": str(service.configuration["peer_name"]), "IPFS_SWARM_KEY_FILE": "/run/secrets/ipfs-swarm-key", "IPFS_BOOTSTRAP_ENDPOINTS": " ".join(bootstrap), "IPFS_BOOTSTRAP_P2P_PORT": str(plan.raw["infrastructure"]["ipfs"]["swarm_port"]), "IPFS_ANNOUNCE_MULTIADDRESS": announce, "CLUSTER_SEED": "true" if is_seed else "false"}
     elif service.type == "ipfs-cluster":
         peers = [item for item in plan.services if item.type == "ipfs-cluster" and item.id != service.id]
         network = plan.raw["infrastructure"]["cluster"]["network"]
@@ -109,10 +112,18 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
             if peer.machine_id == service.machine_id:
                 bootstrap.append(f"/dns4/{peer.id}/tcp/{plan.raw['infrastructure']['cluster']['api_port']}")
             else:
-                bootstrap.append(f"/ip4/{plan.machine(peer.machine_id).address_on(network)}/tcp/{plan.raw['infrastructure']['cluster']['api_port']}")
+                machine = plan.machine(peer.machine_id)
+                address, port = p2p_endpoint(machine, peer, network, plan.raw['infrastructure']['cluster']['p2p_port'])
+                api_port = int((peer.exposure or {}).get("advertise_port") or plan.raw['infrastructure']['cluster']['api_port'])
+                bootstrap.append(f"/ip4/{address}/tcp/{api_port}@{port}")
         cluster_services = sorted((item for item in plan.services if item.type == "ipfs-cluster"), key=lambda item: item.id)
         is_seed = cluster_services and service.id == cluster_services[0].id
-        values |= {"CLUSTER_PEERNAME": str(service.configuration["peer_name"]), "IPFS_DARK_NET_ALIAS": service.connections["kubo"]["service"], "CLUSTER_SECRET_FILE": "/run/secrets/ipfs-cluster-secret", "CLUSTER_BOOTSTRAP_MULTIADDRESSES": " ".join(bootstrap), "CLUSTER_SEED": "true" if is_seed else "false"}
+        if not has_remote_peer(plan, {"ipfs-cluster"}):
+            announce = f"/dns4/{service.id}/tcp/{plan.raw['infrastructure']['cluster']['p2p_port']}"
+        else:
+            address, port = p2p_endpoint(plan.machine(service.machine_id), service, network, plan.raw['infrastructure']['cluster']['p2p_port'])
+            announce = f"/ip4/{address}/tcp/{port}"
+        values |= {"CLUSTER_PEERNAME": str(service.configuration["peer_name"]), "IPFS_DARK_NET_ALIAS": service.connections["kubo"]["service"], "CLUSTER_SECRET_FILE": "/run/secrets/ipfs-cluster-secret", "CLUSTER_BOOTSTRAP_ENDPOINTS": " ".join(bootstrap), "CLUSTER_BOOTSTRAP_P2P_PORT": str(plan.raw["infrastructure"]["cluster"]["p2p_port"]), "CLUSTER_ANNOUNCE_MULTIADDRESS": announce, "CLUSTER_SEED": "true" if is_seed else "false"}
     elif service.type == "explorer":
         values |= {"RPC_HTTP_URL": connection("rpc")}
     elif service.type == "contracts-deploy":

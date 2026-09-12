@@ -197,14 +197,45 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
     for network_id, definition in _object(raw["networks"], "networks").items():
         _identifier(network_id, f"networks.{network_id}")
         definition = _object(definition, f"networks.{network_id}")
-        _only_keys(definition, f"networks.{network_id}", {"kind", "cidr", "interface"})
+        _only_keys(definition, f"networks.{network_id}", {"kind", "cidr", "cidrs", "interface"})
         kind = definition.get("kind")
         if kind not in {"lan", "vpn"}:
             raise _error(f"networks.{network_id}.kind must be lan or vpn")
-        networks.append(Network(network_id, kind, _cidr(definition.get("cidr"), f"networks.{network_id}.cidr")))
+        has_cidr = "cidr" in definition
+        has_cidrs = "cidrs" in definition
+        if has_cidr == has_cidrs:
+            raise _error(f"networks.{network_id} must declare exactly one of cidr or cidrs")
+        if has_cidr:
+            cidrs = (_cidr(definition["cidr"], f"networks.{network_id}.cidr"),)
+        else:
+            values = definition["cidrs"]
+            if not isinstance(values, list) or not values:
+                raise _error(f"networks.{network_id}.cidrs must be a non-empty list")
+            cidrs = tuple(_cidr(value, f"networks.{network_id}.cidrs[{index}]") for index, value in enumerate(values))
+            if len(set(cidrs)) != len(cidrs):
+                raise _error(f"networks.{network_id}.cidrs contains duplicate CIDRs")
+        networks.append(Network(network_id, kind, cidrs[0], cidrs))
     if not networks:
         raise _error("networks cannot be empty")
     network_ids = {network.id for network in networks}
+    routes = raw.get("routes", [])
+    if not isinstance(routes, list):
+        raise _error("routes must be a list")
+    declared_routes: set[tuple[str, str]] = set()
+    for index, route in enumerate(routes):
+        route = _object(route, f"routes[{index}]")
+        _only_keys(route, f"routes[{index}]", {"from", "to", "via"})
+        source = _identifier(route.get("from"), f"routes[{index}].from")
+        destination = _identifier(route.get("to"), f"routes[{index}].to")
+        if source not in network_ids or destination not in network_ids:
+            raise _error(f"routes[{index}] references an unknown network")
+        if source == destination:
+            raise _error(f"routes[{index}] must connect two different networks")
+        if (source, destination) in declared_routes:
+            raise _error(f"routes[{index}] duplicates {source}->{destination}")
+        if "via" in route:
+            _identifier(route["via"], f"routes[{index}].via")
+        declared_routes.add((source, destination))
     for name in ("besu", "ipfs", "cluster"):
         selected = _identifier(infrastructure[name]["network"], f"infrastructure.{name}.network")
         if selected not in network_ids:
@@ -235,7 +266,7 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
             address = _ipv4(addresses[network.id], f"machines.{machine_id}.addresses.{network.id}")
             if address in addresses_seen[network.id]:
                 raise _error(f"machines.{machine_id} duplicates address {address} on {network.id}")
-            if ipaddress.ip_address(address) not in ipaddress.ip_network(network.cidr):
+            if not network.contains(address):
                 raise _error(f"machines.{machine_id} address {address} is outside {network.id}")
             addresses_seen[network.id].add(address)
             canonical_addresses[network.id] = address
@@ -299,7 +330,7 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
         exposure = definition.get("exposure")
         if exposure is not None:
             exposure = _object(exposure, f"services.{service_id}.exposure")
-            _only_keys(exposure, f"services.{service_id}.exposure", {"mode", "network", "port", "protocols"})
+            _only_keys(exposure, f"services.{service_id}.exposure", {"mode", "network", "port", "protocols", "advertise_address", "advertise_port"})
             if exposure.get("mode") not in {"none", "loopback", "private", "public"}:
                 raise _error(f"services.{service_id}.exposure.mode must be none, loopback, private or public")
             if exposure.get("mode") != "none" and (not isinstance(exposure.get("port"), int) or not 1 <= exposure["port"] <= 65535):
@@ -308,6 +339,13 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
             if not isinstance(protocols, list) or not protocols or any(item not in {"tcp", "udp"} for item in protocols):
                 raise _error(f"services.{service_id}.exposure.protocols must contain tcp and/or udp")
             exposure["protocols"] = list(dict.fromkeys(protocols))
+            if exposure.get("advertise_address") is not None:
+                exposure["advertise_address"] = _ipv4(exposure["advertise_address"], f"services.{service_id}.exposure.advertise_address")
+            if exposure.get("advertise_port") is not None:
+                if not isinstance(exposure["advertise_port"], int) or not 1 <= exposure["advertise_port"] <= 65535:
+                    raise _error(f"services.{service_id}.exposure.advertise_port must be a TCP/UDP port")
+            if exposure.get("mode") != "private" and (exposure.get("advertise_address") is not None or exposure.get("advertise_port") is not None):
+                raise _error(f"services.{service_id}.exposure advertise fields are only valid for private exposure")
             if exposure.get("mode") == "private":
                 network = _identifier(exposure.get("network"), f"services.{service_id}.exposure.network")
                 if network not in {entry.id for entry in networks}:
@@ -317,7 +355,7 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
             elif exposure.get("network") is not None:
                 raise _error(f"services.{service_id}.exposure.network is only valid for private exposure")
         services.append(ServiceInstance(service_id, service_type, machine_id, dict(connections), dict(configuration), exposure))
-    _validate_domain(raw, services, machines)
+    _validate_domain(raw, services, machines, declared_routes)
     return raw, tuple(machines), tuple(services), tuple(networks)
 
 
@@ -472,7 +510,13 @@ def _provider_id(connection: dict[str, str]) -> str:
     return connection["service"]
 
 
-def _validate_domain(raw: dict[str, Any], services: list[ServiceInstance], machines: list[Machine] | None = None) -> None:
+def _validate_domain(
+    raw: dict[str, Any],
+    services: list[ServiceInstance],
+    machines: list[Machine] | None = None,
+    declared_routes: set[tuple[str, str]] | None = None,
+) -> None:
+    declared_routes = declared_routes or set()
     by_id = {service.id: service for service in services}
     by_type: dict[str, list[ServiceInstance]] = {}
     for service in services:
@@ -553,14 +597,31 @@ def _validate_domain(raw: dict[str, Any], services: list[ServiceInstance], machi
                 protocol = connection.get("protocol")
                 if protocol not in {"tcp", "udp"}:
                     raise _error(f"services.{consumer.id}.connections.{name}.protocol must be tcp or udp between hosts")
-                if network not in machine_by_id[consumer.machine_id].addresses or network not in machine_by_id[provider.machine_id].addresses:
-                    raise _error(f"services.{consumer.id}.connections.{name}.network is not shared by both hosts")
+                if network not in machine_by_id[provider.machine_id].addresses:
+                    raise _error(f"services.{consumer.id}.connections.{name}.network is not available on {provider.machine_id}")
+                if network not in machine_by_id[consumer.machine_id].addresses:
+                    sources = set(machine_by_id[consumer.machine_id].addresses)
+                    if not any((source, network) in declared_routes for source in sources):
+                        raise _error(f"services.{consumer.id}.connections.{name}.network is neither shared nor routed from {consumer.machine_id}")
                 if not provider.exposure or provider.exposure.get("mode") != "private":
                     raise _error(f"services.{provider.id} must expose a private endpoint for {consumer.id}")
                 if provider.exposure.get("network") != network:
                     raise _error(f"services.{consumer.id}.connections.{name}.network does not match {provider.id} exposure")
                 if protocol not in provider.exposure.get("protocols", ["tcp"]):
                     raise _error(f"services.{consumer.id}.connections.{name}.protocol is not exposed by {provider.id}")
+        p2p_policies = (
+            ("besu", {"besu-rpc", "besu-validator"}),
+            ("ipfs", {"ipfs-kubo"}),
+            ("cluster", {"ipfs-cluster"}),
+        )
+        for policy, types in p2p_policies:
+            peers = [service for service in services if service.type in types]
+            if len({peer.machine_id for peer in peers}) < 2:
+                continue
+            network = raw["infrastructure"][policy]["network"]
+            for peer in peers:
+                if network not in machine_by_id[peer.machine_id].addresses:
+                    raise _error(f"services.{peer.id} requires {network} for cross-host {policy} P2P")
     blockchain = _object(raw["blockchain"], "blockchain")
     _only_keys(blockchain, "blockchain", {"chain_id", "besu_image", "nodes", "qbft", "artifact"})
     artifact = _object(blockchain.get("artifact", {}), "blockchain.artifact")

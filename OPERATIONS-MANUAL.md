@@ -96,6 +96,10 @@ Start with `operator-production-five-host`, then replace all sample network addr
 
 Same-machine consumers use Docker DNS. A cross-host dependency receives the selected network, TCP, and a derived private provider exposure. The resolver never publishes a dependency publicly merely to make a route work.
 
+For a concrete EC2 deployment with five private hosts in one Availability
+Zone, Security Groups, EBS volumes, controller access, acceptance and recovery,
+see [the AWS single-zone guide](docs/aws-single-az-five-host.md).
+
 ### Storage and replication
 
 Declare each logical peer once. The resolver creates its Kubo/Cluster pair and updates Store API relationships.

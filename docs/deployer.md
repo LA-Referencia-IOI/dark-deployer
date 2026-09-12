@@ -114,7 +114,9 @@ records the decisions that normally change between installations:
 - `placement`: the authoritative group-to-machine mapping;
 - `blockchain`: chain ID, RPC identity and validator group placement;
 - `storage`: peer IDs, peer groups and replica thresholds;
-- `networks` and `routing`: networks used by remote traffic;
+- `networks`, `routes` and `routing`: networks, existing directional routes,
+  and traffic choices used by remote traffic;
+- `networking`: optional NAT addresses and translated P2P ports;
 - `access`: `none`, `local-direct` or `gateway` exposure policy;
 - `secrets`: controller-side source root or explicit source files;
 - `overrides`: supported changes to catalogue settings/components and placement.
@@ -148,6 +150,9 @@ that catalogue.
 
 Same-machine dependencies use Docker DNS. A remote dependency receives the
 network selected by `routing`, TCP, and a matching private provider exposure.
+The consumer may use another local domain only when `routes` declares the
+existing path to the provider network. NAT translations are described under
+`networking`, without changing the service bind address.
 Store's Kubo route is derived from each declared Cluster peer, so it does not
 need to be duplicated in the compact file.
 
@@ -172,9 +177,11 @@ network ranges and `REPLACE` paths; replace them before preflight.
 ## Networks, ports and storage bootstrap
 
 The inventory declares named `lan`/`vpn` networks and each machine has one
-address per network. Private service exposures state their network, port and
-protocol. A cross-host connection only names an endpoint already exposed on
-the shared network; Docker DNS is never assumed across hosts.
+address per network, or several `cidrs` for one routed logical domain. Private
+service exposures state their network, port and protocol. A cross-host
+connection names an endpoint on the provider network; the consumer must share
+that network or declare a directional route. Docker DNS is never assumed
+across hosts.
 
 The central `infrastructure` policy is the source of published ports:
 

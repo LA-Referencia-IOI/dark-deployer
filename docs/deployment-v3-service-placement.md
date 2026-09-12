@@ -20,11 +20,13 @@ the inventory. Each item in `services` declares:
 ```
 
 The renderer derives an internal Docker endpoint when both services share a
-machine. A connection across machines must name its route and protocol, for example
+machine. A connection across machines must name its network and protocol, for example
 `{"service": "rpc01", "network": "lan", "protocol": "tcp"}`. Its provider must declare a
 matching `"exposure": {"mode": "private", "network": "lan", "port": ...}`.
 The generated consumer configuration then uses that machine's address on the
-selected LAN/VPN. A loopback exposure is never accepted for a remote consumer.
+selected LAN/VPN. If the consumer has no interface in that domain, the
+inventory must declare an existing directional route. A loopback exposure is
+never accepted for a remote consumer.
 Store API follows the same rule: it explicitly lists every IPFS Cluster peer it
 uses, so no inter-host storage endpoint is inferred implicitly.
 

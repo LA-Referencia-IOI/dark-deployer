@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .model import Machine
+from .network import p2p_endpoint
 
 
 class ExecutionError(RuntimeError):
@@ -128,4 +129,60 @@ def run_preflight(machine: Machine) -> list[dict[str, str | bool]]:
             "stdout": result.stdout.strip(),
             "stderr": result.stderr.strip(),
         })
+    return results
+
+
+def run_network_preflight(plan) -> list[dict[str, str | bool]]:
+    """Check that each remote consumer has an IP route to its declared endpoint."""
+    results: list[dict[str, str | bool]] = []
+    seen: set[tuple[str, str, int, str]] = set()
+    by_id = {service.id: service for service in plan.services}
+    for consumer in plan.services:
+        for connection in consumer.connections.values():
+            provider = by_id[connection["service"]]
+            if provider.machine_id == consumer.machine_id:
+                continue
+            endpoint = next(item for item in plan.endpoints if item.service == provider.id and item.transport == "private" and item.network == connection.get("network"))
+            key = (consumer.machine_id, endpoint.host, endpoint.port, provider.id)
+            if key in seen:
+                continue
+            seen.add(key)
+            machine = plan.machine(consumer.machine_id)
+            if machine.execution == "local":
+                results.append({"check": f"route:{consumer.id}->{provider.id}", "ok": True, "stdout": "local execution; route verified by service readiness", "stderr": ""})
+                continue
+            result = resolve_executor(machine).run(("sh", "-lc", f"ip route get {shlex.quote(endpoint.host)} >/dev/null"), timeout=15)
+            results.append({
+                "check": f"route:{consumer.id}->{provider.id}:{endpoint.host}:{endpoint.port}",
+                "ok": result.returncode == 0,
+                "stdout": result.stdout.strip(),
+                "stderr": result.stderr.strip(),
+            })
+    for policy, types, default_port in (
+        ("besu", {"besu-rpc", "besu-validator"}, 30303),
+        ("ipfs", {"ipfs-kubo"}, int(plan.raw["infrastructure"]["ipfs"]["swarm_port"])),
+        ("cluster", {"ipfs-cluster"}, int(plan.raw["infrastructure"]["cluster"]["p2p_port"])),
+    ):
+        peers = [service for service in plan.services if service.type in types]
+        network = plan.raw["infrastructure"][policy]["network"]
+        for consumer in peers:
+            for provider in peers:
+                if consumer.machine_id == provider.machine_id:
+                    continue
+                host, port = p2p_endpoint(plan.machine(provider.machine_id), provider, network, default_port)
+                key = (consumer.machine_id, host, port, f"{policy}-p2p")
+                if key in seen:
+                    continue
+                seen.add(key)
+                machine = plan.machine(consumer.machine_id)
+                if machine.execution == "local":
+                    results.append({"check": f"p2p-route:{consumer.id}->{provider.id}", "ok": True, "stdout": "local execution; route verified by P2P readiness", "stderr": ""})
+                    continue
+                result = resolve_executor(machine).run(("sh", "-lc", f"ip route get {shlex.quote(host)} >/dev/null"), timeout=15)
+                results.append({
+                    "check": f"p2p-route:{consumer.id}->{provider.id}:{host}:{port}",
+                    "ok": result.returncode == 0,
+                    "stdout": result.stdout.strip(),
+                    "stderr": result.stderr.strip(),
+                })
     return results

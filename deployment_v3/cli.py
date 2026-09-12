@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
+from dataclasses import replace
+import hashlib
 import json
 import re
 import shutil
@@ -44,11 +47,19 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--non-interactive", action="store_true")
             command.add_argument("--yes", action="store_true")
             command.add_argument("--resume", action="store_true")
+            command.add_argument("--refresh-bundle", action="store_true",
+                                 help="re-render the generated public bundle before applying a resumed deployment")
             command.add_argument("--dry-run", action="store_true")
             command.add_argument("--master-wallet-address")
             command.add_argument("--master-wallet-file", type=Path)
             command.add_argument("--create-master-wallet", action="store_true",
                                  help="generate blockchain/master-wallet.txt when no wallet file is supplied")
+            command.add_argument("--new-chain", action="store_true",
+                                 help="initialize a new managed chain artifact when none exists")
+            command.add_argument("--initialize-managed-secrets", action="store_true",
+                                 help="generate safe application/storage secrets in the deployment run directory")
+            command.add_argument("--use-master-wallet-as-signer", action="store_true",
+                                 help="use the selected master wallet as contract signer")
             command.add_argument("--contract-signer-file", type=Path)
             command.add_argument("--chain-artifact", type=Path,
                                  help="existing complete chain artifact; otherwise generate one for a new local chain")
@@ -95,6 +106,98 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _yes_no(prompt: str, *, default: bool = True) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    answer = input(f"{prompt} {suffix}: ").strip().lower()
+    if not answer:
+        return default
+    return answer in {"y", "yes"}
+
+
+def _wallet_material(path: Path) -> tuple[str, str | None]:
+    """Return a normalized private key and optional public address."""
+    text = path.read_text(encoding="utf-8").strip()
+    private_match = re.search(r"Private Key\s*:\s*(0x[0-9a-fA-F]{64})", text)
+    if private_match:
+        private_key = private_match.group(1)
+    elif re.fullmatch(r"0x?[0-9a-fA-F]{64}", text):
+        private_key = text
+    else:
+        raise ApplyError(f"secret file is not a raw key or supported master-wallet.txt: {path}")
+    address_match = re.search(r"Address\s*:\s*(0x[0-9a-fA-F]{40})", text)
+    return private_key, address_match.group(1) if address_match else None
+
+
+def _write_managed_key(path: Path, source: Path) -> None:
+    raw, _ = _wallet_material(source)
+    value = (raw + "\n").encode("ascii")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.read_bytes() != value:
+        raise ApplyError(f"refusing to replace existing managed secret: {path}")
+    if not path.exists():
+        path.write_bytes(value)
+    path.chmod(0o600)
+
+
+def _private_plan(plan, *, secret_root: Path, wallet_file: Path, signer_file: Path, artifact_root: Path):
+    """Attach controller-only sources without changing the operator inventory."""
+    raw = deepcopy(plan.raw)
+    for secret_id, source in (("master-wallet", wallet_file), ("contract-signer", signer_file)):
+        definition = raw.get("secrets", {}).get(secret_id)
+        if definition:
+            target = secret_root / definition["path"]
+            _write_managed_key(target, source)
+            definition["source"] = str(target)
+            if secret_id == "contract-signer":
+                runtime_definition = raw.get("secrets", {}).get("minter-runtime-env")
+                if runtime_definition:
+                    runtime = secret_root / runtime_definition["path"]
+                    existing = runtime.read_text(encoding="utf-8") if runtime.exists() else ""
+                    if "DARK_ADMIN_PRIVATE_KEY=" not in existing:
+                        key, _ = _wallet_material(source)
+                        runtime.parent.mkdir(parents=True, exist_ok=True)
+                        runtime.write_text(existing.rstrip("\n") + "\nDARK_ADMIN_PRIVATE_KEY=" + key + "\n", encoding="utf-8")
+                        runtime.chmod(0o600)
+    for secret_id, definition in raw.get("secrets", {}).items():
+        candidate = secret_root / definition["path"]
+        if candidate.is_file() and not definition.get("source"):
+            definition["source"] = str(candidate)
+    raw["blockchain"]["artifact"]["source"] = str(artifact_root)
+    return replace(plan, raw=raw)
+
+
+def _write_private_input_state(root: Path, *, wallet: Path, signer: Path, secrets: Path, artifact: Path) -> None:
+    def digest(path: Path) -> str | None:
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    state = {
+        "version": 1,
+        "chain_mode": "new",
+        "master_wallet_source": str(wallet),
+        "master_wallet_sha256": digest(wallet),
+        "contract_signer_source": str(signer),
+        "contract_signer_sha256": digest(signer),
+        "generated_secrets_root": str(secrets),
+        "chain_artifact_root": str(artifact),
+    }
+    root.mkdir(parents=True, exist_ok=True)
+    destination = root / "private-inputs.json"
+    destination.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    destination.chmod(0o600)
+
+
+def _load_private_input_state(path: Path) -> dict:
+    state = json.loads(path.read_text(encoding="utf-8"))
+    for prefix in ("master_wallet", "contract_signer"):
+        source = Path(state[f"{prefix}_source"])
+        if not source.is_file():
+            raise ApplyError(f"managed private input is missing: {source}")
+        expected = state.get(f"{prefix}_sha256")
+        actual = hashlib.sha256(source.read_bytes()).hexdigest()
+        if expected and actual != expected:
+            raise ApplyError(f"managed private input changed since the previous run: {source}")
+    return state
+
+
 def _install(args: argparse.Namespace, plan) -> None:
     """Run the normal installation path with only essential operator input.
 
@@ -104,6 +207,14 @@ def _install(args: argparse.Namespace, plan) -> None:
     """
     project_root = Path(__file__).resolve().parents[1]
     root = project_root / ".generated" / "deployment-v3" / plan.deployment_id
+    private_state = None
+    private_state_file = root / "private-inputs.json"
+    if args.resume:
+        if not private_state_file.is_file():
+            raise ApplyError(f"cannot resume without managed input state: {private_state_file}")
+        private_state = _load_private_input_state(private_state_file)
+        args.master_wallet_file = Path(private_state["master_wallet_source"])
+        args.contract_signer_file = Path(private_state["contract_signer_source"])
     if args.dry_run:
         print(f"Deployment: {plan.deployment_id}")
         print("Mode: " + ", ".join(f"{m.id}={m.execution}" for m in plan.machines))
@@ -142,113 +253,95 @@ def _install(args: argparse.Namespace, plan) -> None:
             acquire_components(plan, project_root, update_existing=update_existing)
         except AcquisitionError as exc:
             raise ApplyError(f"component acquisition failed: {exc}") from exc
-    # Apply uses a staged local destination for local machines. Prepare the
-    # same private tree it will consume before invoking the runner.
-    local_machines = [m for m in plan.machines if m.execution == "local"]
-    progress("preparing local secrets and blockchain artifacts")
-    if not args.master_wallet_file:
+    progress("preparing managed inputs")
+    private_root = root / "controller"
+    secret_root = private_root / "secrets"
+    artifact_root = private_root / "chain-artifact"
+    if args.resume:
+        signer_file = Path(private_state["contract_signer_source"])
+        secret_root = Path(private_state["generated_secrets_root"])
+        artifact_root = Path(private_state["chain_artifact_root"])
+        print(f"[INFO] Reusing managed private inputs from {private_state_file}")
+    else:
         wallet_definition = plan.raw.get("secrets", {}).get("master-wallet", {})
-        source_path = wallet_definition.get("source")
-        if source_path:
-            candidate = Path(source_path)
-            if not candidate.is_absolute():
+        inventory_wallet = Path(wallet_definition["source"]) if wallet_definition.get("source") else None
+        if inventory_wallet and not inventory_wallet.is_absolute():
+            inventory_wallet = project_root / inventory_wallet
+        if not args.master_wallet_file and inventory_wallet and inventory_wallet.is_file():
+            args.master_wallet_file = inventory_wallet
+            print(f"[INFO] Using master wallet from inventory: {inventory_wallet}")
+        default_wallet = project_root / "blockchain" / "master-wallet.txt"
+        if not args.master_wallet_file and default_wallet.is_file() and not args.non_interactive:
+            if _yes_no(f"Use the existing master wallet at '{default_wallet}'?"):
+                args.master_wallet_file = default_wallet
+        if not args.master_wallet_file and not args.create_master_wallet and not args.non_interactive:
+            args.create_master_wallet = _yes_no("No master wallet was selected. Create one for a new chain?")
+        if args.create_master_wallet and not args.master_wallet_file:
+            wallet_script = project_root / "blockchain" / "scripts" / "create-master-wallet.sh"
+            print("[INFO] Creating master wallet with the blockchain wallet generator...")
+            try:
+                subprocess.run(["bash", str(wallet_script)], cwd=str(project_root / "blockchain"), check=True)
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise ApplyError(f"master wallet creation failed: {exc}") from exc
+            args.master_wallet_file = project_root / "blockchain" / "master-wallet.txt"
+        if not args.master_wallet_file or not Path(args.master_wallet_file).is_file():
+            raise ApplyError("installation needs a master wallet; select one or use --create-master-wallet")
+        signer_file = args.contract_signer_file
+        if not signer_file:
+            signer_definition = plan.raw.get("secrets", {}).get("contract-signer", {})
+            source = signer_definition.get("source")
+            candidate = Path(source) if source else None
+            if candidate and not candidate.is_absolute():
                 candidate = project_root / candidate
-            if candidate.is_file():
-                print(f"[INFO] Master wallet found at inventory path: {candidate}")
-                if args.non_interactive or args.yes:
-                    args.master_wallet_file = candidate
-                else:
-                    answer = input(f"Use the master wallet at '{candidate}'? [Y/n]: ").strip().lower()
-                    if answer in {"", "y", "yes"}:
-                        args.master_wallet_file = candidate
-            elif args.create_master_wallet:
-                print(f"[INFO] Inventory wallet path does not exist yet: {candidate}")
-                args.master_wallet_file = candidate
-    if args.create_master_wallet and (
-        not args.master_wallet_file or not Path(args.master_wallet_file).is_file()
-    ):
-        wallet_script = project_root / "blockchain" / "scripts" / "create-master-wallet.sh"
-        wallet_file = args.master_wallet_file or (project_root / "blockchain" / "master-wallet.txt")
-        print("[INFO] Creating master wallet with the blockchain wallet generator...")
-        try:
-            subprocess.run(["bash", str(wallet_script)], cwd=str(project_root / "blockchain"), check=True)
-        except (OSError, subprocess.CalledProcessError) as exc:
-            raise ApplyError(f"master wallet creation failed: {exc}") from exc
-        generated = project_root / "blockchain" / "master-wallet.txt"
-        if wallet_file != generated:
-            wallet_file.parent.mkdir(parents=True, exist_ok=True)
-            if wallet_file.exists():
-                raise ApplyError(f"refusing to replace existing wallet: {wallet_file}")
-            shutil.copy2(generated, wallet_file)
-        args.master_wallet_file = wallet_file
-        print(f"[OK] Master wallet created: {wallet_file}")
-    # In the common local setup one master-wallet.txt supplies both runtime
-    # credentials. Explicit signer/address arguments still take precedence.
-    signer_file = args.contract_signer_file or args.master_wallet_file
-    for machine in local_machines:
-        secret_root = root / "local" / machine.id / "secrets"
-        secret_root.mkdir(parents=True, exist_ok=True)
-        if not any(secret_root.iterdir()):
+            signer_file = candidate if candidate and candidate.is_file() else None
+        if not signer_file:
+            use_wallet = args.use_master_wallet_as_signer
+            if not use_wallet and not args.non_interactive:
+                use_wallet = _yes_no("Use the master wallet as contract signer for this test deployment?")
+            if use_wallet:
+                signer_file = args.master_wallet_file
+        if not signer_file or not Path(signer_file).is_file():
+            raise ApplyError("installation needs a contract signer; use --contract-signer-file or approve the master wallet default")
+        if not secret_root.exists() or not any(secret_root.iterdir()):
+            initialize = args.initialize_managed_secrets
+            if not initialize and not args.non_interactive:
+                initialize = _yes_no(f"Generate managed application and storage secrets under '{secret_root}'?")
+            if not initialize:
+                raise ApplyError("managed secrets are required")
+            secret_root.mkdir(parents=True, exist_ok=True)
             initialize_greenfield_secrets(plan, secret_root)
-        for secret_id, supplied in (("master-wallet", args.master_wallet_file), ("contract-signer", signer_file)):
-            if supplied:
-                if not supplied.is_file():
-                    raise ApplyError(f"secret file not found for {secret_id}: {supplied}")
-                definition = plan.raw["secrets"].get(secret_id)
-                if definition:
-                    target = secret_root / definition["path"]
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    raw = supplied.read_text(encoding="utf-8").strip()
-                    match = re.search(r"Private Key\s*:\s*(0x[0-9a-fA-F]{64})", raw)
-                    if match:
-                        raw = match.group(1)
-                    elif not re.fullmatch(r"0x?[0-9a-fA-F]{64}", raw):
-                        raise ApplyError(f"secret file for {secret_id} is not a raw key or supported master-wallet.txt: {supplied}")
-                    value = (raw + "\n").encode("ascii")
-                    if target.exists() and target.read_bytes() != value:
-                        raise ApplyError(f"refusing to replace existing secret: {target}")
-                    if not target.exists():
-                        target.write_bytes(value)
-                        target.chmod(0o600)
-                    if secret_id == "contract-signer":
-                        runtime_def = plan.raw["secrets"].get("minter-runtime-env")
-                        if runtime_def:
-                            runtime = secret_root / runtime_def["path"]
-                            existing = runtime.read_text(encoding="utf-8") if runtime.exists() else ""
-                            if "DARK_ADMIN_PRIVATE_KEY=" not in existing:
-                                runtime.write_text(existing.rstrip("\n") + "\nDARK_ADMIN_PRIVATE_KEY=" + raw + "\n", encoding="utf-8")
-                                runtime.chmod(0o600)
-        artifact_rel = Path(plan.raw["blockchain"]["artifact"]["path"])
-        artifact_root = secret_root / artifact_rel
-        if args.chain_artifact:
-            source = args.chain_artifact.resolve()
-            if not source.is_dir():
-                raise ApplyError(f"chain artifact directory not found: {source}")
-            if not artifact_root.exists():
-                artifact_root.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(source, artifact_root)
-        if not (artifact_root / "genesis.json").exists():
-            address = args.master_wallet_address
-            if not address and args.master_wallet_file:
-                wallet_text = args.master_wallet_file.read_text(encoding="utf-8")
-                address_match = re.search(r"Address\s*:\s*(0x[0-9a-fA-F]{40})", wallet_text)
-                if address_match:
-                    address = address_match.group(1)
-            if not address and not args.non_interactive:
-                print("[INFO] No master wallet address is configured.")
-                print("       Re-run with --create-master-wallet to generate one automatically.")
-                address = input("Master wallet public address for a new chain (0x...): ").strip()
+            print(f"[OK] Generated managed secrets under {secret_root}")
+        supplied_artifact = args.chain_artifact.resolve() if args.chain_artifact else None
+        inventory_artifact = plan.raw.get("blockchain", {}).get("artifact", {}).get("source")
+        if not supplied_artifact and inventory_artifact:
+            candidate = Path(inventory_artifact)
+            supplied_artifact = candidate if candidate.is_absolute() else project_root / candidate
+            if not supplied_artifact.is_dir():
+                supplied_artifact = None
+        if supplied_artifact:
+            artifact_root = supplied_artifact
+        elif not (artifact_root / "genesis.json").is_file():
+            create_chain = args.new_chain
+            if not create_chain and not args.non_interactive:
+                create_chain = _yes_no("No blockchain artifact exists. Initialize a new private chain?")
+            if not create_chain:
+                raise ApplyError("installation needs a chain artifact; use --chain-artifact or approve a new chain")
+            _, wallet_address = _wallet_material(Path(args.master_wallet_file))
+            address = args.master_wallet_address or wallet_address
             if not address:
-                raise ApplyError("missing master wallet address; use --master-wallet-address or provision a chain artifact")
+                raise ApplyError("the selected wallet has no public address; use --master-wallet-address")
             initialize_chain(plan, artifact_root, address)
-        else:
-            verify_artifact_manifest(artifact_root)
-            verify_artifact_compatibility(plan, artifact_root, args.master_wallet_address)
+            print(f"[OK] Initialized managed chain artifact under {artifact_root}")
+    verify_artifact_manifest(artifact_root)
+    verify_artifact_compatibility(plan, artifact_root, args.master_wallet_address)
+    plan = _private_plan(plan, secret_root=secret_root, wallet_file=Path(args.master_wallet_file), signer_file=Path(signer_file), artifact_root=artifact_root)
+    if not args.resume:
+        _write_private_input_state(root, wallet=Path(args.master_wallet_file), signer=Path(signer_file), secrets=secret_root, artifact=artifact_root)
     # A fresh install must not reuse a bundle rendered by an earlier code
     # version. Persistent service data remains untouched; only the generated
     # public Compose/config bundle is rebuilt.
     bundle = root / "bundle"
-    if bundle.exists() and not args.resume:
+    if bundle.exists() and (not args.resume or args.refresh_bundle):
         shutil.rmtree(bundle)
     effective_for_data = _effective_plan(plan, project_root, root)
     existing = existing_chain_data(effective_for_data)

@@ -1,8 +1,8 @@
 {
   "version": 3,
   "deployment": {
-    "id": "dark-production-five-host",
-    "label": "REPLACE: dARK five-host production deployment"
+    "id": "dark-lima-five-host",
+    "label": "dARK Lima five-host acceptance lab"
   },
   "defaults": {
     "ssh": {
@@ -233,11 +233,6 @@
     "store-api": {
       "type": "store-api",
       "machine": "apps",
-      "exposure": {
-        "mode": "private",
-        "port": 8003,
-        "network": "lab"
-      },
       "connections": {
         "cluster_cluster-storage-a": {
           "service": "cluster-storage-a",
@@ -270,11 +265,6 @@
         "migration": {
           "service": "minter-migrate"
         }
-      },
-      "exposure": {
-        "mode": "private",
-        "port": 8001,
-        "network": "lab"
       }
     },
     "metadata-worker": {
@@ -359,11 +349,6 @@
         "contracts": {
           "service": "contracts-deploy"
         }
-      },
-      "exposure": {
-        "mode": "private",
-        "port": 8000,
-        "network": "lab"
       }
     },
     "resolver-api": {
@@ -379,11 +364,6 @@
         "contracts": {
           "service": "contracts-deploy"
         }
-      },
-      "exposure": {
-        "mode": "private",
-        "port": 8002,
-        "network": "lab"
       }
     },
     "dashboard-mysql": {
@@ -565,7 +545,7 @@
     }
   },
   "storage": {
-    "cluster_name": "REPLACE-dark-production",
+    "cluster_name": "dark-lima",
     "nodes": [
       "storage-a",
       "storage-b"

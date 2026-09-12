@@ -21,6 +21,7 @@ bundles contain neither their values nor their hashes.
 | --- | --- | ---: | ---: |
 | `local-simple.json` | Lightweight local functional test | 1 local Docker host | 1 copy |
 | `local-ha.json` | Full deployment shape simulated on one Docker host | 1 local Docker host | 2 copies |
+| `lima-five-host.json` | Lima reference snapshot; generate current VM data through `local-infra/generate-lima-inventory.py` | 5 SSH hosts | 2 copies |
 | `production-five-host.json` | Production reference to adapt for a LAN/VPN | 5 SSH hosts | 2 copies |
 
 `local-simple` retains one local IPFS peer and exercises the Store API and
@@ -37,7 +38,8 @@ directory and service name; its canonical Git origin is
 | --- | --- | --- |
 | `deployment` | Stable deployment ID and human label | Change ID and label for each independent installation. |
 | `defaults` | Default SSH account, source/data/secrets roots, Docker subnet pool | Replace the sample SSH key and production filesystem roots. |
-| `networks` | Named LAN/VPN CIDRs used between hosts | Declare every usable network once. |
+| `networks` | Named LAN/VPN CIDRs used between hosts | Declare every usable network once; use `cidrs` for routed segments in one domain. |
+| `routes` | Explicit directional routes between network domains | Declare an existing site route when a consumer lacks the provider network. |
 | `machines` | Execution mode, management address, and one address per LAN/VPN | Use `local` only for the controller Docker host; use `ssh` for remote hosts. |
 | `services` | Every runtime service, its host, typed dependencies, routes, and exposure | Remote connections must name their network and protocol. |
 | `infrastructure` | Central Besu, Kubo, Cluster and web port policy | Do not duplicate P2P ports in service instances. |
@@ -55,8 +57,10 @@ have been replaced for the real LAN/VPN.
 ## Service graph rules
 
 Every connection is typed and validated. Same-machine consumers use Docker DNS.
-A cross-host connection explicitly names a shared network and protocol, and its provider
-must publish a matching `private` endpoint on that network.
+A cross-host connection explicitly names a network and protocol. The consumer
+must share that network with the provider or declare a directional route to it;
+the provider must publish a matching `private` endpoint. `routes` validate
+existing routing only and never configure a router, VPN, or firewall.
 
 The following placement is intentionally fixed:
 

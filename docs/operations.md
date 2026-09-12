@@ -65,8 +65,9 @@ Cluster state, while each host keeps its own local Docker network. The
 `edge-proxy` in apps publishes dashboard and explorer over HTTP; direct public
 exposure is otherwise avoided.
 
-Every cross-host connection in the inventory names the shared LAN/VPN and its
-protocol; Docker DNS is never assumed between hosts. The renderer emits a
+Every cross-host connection in the inventory names its LAN/VPN and protocol;
+the consumer must share that network or declare an existing directional route.
+Docker DNS is never assumed between hosts. The renderer emits a
 firewall suggestion per machine with the declared private/public exposures and
 the policy-derived Besu, Kubo and Cluster P2P ports.
 

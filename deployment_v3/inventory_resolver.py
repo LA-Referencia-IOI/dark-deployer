@@ -44,6 +44,12 @@ def _identifier(value: Any, path: str) -> str:
     return value
 
 
+def _only_keys(value: dict, path: str, allowed: set[str]) -> None:
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise _fail(f"{path} contains unsupported fields: {', '.join(unknown)}")
+
+
 def _merge(base: dict, override: dict, path: str = "overrides") -> dict:
     result = deepcopy(base)
     for key, value in override.items():
@@ -74,6 +80,11 @@ def _network_for(consumer: dict, provider: dict, routing: dict) -> str:
     if not isinstance(network, str) or not network:
         raise _fail(f"routing.{kind} is required for remote connection to {provider['type']}")
     return network
+
+
+def _route_exists(routes: list[dict], consumer: dict, provider_network: str) -> bool:
+    source_networks = set(consumer.get("addresses", {}))
+    return any(isinstance(route, dict) and route.get("from") in source_networks and route.get("to") == provider_network for route in routes)
 
 
 def _service_group(service_id: str, services: dict, groups: dict) -> str:
@@ -122,6 +133,8 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     networks = raw.get("networks")
     if networks is not None:
         result["networks"] = deepcopy(_object(networks, "networks"))
+    if "routes" in raw:
+        result["routes"] = deepcopy(raw["routes"])
 
     # Compact local machines intentionally need no fake SSH configuration.
     result["machines"] = {}
@@ -143,7 +156,8 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
                 item["addresses"] = deepcopy(definition["addresses"])
             else:
                 network_id, network = next(iter(result["networks"].items()))
-                item["addresses"] = {network_id: str(next(ipaddress.ip_network(network["cidr"]).hosts()))}
+                cidr = (network.get("cidrs") or [network.get("cidr")])[0]
+                item["addresses"] = {network_id: str(next(ipaddress.ip_network(cidr).hosts()))}
         for field in ("paths", "ssh", "docker"):
             if field in definition:
                 item[field] = deepcopy(definition[field])
@@ -187,7 +201,11 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         suffix = peer_id.removeprefix("storage-")
         group_services.setdefault(group_id, []).extend([f"ipfs-storage-{suffix}", f"cluster-storage-{suffix}"])
         group_members.setdefault(group_id, []).append(peer_id)
-    explorer_group = _object(raw.get("overrides", {}), "overrides").get("explorer", {}).get("group", "apps")
+    overrides = _object(raw.get("overrides", {}), "overrides")
+    _only_keys(overrides, "overrides", {"explorer", "settings", "components"})
+    explorer_override = _object(overrides.get("explorer", {}), "overrides.explorer")
+    _only_keys(explorer_override, "overrides.explorer", {"group"})
+    explorer_group = explorer_override.get("group", "apps")
     if explorer_group != "apps":
         group_services["apps"].remove("explorer")
         group_services.setdefault(explorer_group, []).append("explorer")
@@ -245,8 +263,10 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
                 connection.pop("network", None); connection.pop("protocol", None)
                 continue
             network = _network_for(consumer, provider, routing)
-            if network not in machines[consumer["machine"]]["addresses"] or network not in machines[provider["machine"]]["addresses"]:
-                raise _fail(f"routing selects {network} but it is not shared by {consumer['machine']} and {provider['machine']}")
+            if network not in machines[provider["machine"]]["addresses"]:
+                raise _fail(f"routing selects {network} but it is not available on {provider['machine']}")
+            if network not in machines[consumer["machine"]]["addresses"] and not _route_exists(result.get("routes", []), machines[consumer["machine"]], network):
+                raise _fail(f"routing selects {network} but it is neither shared nor routed from {consumer['machine']} to {provider['machine']}")
             prior = required_network.setdefault(connection["service"], network)
             if prior != network:
                 raise _fail(f"{connection['service']} needs incompatible private networks {prior} and {network}")
@@ -285,6 +305,31 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
             if service and service["machine"] == app_machine:
                 service["exposure"] = {"mode": "loopback", "port": _PORTS[service["type"]], "protocols": ["tcp"]}
 
+    networking = _object(raw.get("networking", {}), "networking")
+    _only_keys(networking, "networking", {"services"})
+    service_networking = _object(networking.get("services", {}), "networking.services")
+    p2p_types = {"besu-rpc", "besu-validator", "ipfs-kubo", "ipfs-cluster"}
+    for service_id, configuration in service_networking.items():
+        _identifier(service_id, f"networking.services.{service_id}")
+        if service_id not in result["services"]:
+            raise _fail(f"networking.services.{service_id} references an unknown service")
+        configuration = _object(configuration, f"networking.services.{service_id}")
+        _only_keys(configuration, f"networking.services.{service_id}", {"advertise_address", "advertise_port", "p2p_advertise_port"})
+        service = result["services"][service_id]
+        advertised = {field: configuration[field] for field in ("advertise_address", "advertise_port") if field in configuration}
+        if advertised:
+            exposure = service.get("exposure")
+            if not exposure or exposure.get("mode") != "private":
+                raise _fail(f"networking.services.{service_id} can advertise only a derived private endpoint")
+            exposure.update(advertised)
+        if "p2p_advertise_port" in configuration:
+            port = configuration["p2p_advertise_port"]
+            if service["type"] not in p2p_types:
+                raise _fail(f"networking.services.{service_id}.p2p_advertise_port is only valid for a P2P service")
+            if not isinstance(port, int) or not 1 <= port <= 65535:
+                raise _fail(f"networking.services.{service_id}.p2p_advertise_port must be a port")
+            service.setdefault("configuration", {})["p2p_advertise_port"] = port
+
     secrets = _object(raw.get("secrets", {}), "secrets")
     root = secrets.get("source_root")
     if root is not None and not isinstance(root, str):
@@ -296,7 +341,6 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
             source = str(Path(root) / definition["path"])
         if source is not None:
             definition["source"] = source if Path(source).is_absolute() else str((source_path.parent / source).resolve())
-    overrides = _object(raw.get("overrides", {}), "overrides")
     for section in ("settings", "components"):
         if section in overrides:
             result[section] = _merge(result[section], _object(overrides[section], f"overrides.{section}"), f"overrides.{section}")

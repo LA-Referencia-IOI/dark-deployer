@@ -7,11 +7,12 @@ import hashlib
 import ipaddress
 import shlex
 import shutil
+import subprocess
 import time
 from dataclasses import replace
 from pathlib import Path
 
-from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_executor, run_preflight
+from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_executor, run_network_preflight, run_preflight
 from .model import DeploymentPlan
 from .render import render_plan
 from .secrets import SecretError, distribute_secrets
@@ -165,6 +166,74 @@ def _stage(machine, project_root, root, directory):
     for source in (project_root / "components", project_root / "blockchain", project_root / "deployment_v3"):
         if source.exists(): shutil.copytree(source, source_root / source.name, dirs_exist_ok=True, ignore=_ignore_source_entries)
     return destination
+
+
+def _compile_contract_artifacts(project_root: Path, root: Path) -> Path:
+    """Compile pinned Solidity sources through architecture-neutral solc-js."""
+    project_root = project_root.resolve()
+    output = (root / "contract-artifacts").resolve()
+    if output.exists():
+        shutil.rmtree(output)
+    output.mkdir(parents=True)
+    image = f"dark-solc-js:{hashlib.sha256(b'0.8.17').hexdigest()[:12]}"
+    try:
+        subprocess.run(
+            ("docker", "build", "--tag", image, "--file", str(project_root / "deployment_v3" / "Dockerfile.solc-js"), str(project_root / "deployment_v3")),
+            check=True,
+            timeout=600,
+        )
+        subprocess.run(
+            ("docker", "run", "--rm", "--mount", f"type=bind,src={project_root / 'components' / 'dark-dapp' / 'dARK_dapp' / 'contracts'},dst=/src,readonly", "--mount", f"type=bind,src={output},dst=/out", image),
+            check=True,
+            timeout=600,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ApplyError(f"compile Solidity contracts with portable solc-js: {exc}") from exc
+    required = ("AuthorityABI.json", "AuthorityBytecode.txt", "dARKABI.json", "dARKBytecode.txt")
+    missing = [name for name in required if not (output / name).is_file()]
+    if missing:
+        raise ApplyError(f"portable Solidity compiler did not produce: {', '.join(missing)}")
+    return output
+
+
+def _attach_contract_artifacts(plan, bundle: Path, artifacts: Path) -> None:
+    """Place read-only compiler output beside each Compose project that needs it."""
+    for group in plan.groups:
+        if not any(plan.service(identifier).type in {"contracts-deploy", "rpc-probe"} for identifier in group.service_ids):
+            continue
+        destination = bundle / "machines" / group.machine_id / "groups" / group.id / "artifacts" / "contracts"
+        destination.mkdir(parents=True, exist_ok=True)
+        for source in artifacts.iterdir():
+            shutil.copy2(source, destination / source.name)
+
+
+def _file_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _service_fingerprint(plan, service, bundle: Path, project_root: Path) -> str:
+    """Hash rendered input and mounted/build sources that affect one service."""
+    group = _group_for_service(plan, service.id)
+    if group is None:
+        raise ApplyError(f"service {service.id} is not assigned to a deployment group")
+    directory = bundle / "machines" / service.machine_id / "groups" / group.id
+    inputs = {
+        "compose": _file_digest(directory / "compose.yaml"),
+        "environment": _file_digest(directory / "env" / f"{service.id}.env"),
+    }
+    mounted_entrypoints = {
+        "ipfs-kubo": project_root / "components" / "dark-ipfs" / "scripts" / "ipfs-entrypoint.sh",
+        "ipfs-cluster": project_root / "components" / "dark-ipfs" / "scripts" / "cluster-entrypoint.sh",
+        "besu-rpc": project_root / "blockchain" / "scripts" / "besu-entrypoint.sh",
+        "besu-validator": project_root / "blockchain" / "scripts" / "besu-entrypoint.sh",
+    }
+    source = mounted_entrypoints.get(service.type)
+    if source and source.is_file():
+        inputs["entrypoint"] = _file_digest(source)
+    artifacts = directory / "artifacts" / "contracts"
+    if service.type == "contracts-deploy" and artifacts.is_dir():
+        inputs["artifacts"] = {item.name: _file_digest(item) for item in sorted(artifacts.iterdir()) if item.is_file()}
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
 
 def _effective_plan(plan, project_root, root):
@@ -337,9 +406,13 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
             # immutable bundle.
             if not resume:
                 if bundle.exists(): shutil.rmtree(bundle)
+                artifacts = _compile_contract_artifacts(project_root, root)
                 render_plan(effective, bundle)
+                _attach_contract_artifacts(effective, bundle, artifacts)
             elif not bundle.exists():
+                artifacts = _compile_contract_artifacts(project_root, root)
                 render_plan(effective, bundle)
+                _attach_contract_artifacts(effective, bundle, artifacts)
             try:
                 sources = source_evidence(effective, project_root)
             except SourceError as exc:
@@ -349,7 +422,8 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
             except SecretError as exc:
                 raise ApplyError(f"secret distribution failed: {exc}") from exc
             previous_status = json.loads((root / "status.json").read_text()) if resume and (root / "status.json").exists() else {}
-            status={"deployment_id": plan.deployment_id, "state": "running", "services": previous_status.get("services", {}), "sources": sources, "secret_hashes": secret_hashes, "readiness": previous_status.get("readiness", {})}
+            previous_fingerprints = previous_status.get("service_fingerprints", {})
+            status={"deployment_id": plan.deployment_id, "state": "running", "services": previous_status.get("services", {}), "service_fingerprints": {}, "sources": sources, "secret_hashes": secret_hashes, "readiness": previous_status.get("readiness", {})}
             record(root, {"state": "secrets_distributed", "machines": sorted(secret_hashes)})
             artifacts = _distribute_chain_artifact(effective, project_root)
             status["chain_artifacts"] = artifacts
@@ -366,9 +440,18 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                     if failed: raise ApplyError(f"preflight failed on {step.machine_id}: {', '.join(failed)}")
                     status.setdefault("preflight", {})[step.machine_id] = "passed"
                     record(root, {"step": step.id, "state": "succeeded", "machine": step.machine_id})
+                elif step.action == "network_preflight":
+                    checks = run_network_preflight(effective)
+                    failed = [item["check"] for item in checks if not item["ok"]]
+                    if failed:
+                        raise ApplyError("network preflight failed: " + ", ".join(failed))
+                    status["network_preflight"] = checks
+                    record(root, {"step": step.id, "state": "succeeded", "checks": len(checks)})
                 elif step.action == "service_apply":
                     service=effective.service(step.service_id)
-                    if resume and status["services"].get(service.id) == "applied":
+                    fingerprint = _service_fingerprint(effective, service, bundle, project_root)
+                    status["service_fingerprints"][service.id] = fingerprint
+                    if resume and status["services"].get(service.id) == "applied" and previous_fingerprints.get(service.id) == fingerprint:
                         record(root,{"step":step.id,"state":"reused","service":service.id})
                     else:
                         _apply_service(

@@ -61,7 +61,8 @@ Important sections are:
 | `placement` | Logical group to machine mapping | Service machine assignment and v3 groups |
 | `blockchain` | Chain identity and node groups | Besu services and public-node list |
 | `storage` | Logical peers and replica policy | Kubo/Cluster pairs and Store relationships |
-| `networks`, `routing` | Available networks and traffic choice | Remote routes and private exposures |
+| `networks`, `routes`, `routing` | Networks, existing directional routes, and traffic choice | Route checks and private exposures |
+| `networking` | Optional NAT addresses and translated P2P ports | Advertised endpoints and Compose mappings |
 | `access` | No access, loopback access, or gateway | Public/loopback listener configuration |
 | `secrets` | Controller-side sources | Consumers, destinations, and modes |
 | `overrides` | Supported settings/components exceptions | Validated changes to catalogue defaults |
@@ -91,9 +92,14 @@ mechanism for the resolved document.
 
 The operator chooses a network for each remote traffic class:
 `blockchain_p2p`, `storage_p2p`, `storage_api`, and `application_api`.
-For each cross-machine dependency, the resolver verifies that both machines
-belong to the selected network, derives the known protocol and private provider
+For each cross-machine dependency, the resolver verifies that the provider has
+the selected network and that the consumer either shares it or declares a
+directional `routes` entry. It derives the known protocol and private provider
 exposure, and rejects collisions. Same-machine dependencies use Docker DNS.
+
+`networking.services` can override a NAT API address/port or a translated P2P
+port. These values describe existing network translation; they do not
+configure routers or firewalls.
 
 `access.mode` expresses requested operator or user access:
 

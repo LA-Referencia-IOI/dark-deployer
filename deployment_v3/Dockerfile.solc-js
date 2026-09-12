@@ -1,0 +1,7 @@
+FROM node:20-alpine
+
+WORKDIR /compiler
+RUN npm install --no-save solc@0.8.17
+COPY compile_contracts.js /compiler/compile_contracts.js
+
+ENTRYPOINT ["node", "/compiler/compile_contracts.js"]

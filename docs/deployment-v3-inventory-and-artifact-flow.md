@@ -33,7 +33,7 @@ The complete v3 document contains these top-level sections:
 | --- | --- |
 | `deployment` | Stable installation ID and label |
 | `defaults` | Shared SSH, filesystem, and Docker-network defaults |
-| `networks`, `machines` | Physical connectivity and Docker execution hosts |
+| `networks`, `routes`, `machines` | Physical connectivity, existing directional routes, and Docker execution hosts |
 | `groups`, `services` | Logical service ownership and typed graph instances |
 | `components`, `settings` | Source references and runtime tuning |
 | `blockchain`, `infrastructure`, `storage` | Besu, port policy, and IPFS/Cluster configuration |
@@ -48,6 +48,10 @@ Remote management addresses are independent from the LAN/VPN addresses used by
 services. This distinction lets Lima use forwarded localhost SSH while
 containers communicate through guest addresses.
 
+One logical network may contain several routed `cidrs`. A `routes` entry
+asserts an existing directional path between domains; the deployer verifies it
+from the consumer host but does not configure routers, VPNs, or firewalls.
+
 Groups preserve the five-server operational boundary even in a local HA
 simulation where several groups share one Docker daemon. A service has one
 unambiguous group. The Minter API, PostgreSQL, and metadata, replication, and
@@ -61,6 +65,7 @@ names a declared network and `tcp` or `udp`. The endpoint rules are strict:
 - on one machine, consumers receive Docker DNS and an internal port;
 - across machines, the provider must expose a matching `private` endpoint,
   and consumers receive the provider machine's address and published port;
+  the consumer may reach that network through a declared route;
 - a loopback or Docker name is never used as a cross-host endpoint.
 
 Exposures are `none`, `loopback`, `private`, or `public`. Private exposures

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Lima five-host inventory from the production topology template."""
+"""Generate a compact operator inventory for the Lima five-host lab."""
 from __future__ import annotations
 
 import json
@@ -10,12 +10,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "examples" / "deployment-v3" / "production-five-host.json"
-TARGET = ROOT / "examples" / "deployment-v3" / "lima-five-host.json"
+SOURCE = ROOT / "examples" / "operator-inventory" / "production-five-host.json"
+TARGET = ROOT / "examples" / "operator-inventory" / "lima-five-host.json"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate a Lima five-host inventory from a deployment topology")
+    parser = argparse.ArgumentParser(description="Generate a Lima five-host compact operator inventory")
     parser.add_argument("--input", type=Path, default=SOURCE, help=f"source topology (default: {SOURCE})")
     parser.add_argument("--output", type=Path, default=TARGET, help=f"generated inventory (default: {TARGET})")
     parser.add_argument("--store", type=Path, help="Lima store directory (sets LIMA_HOME to STORE/.lima)")
@@ -26,6 +26,12 @@ def main() -> None:
     source = args.input.expanduser().resolve()
     target = args.output.expanduser().resolve()
     topology = json.loads(source.read_text())
+    if topology.get("format") != "dark-operator-inventory":
+        raise SystemExit(f"input must be a compact dark-operator-inventory: {source}")
+    topology["deployment"] = {
+        "id": "dark-lima-five-host",
+        "label": "dARK Lima five-host acceptance lab",
+    }
     names = ("dark-apps", "dark-blockchain-a", "dark-blockchain-b", "dark-storage-1", "dark-storage-2")
     addresses = {}
     ssh_ports = {}
@@ -83,19 +89,26 @@ def main() -> None:
             "data_root": f"{guest_homes[host]}/dark-data",
             "secrets_root": f"{guest_homes[host]}/dark-secrets",
         }
-    # A Lima lab deliberately has a single routable inter-VM network.  It is
+    # A Lima lab deliberately has a single routable inter-VM network. It is
     # distinct from the production LAN/VPN model but uses the same explicit
-    # connection contract.
+    # operator routing contract.
     octets = addresses[names[0]].split(".")
     topology["networks"] = {"lab": {"kind": "lan", "cidr": ".".join(octets[:3]) + ".0/24"}}
-    for service in topology["services"].values():
-        if service.get("exposure", {}).get("mode") == "private":
-            service["exposure"]["network"] = "lab"
-        for connection in service.get("connections", {}).values():
-            if "network" in connection:
-                connection["network"] = "lab"
-    for policy in ("besu", "ipfs", "cluster"):
-        topology["infrastructure"][policy]["network"] = "lab"
+    topology["routing"] = {
+        "blockchain_p2p": "lab",
+        "storage_p2p": "lab",
+        "storage_api": "lab",
+        "application_api": "lab",
+    }
+    topology["storage"]["cluster_name"] = "dark-lima"
+    topology["access"] = {"mode": "gateway", "bind": "public", "port": 8080}
+    # Production examples contain intentionally unusable controller-side
+    # placeholders. The Lima lab either generates these during installation
+    # or receives explicit sources from the operator after review.
+    topology.pop("secrets", None)
+    artifact = topology.get("blockchain", {}).get("artifact")
+    if isinstance(artifact, dict):
+        artifact.pop("source", None)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(topology, indent=2) + "\n")
     print(f"generated {target}")

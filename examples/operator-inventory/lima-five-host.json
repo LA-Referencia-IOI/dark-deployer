@@ -1,0 +1,186 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 1,
+  "catalog": "dark-standard-1",
+  "deployment": {
+    "id": "dark-lima-five-host",
+    "label": "dARK Lima five-host acceptance lab"
+  },
+  "defaults": {
+    "ssh": {
+      "user": "dark",
+      "port": 22,
+      "private_key_file": "/etc/dark-deployer/ssh/REPLACE-deploy-ed25519"
+    },
+    "paths": {
+      "workspace_root": "/srv/dark",
+      "data_root": "/srv/dark/data",
+      "secrets_root": "/srv/dark/secrets"
+    }
+  },
+  "networks": {
+    "lab": {
+      "kind": "lan",
+      "cidr": "192.168.105.0/24"
+    }
+  },
+  "machines": {
+    "apps": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "lab": "192.168.105.3"
+      },
+      "ssh": {
+        "user": "lmatas",
+        "port": 53775,
+        "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    },
+    "blockchain-a": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "lab": "192.168.105.4"
+      },
+      "ssh": {
+        "user": "lmatas",
+        "port": 53789,
+        "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    },
+    "blockchain-b": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "lab": "192.168.105.5"
+      },
+      "ssh": {
+        "user": "lmatas",
+        "port": 53801,
+        "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    },
+    "storage-1": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "lab": "192.168.105.6"
+      },
+      "ssh": {
+        "user": "lmatas",
+        "port": 53814,
+        "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    },
+    "storage-2": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "lab": "192.168.105.7"
+      },
+      "ssh": {
+        "user": "lmatas",
+        "port": 53822,
+        "private_key_file": "/Volumes/Externo/dark-lab/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-lab/.lima/_config/dark-deployer-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    }
+  },
+  "placement": {
+    "apps": "apps",
+    "blockchain-a": "blockchain-a",
+    "blockchain-b": "blockchain-b",
+    "storage-1": "storage-1",
+    "storage-2": "storage-2"
+  },
+  "routing": {
+    "blockchain_p2p": "lab",
+    "storage_p2p": "lab",
+    "storage_api": "lab",
+    "application_api": "lab"
+  },
+  "blockchain": {
+    "chain_id": 2025,
+    "rpc": {
+      "id": "rpc01",
+      "group": "apps"
+    },
+    "validators": {
+      "validator01": {
+        "group": "blockchain-a"
+      },
+      "validator02": {
+        "group": "blockchain-a"
+      },
+      "validator03": {
+        "group": "blockchain-b"
+      },
+      "validator04": {
+        "group": "blockchain-b"
+      }
+    },
+    "artifact": {
+      "path": "blockchain/role-artifact"
+    }
+  },
+  "storage": {
+    "cluster_name": "dark-lima",
+    "peers": {
+      "storage-a": {
+        "group": "storage-1"
+      },
+      "storage-b": {
+        "group": "storage-2"
+      }
+    },
+    "replication": {
+      "publish_after_replicas": 1,
+      "target_replicas": 2
+    }
+  },
+  "access": {
+    "mode": "gateway",
+    "bind": "public",
+    "port": 8080
+  },
+  "overrides": {
+    "explorer": {
+      "group": "blockchain-a"
+    },
+    "settings": {
+      "minter": {
+        "shoulder": "200"
+      }
+    }
+  }
+}

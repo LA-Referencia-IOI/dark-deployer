@@ -9,6 +9,7 @@
     "deployment": {"type": "object"},
     "defaults": {"type": "object"},
     "networks": {"type": "object"},
+    "routes": {"type": "array"},
     "machines": {"type": "object", "minProperties": 1},
     "groups": {"type": "object"},
     "services": {"type": "object", "minProperties": 1},

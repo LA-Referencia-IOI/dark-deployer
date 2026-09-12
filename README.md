@@ -123,6 +123,7 @@ constraint.
 | Compact-format rationale and catalogue design | [Operator inventory design](docs/deployment-v3-operator-inventory-proposal.md) |
 | Runtime architecture and ARK lifecycle | [Architecture](docs/architecture.md) |
 | Lima five-host acceptance environment | [Lima guide](docs/lima-five-host-test.md) |
+| AWS five-host deployment in one Availability Zone | [AWS single-zone guide](docs/aws-single-az-five-host.md) |
 | Historical decisions and superseded procedures | [Historical material](docs/history.md) |
 
 The lifecycle commands are:

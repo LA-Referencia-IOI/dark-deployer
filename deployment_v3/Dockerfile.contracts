@@ -1,19 +1,6 @@
-ARG SOLC_BUILD_PLATFORM=linux/amd64
-FROM --platform=$SOLC_BUILD_PLATFORM python:3.10-slim AS contract-compiler
-
-# ``dARK_dapp/compiled`` is deliberately ignored by the dapp repository: it
-# is a build product, so a clean component checkout must not be expected to
-# contain it.  Compile the pinned Solidity sources in the image build instead.
-WORKDIR /app
-RUN pip install --no-cache-dir 'py-solc-x>=2.0.0'
-COPY components/dark-dapp/dARK_dapp/contracts /app/contracts
-COPY components/dark-dapp/dARK_dapp/compile.py /app/compile.py
-RUN IN_DOCKER=true python /app/compile.py && cp -a /app/compiled /contracts
-
 FROM python:3.10-slim
 
 WORKDIR /runner
 RUN pip install --no-cache-dir 'web3>=6.20,<7'
 COPY deployment_v3/contracts.py /runner/contracts.py
-COPY --from=contract-compiler /contracts /contracts
 ENTRYPOINT ["python", "/runner/contracts.py"]

@@ -10,7 +10,7 @@ import hashlib
 from pathlib import Path
 
 from .model import DeploymentPlan
-from .network import chain_node_addresses
+from .network import chain_node_addresses, chain_node_ports
 
 
 class ArtifactError(ValueError):
@@ -90,21 +90,7 @@ def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
     if not _ADDRESS.fullmatch(master_wallet_address):
         raise ArtifactError("master wallet address must be a 20-byte hexadecimal address")
     advertised = chain_node_addresses(plan)
-    start = int(plan.raw["infrastructure"]["besu"]["p2p_port_start"])
-    machines = {
-        service.configuration["node_id"]: plan.machine(service.machine_id)
-        for service in plan.services
-        if service.type in {"besu-rpc", "besu-validator"}
-    }
-    # A local deployment puts all Besu peers on routable Docker addresses in
-    # the same daemon.  Their listener is the standard internal port 30303;
-    # assigning 30304..30307 here would describe host ports that are not
-    # published and makes the static nodes unreachable.  Remote peers share
-    # a host address, so they retain deterministic per-node published ports.
-    ports = {
-        node: 30303 if machines[node].execution == "local" else start + index
-        for index, node in enumerate(_NODES)
-    }
+    ports = chain_node_ports(plan)
     return {
         "version": 1,
         "deployment_id": plan.deployment_id,

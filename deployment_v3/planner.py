@@ -47,6 +47,8 @@ def build_plan(inventory_path: Path) -> DeploymentPlan:
     machines = tuple(replace(machine, execution="local" if isinstance(resolve_executor(machine), LocalExecutor) else "ssh") if machine.execution == "auto" else machine for machine in machines)
     steps = [PlanStep(f"preflight:{machine.id}", machine.id, "", "preflight", (), f"Validate {machine.id}") for machine in machines]
     previous: tuple[str, ...] = tuple(step.id for step in steps)
+    steps.append(PlanStep("network-preflight", "", "", "network_preflight", previous, "Validate declared routes between hosts"))
+    previous = ("network-preflight",)
     by_id = {service.id: service for service in services}
     group_by_service = {service_id: group.id for group in groups for service_id in group.service_ids}
     phase_by_type = {service_type: phase for phase, types in PHASES for service_type in types}
