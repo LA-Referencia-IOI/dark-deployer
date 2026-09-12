@@ -237,6 +237,11 @@ class DeploymentV3Tests(unittest.TestCase):
             )
         self.assertEqual(prompted.removed, ["stale-local"])
 
+    def test_kubo_entrypoint_consumes_rendered_bootstrap_variable(self):
+        entrypoint = (ROOT / "components" / "dark-ipfs" / "scripts" / "ipfs-entrypoint.sh").read_text()
+        self.assertIn('BOOTSTRAP_MULTIADDRESSES="${IPFS_BOOTSTRAP_ENDPOINTS:-}"', entrypoint)
+        self.assertNotIn("IPFS_BOOTSTRAP_MULTIADDRESSES", entrypoint)
+
     def test_editor_exposes_v3_services_and_help(self):
         identifiers = tuple(identifier for identifier, _ in SECTIONS)
         self.assertIn("services", identifiers)
