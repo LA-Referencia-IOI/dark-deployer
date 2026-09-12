@@ -173,7 +173,7 @@ def _distribute_chain_artifact(plan, project_root: Path) -> dict[str, dict[str, 
     return delivered
 
 
-def _apply_service(plan, machine, service, root, bundle):
+def _apply_service(plan, machine, service, root, bundle, *, verbose=False):
     executor = resolve_executor(machine); directory = _compose_directory(plan, machine, root, service.id)
     if not directory.exists() and not isinstance(executor, SshExecutor): directory = _stage(machine, Path.cwd(), root, bundle / "machines" / machine.id)
     network=f"{plan.deployment_id}-{machine.id}"
@@ -235,10 +235,18 @@ def _apply_service(plan, machine, service, root, bundle):
             # idempotent once it has written its handoff file.
             deadline = time.monotonic() + 120
             last = None
+            attempt = 0
             while time.monotonic() < deadline:
+                attempt += 1
+                if verbose:
+                    print(f"[VERBOSE] contracts-deploy attempt {attempt}; waiting for RPC and contract deployment", flush=True)
                 last = executor.run((*compose, "run", "--rm", service.id), timeout=1800)
                 if last.returncode == 0:
+                    if verbose: print("[VERBOSE] contracts-deploy completed", flush=True)
                     return
+                if verbose:
+                    detail = (last.stderr.strip() or last.stdout.strip()).splitlines()[-1:] or ["no output"]
+                    print(f"[VERBOSE] contracts-deploy attempt {attempt} failed: {detail[0]}", flush=True)
                 time.sleep(2)
             raise ApplyError("RPC or contract deployment did not become ready: " + (last.stderr.strip() if last else "no job result"))
         _require(executor.run((*compose, "run", "--rm", service.id), timeout=1800), f"run {service.id}")
@@ -291,7 +299,7 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                     if resume and status["services"].get(service.id) == "applied":
                         record(root,{"step":step.id,"state":"reused","service":service.id})
                     else:
-                        _apply_service(effective, effective.machine(service.machine_id), service, root, bundle)
+                        _apply_service(effective, effective.machine(service.machine_id), service, root, bundle, verbose=verbose)
                         status["services"][service.id]="applied"; record(root,{"step":step.id,"state":"succeeded","service":service.id})
                 elif step.action == "readiness":
                     from .readiness import ReadinessError, wait_for_phase
