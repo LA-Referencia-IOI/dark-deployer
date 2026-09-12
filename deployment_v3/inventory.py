@@ -136,13 +136,25 @@ def _ssh(raw: dict[str, Any], defaults: dict[str, Any], path: str) -> SshSetting
 
 
 def load_inventory(path: Path) -> tuple[dict[str, Any], tuple[Machine, ...], tuple[ServiceInstance, ...], tuple[Network, ...]]:
-    """Load v3 JSON and return canonical domain objects without side effects."""
+    """Load either supported inventory format and return canonical v3 objects."""
     try:
         raw = json.loads(path.read_text())
     except FileNotFoundError as exc:
         raise _error(f"inventory not found: {path}") from exc
     except json.JSONDecodeError as exc:
         raise _error(f"invalid JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise _error("root must be an object")
+    # Kept here rather than in the CLI so every existing entry point receives
+    # exactly the same resolved document.
+    if raw.get("format") == "dark-operator-inventory":
+        from .inventory_resolver import resolve_inventory
+        raw = resolve_inventory(raw, source_path=path).document
+    return validate_inventory(raw)
+
+
+def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machine, ...], tuple[ServiceInstance, ...], tuple[Network, ...]]:
+    """Validate an already parsed v3 document without filesystem side effects."""
     if not isinstance(raw, dict):
         raise _error("root must be an object")
     _validate_schema(raw)

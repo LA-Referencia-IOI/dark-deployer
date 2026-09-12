@@ -14,6 +14,7 @@ from deployment_v3 import verify as verify_module
 from deployment_v3.planner import build_plan
 from deployment_v3.render import render_plan
 from deployment_v3.inventory_editor.textual_app import SECTIONS, SECTION_HELP
+from deployment_v3.inventory_resolver import OperatorInventoryError, resolve_inventory_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +62,30 @@ class DeploymentV3Tests(unittest.TestCase):
                         {"apps", "blockchain-a", "blockchain-b", "storage-1", "storage-2"},
                     )
                     self.assertIn("name: dark-local-ha-local-apps", (machine / "groups" / "apps" / "compose.yaml").read_text())
+
+    def test_operator_examples_resolve_to_valid_v3_and_render_resolved_contract(self):
+        for name, services in (("local-simple", 22), ("local-ha", 24), ("production-five-host", 25)):
+            source = ROOT / "examples" / "operator-inventory" / f"{name}.json"
+            resolution = resolve_inventory_path(source)
+            self.assertEqual(len(resolution.document["services"]), services)
+            self.assertEqual(resolution.metadata["catalog"], "dark-standard-1")
+            plan = build_plan(source)
+            with tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "bundle"
+                render_plan(plan, output)
+                bundled = json.loads((output / "shared" / "deployment-topology.json").read_text())
+                evidence = json.loads((output / "shared" / "inventory-resolution.json").read_text())
+            self.assertEqual(bundled, resolution.document)
+            self.assertEqual(evidence["metadata"], resolution.metadata)
+
+    def test_operator_inventory_reports_missing_remote_route(self):
+        source = ROOT / "examples" / "operator-inventory" / "production-five-host.json"
+        document = json.loads(source.read_text())
+        document["routing"].pop("storage_api")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "invalid-operator.json"; path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(OperatorInventoryError, "routing.storage_api"):
+                resolve_inventory_path(path)
 
     def test_minter_services_must_share_machine(self):
         source = ROOT / "examples" / "deployment-v3" / "local-ha.json"

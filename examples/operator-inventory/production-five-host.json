@@ -1,0 +1,32 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 1,
+  "catalog": "dark-standard-1",
+  "deployment": {"id": "dark-operator-production", "label": "REPLACE: dARK five-host production deployment"},
+  "defaults": {
+    "ssh": {"user": "dark", "port": 22, "private_key_file": "/etc/dark-deployer/ssh/REPLACE-deploy-ed25519"},
+    "paths": {"workspace_root": "/srv/dark", "data_root": "/srv/dark/data", "secrets_root": "/srv/dark/secrets"}
+  },
+  "networks": {"lan": {"kind": "lan", "cidr": "192.0.2.0/24"}, "vpn": {"kind": "vpn", "cidr": "198.51.100.0/24"}},
+  "machines": {
+    "apps": {"execution": "ssh", "management_address": "192.0.2.10", "addresses": {"lan": "192.0.2.10", "vpn": "198.51.100.10"}},
+    "blockchain-a": {"execution": "ssh", "management_address": "192.0.2.11", "addresses": {"lan": "192.0.2.11", "vpn": "198.51.100.11"}},
+    "blockchain-b": {"execution": "ssh", "management_address": "192.0.2.12", "addresses": {"lan": "192.0.2.12", "vpn": "198.51.100.12"}},
+    "storage-1": {"execution": "ssh", "management_address": "192.0.2.13", "addresses": {"lan": "192.0.2.13", "vpn": "198.51.100.13"}},
+    "storage-2": {"execution": "ssh", "management_address": "192.0.2.14", "addresses": {"lan": "192.0.2.14", "vpn": "198.51.100.14"}}
+  },
+  "placement": {"apps": "apps", "blockchain-a": "blockchain-a", "blockchain-b": "blockchain-b", "storage-1": "storage-1", "storage-2": "storage-2"},
+  "routing": {"blockchain_p2p": "vpn", "storage_p2p": "vpn", "storage_api": "vpn", "application_api": "lan"},
+  "blockchain": {
+    "chain_id": 2025, "rpc": {"id": "rpc01", "group": "apps"},
+    "validators": {"validator01": {"group": "blockchain-a"}, "validator02": {"group": "blockchain-a"}, "validator03": {"group": "blockchain-b"}, "validator04": {"group": "blockchain-b"}},
+    "artifact": {"path": "blockchain/role-artifact", "source": "REPLACE/secrets/chain-artifact"}
+  },
+  "storage": {"cluster_name": "REPLACE-dark-production", "peers": {"storage-a": {"group": "storage-1"}, "storage-b": {"group": "storage-2"}}, "replication": {"publish_after_replicas": 1, "target_replicas": 2}},
+  "access": {"mode": "gateway", "bind": "public", "port": 8080},
+  "secrets": {"source_root": "REPLACE/secrets"},
+  "overrides": {
+    "explorer": {"group": "blockchain-a"},
+    "settings": {"minter": {"shoulder": "200"}}
+  }
+}

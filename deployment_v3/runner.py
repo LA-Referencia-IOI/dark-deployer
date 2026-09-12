@@ -181,6 +181,12 @@ def _apply_service(plan, machine, service, root, bundle):
         _require(executor.run(("docker", "network", "create", "--driver", "bridge", "--subnet", plan.docker_subnets[machine.id], network)), f"create network {machine.id}")
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id), str(Path(machine.secrets_root)))), f"prepare data for {machine.id}")
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id / "contracts"))), f"prepare contract runtime for {machine.id}")
+    if service.type in {"besu-rpc", "besu-validator"}:
+        # Besu's transaction-log Bloom cacher writes below /data/caches. A
+        # partially initialized bind mount may have a valid chain database
+        # but no cache directory, which otherwise produces a recurring
+        # FileNotFoundException after the node starts producing blocks.
+        _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id / service.id / "caches"))), f"prepare Besu cache for {service.id}")
     _require(executor.run(("touch", str(Path(machine.data_root) / plan.deployment_id / "contracts" / "contracts.env"))), f"prepare contract environment for {machine.id}")
     for secret_id, definition in plan.raw["secrets"].items():
         if service.id not in definition.get("consumers", []):
@@ -240,7 +246,7 @@ def _apply_service(plan, machine, service, root, bundle):
         _require(executor.run((*compose, "up", "-d", "--build", service.id), timeout=1800), f"start {service.id}")
 
 
-def apply(plan, project_root: Path, *, resume=False, defer_verification=False, clean_chain_data=False):
+def apply(plan, project_root: Path, *, resume=False, defer_verification=False, clean_chain_data=False, verbose=False):
     root=run_root(project_root, plan.deployment_id)
     try:
         with deployment_lock(root):
@@ -271,8 +277,10 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
             _reject_existing_chain_data(effective, resume=resume, clean=clean_chain_data)
             write_status(root, status)
             for machine in effective.machines:
+                if verbose: print(f"[VERBOSE] staging bundle on {machine.id}", flush=True)
                 _stage(machine, project_root, root, bundle / "machines" / machine.id)
             for step in effective.steps:
+                if verbose: print(f"[VERBOSE] step {step.id}: {step.description}", flush=True)
                 if step.action == "preflight":
                     failed=[item["check"] for item in run_preflight(effective.machine(step.machine_id)) if not item["ok"]]
                     if failed: raise ApplyError(f"preflight failed on {step.machine_id}: {', '.join(failed)}")
@@ -289,6 +297,7 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                     from .readiness import ReadinessError, wait_for_phase
                     phase = step.id.split(":", 1)[1]
                     try:
+                        if verbose: print(f"[VERBOSE] waiting for {phase} readiness", flush=True)
                         evidence = wait_for_phase(effective, project_root, phase)
                     except ReadinessError as exc:
                         raise ApplyError(str(exc)) from exc

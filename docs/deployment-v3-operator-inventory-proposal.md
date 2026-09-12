@@ -1,12 +1,14 @@
 # Propuesta: un inventario práctico para operar dARK
 
-Fecha: 2026-09-12. Estado: propuesta de diseño para implementación incremental.
+Fecha: 2026-09-12. Estado: diseño implementado parcialmente como capa compacta
+compatible con el contrato v3. Este documento conserva la arquitectura,
+decisiones y fases de evolución para completar el trabajo futuro.
 
 Este documento propone una entrada compacta para describir instalaciones de
-dARK y un compilador que la transforme en el inventario completo v3. Los campos,
-comandos y módulos nuevos descritos aquí todavía no están implementados. Los
-ejemplos del formato compacto son especificaciones propuestas, no entradas que
-el CLI actual pueda ejecutar.
+dARK y un compilador que la transforme en el inventario completo v3. La capa
+compacta, el resolver, el catálogo inicial y los comandos de inspección ya están
+implementados. Los ejemplos de `examples/operator-inventory/` son ejecutables;
+las fases avanzadas pendientes siguen indicadas como evolución futura.
 
 ## 1. Objetivo y alcance
 

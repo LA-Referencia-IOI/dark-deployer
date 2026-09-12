@@ -1,0 +1,23 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 1,
+  "catalog": "dark-standard-1",
+  "deployment": {"id": "dark-operator-local-ha", "label": "dARK local HA simulation"},
+  "machines": {"local": {"execution": "local"}},
+  "placement": {"apps": "local", "blockchain-a": "local", "blockchain-b": "local", "storage-1": "local", "storage-2": "local"},
+  "blockchain": {
+    "chain_id": 2025,
+    "rpc": {"id": "rpc01", "group": "apps"},
+    "validators": {
+      "validator01": {"group": "blockchain-a"}, "validator02": {"group": "blockchain-a"},
+      "validator03": {"group": "blockchain-b"}, "validator04": {"group": "blockchain-b"}
+    }
+  },
+  "storage": {
+    "cluster_name": "dark-local",
+    "peers": {"storage-a": {"group": "storage-1"}, "storage-b": {"group": "storage-2"}},
+    "replication": {"publish_after_replicas": 1, "target_replicas": 2}
+  },
+  "access": {"mode": "local-direct"},
+  "overrides": {"settings": {"minter": {"shoulder": "200"}}}
+}

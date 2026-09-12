@@ -23,10 +23,9 @@ bundles contain neither their values nor their hashes.
 | `local-ha.json` | Full topology simulated on one Docker host | 1 local Docker host | 2 copies |
 | `production-five-host.json` | Production reference to adapt for a LAN/VPN | 5 SSH hosts | 2 copies |
 
-`local-simple` retains two local IPFS peers so that the Store API and Cluster
-topology are exercised, but its target durability is one copy. It is therefore
-not a substitute for a two-host failure test. `local-ha` retains both peers and
-uses a two-copy target.
+`local-simple` retains one local IPFS peer and exercises the Store API and
+Cluster topology with a one-copy target. It is not a replication or two-host
+failure test. `local-ha` retains both peers and uses a two-copy target.
 
 The component key remains `dark-explorador` because that is the local checkout
 directory and service name; its canonical Git origin is
@@ -47,11 +46,6 @@ directory and service name; its canonical Git origin is
 | `components` | Source repository and branch for each build input | Pin a release branch when operating a controlled release. |
 | `settings` | Minter/Store worker tuning rendered into containers | Tune only after measuring a representative workload. |
 | `secrets` | Secret file references and consuming service IDs | Provision files out of band; never put their values in JSON. |
-
-The production reference uses documentation ranges (`192.0.2.0/24` and
-`198.51.100.0/24`) and `REPLACE` placeholders for the SSH key, chain artifact,
-and secret sources. Do not deploy it until those values have been replaced
-with the actual management LAN/VPN addresses and secret locations.
 
 The production reference uses documentation ranges (`192.0.2.0/24` and
 `198.51.100.0/24`) and explicit `REPLACE` values. Do not install it until the

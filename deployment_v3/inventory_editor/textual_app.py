@@ -44,6 +44,27 @@ SECTION_HELP = {
     "secrets": "Controller source, destination path, strict mode and consumer services. Secret values are never displayed or stored in this editor.",
 }
 
+OPERATOR_SECTIONS = (
+    ("deployment", "Deployment"), ("machines", "Machines"),
+    ("placement", "Placement"), ("blockchain", "Blockchain"),
+    ("storage", "Storage"), ("networks", "Networks"),
+    ("routing", "Remote routing"), ("access", "Access"),
+    ("secrets", "Secret sources"), ("overrides", "Advanced overrides"),
+)
+
+OPERATOR_SECTION_HELP = {
+    "deployment": "Deployment identity and the installed recipe catalogue.",
+    "machines": "Docker hosts and their real management and service addresses.",
+    "placement": "The single source of truth for which machine runs each logical group.",
+    "blockchain": "Chain identity, fixed node IDs, group assignment, and optional existing artifact.",
+    "storage": "Logical storage peers, group assignment, and durability policy.",
+    "networks": "Named LAN/VPN CIDRs used only when traffic crosses hosts.",
+    "routing": "Select the network for each class of remote traffic.",
+    "access": "Operator or public access. Internal private ports are derived from dependencies.",
+    "secrets": "References to controller-side secret files; values are never displayed.",
+    "overrides": "Deliberate exceptions to catalogue defaults. The resolved preview shows their effect.",
+}
+
 
 def _textual():
     """Import Textual lazily and return the objects needed by this frontend."""
@@ -169,15 +190,19 @@ def _make_textual_app(document: InventoryDocument):
 
         def __init__(self) -> None:
             super().__init__()
-            self.section = "deployment"
+            base_sections = OPERATOR_SECTIONS if document.raw.get("format") == "dark-operator-inventory" else SECTIONS
+            self.sections = tuple(item for item in base_sections if item[0] in document.raw)
+            self.section_help = OPERATOR_SECTION_HELP if document.raw.get("format") == "dark-operator-inventory" else SECTION_HELP
+            self.section = self.sections[0][0]
             self.saved = False
             self.backup: str | None = None
             self._field_paths: list[tuple[str, ...]] = []
 
         def compose(self) -> ComposeResult:
-            yield Header(name="dARK deployment v3 inventory editor", show_clock=False)
+            title = "dARK operator inventory editor" if document.raw.get("format") == "dark-operator-inventory" else "dARK deployment v3 inventory editor"
+            yield Header(name=title, show_clock=False)
             with Horizontal(id="content"):
-                entries = [ListItem(Label(label), id=f"section-{key}") for key, label in SECTIONS]
+                entries = [ListItem(Label(label), id=f"section-{key}") for key, label in self.sections]
                 yield ListView(*entries, id="sections")
                 with VerticalScroll(id="editor"):
                     yield Static("", id="title")
@@ -197,10 +222,10 @@ def _make_textual_app(document: InventoryDocument):
             self.query_one("#status", Static).update(text)
 
         def _load_section(self) -> None:
-            section_label = dict(SECTIONS)[self.section]
+            section_label = dict(self.sections)[self.section]
             self.query_one("#title", Static).update(
-                f"[b]{section_label}[/b]\n{SECTION_HELP[self.section]}\n"
-                "Edit the fields below. References and constraints are checked by the v3 deployment validator."
+                f"[b]{section_label}[/b]\n{self.section_help[self.section]}\n"
+                "Edit the fields below. References and constraints are checked against the resolved v3 deployment contract."
             )
             fields = self.query_one("#fields", Static)
             fields.remove_children()

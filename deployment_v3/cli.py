@@ -23,18 +23,23 @@ from .sources import SourceError
 from .acquire import AcquisitionError, acquire_components
 from .inventory_editor import InventoryDocument, InventoryDocumentError, create_from_template, template_names
 from .inventory_editor.textual_app import run_textual_editor
+from .inventory_resolver import resolve_inventory_path
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "recreate", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit"):
+    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "recreate", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain"):
         command = actions.add_parser(name)
         command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
             command.add_argument("--json", action="store_true")
         if name == "render":
             command.add_argument("--output", required=True, type=Path)
+        if name == "inventory-resolve":
+            command.add_argument("--output", required=True, type=Path)
+        if name == "inventory-explain":
+            command.add_argument("--path", required=True, help="JSON Pointer in the resolved v3 document")
         if name == "install":
             command.add_argument("--non-interactive", action="store_true")
             command.add_argument("--yes", action="store_true")
@@ -49,6 +54,8 @@ def _parser() -> argparse.ArgumentParser:
                                  help="existing complete chain artifact; otherwise generate one for a new local chain")
             command.add_argument("--skip-acquire", action="store_true",
                                  help="reuse existing component checkouts instead of cloning/updating them")
+            command.add_argument("--verbose", action="store_true",
+                                 help="show detailed installation progress and readiness attempts")
         if name == "recreate":
             command.add_argument("--service", required=True)
             command.add_argument("--build", action="store_true")
@@ -77,6 +84,9 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--output", required=True, type=Path)
     create.add_argument("--overwrite", action="store_true")
     create.add_argument("--edit", action="store_true", help="open the new inventory in the interactive editor")
+    diff = actions.add_parser("inventory-diff", help="compare resolved inventories without operational effects")
+    diff.add_argument("--before", required=True, type=Path)
+    diff.add_argument("--after", required=True, type=Path)
     return parser
 
 
@@ -95,6 +105,9 @@ def _install(args: argparse.Namespace, plan) -> None:
         for step in plan.steps:
             print(f"{step.id}: {step.description}")
         return
+    def progress(message: str) -> None:
+        if args.verbose:
+            print(f"[VERBOSE] {message}", flush=True)
     if not args.yes and not args.non_interactive:
         answer = input(f"Install deployment '{plan.deployment_id}' now? [Y/n]: ").strip().lower()
         if answer not in {"", "y", "yes"}:
@@ -104,6 +117,7 @@ def _install(args: argparse.Namespace, plan) -> None:
     # execute the required Docker/Compose toolchain.  This is deliberately a
     # read-only preflight; filesystem creation and secret checks remain part
     # of apply, where the complete inventory context is available.
+    progress("running preflight on all machines")
     preflight = {machine.id: run_preflight(machine) for machine in plan.machines}
     failed = {
         machine_id: [item for item in checks if not item["ok"]]
@@ -112,7 +126,9 @@ def _install(args: argparse.Namespace, plan) -> None:
     }
     if failed:
         raise ApplyError("installation preflight failed: " + json.dumps(failed, sort_keys=True))
+    progress("preflight passed")
     if not args.skip_acquire:
+        progress("acquiring component checkouts")
         try:
             update_existing = args.yes or args.non_interactive
             if not update_existing:
@@ -124,6 +140,7 @@ def _install(args: argparse.Namespace, plan) -> None:
     # Apply uses a staged local destination for local machines. Prepare the
     # same private tree it will consume before invoking the runner.
     local_machines = [m for m in plan.machines if m.execution == "local"]
+    progress("preparing local secrets and blockchain artifacts")
     if not args.master_wallet_file:
         wallet_definition = plan.raw.get("secrets", {}).get("master-wallet", {})
         source_path = wallet_definition.get("source")
@@ -245,8 +262,10 @@ def _install(args: argparse.Namespace, plan) -> None:
         if answer not in {"y", "yes"}:
             raise ApplyError("installation cancelled: existing Besu data was preserved")
         clean_chain_data = True
-    output = apply(plan, project_root, resume=args.resume, defer_verification=True, clean_chain_data=clean_chain_data)
-    report = _verify_with_retries(plan, project_root)
+    progress("applying rendered deployment")
+    output = apply(plan, project_root, resume=args.resume, defer_verification=True, clean_chain_data=clean_chain_data, verbose=args.verbose)
+    progress("running final verification")
+    report = _verify_with_retries(plan, project_root, verbose=args.verbose)
     _write_install_report(root, report, resumed=args.resume)
     print(json.dumps(report, indent=2, sort_keys=True))
     if not report.get("ok"):
@@ -254,10 +273,12 @@ def _install(args: argparse.Namespace, plan) -> None:
     print(f"[OK] {'Installation resumed' if args.resume else 'Installation complete'} from {output}")
 
 
-def _verify_with_retries(plan, project_root: Path, attempts: int = 120) -> dict:
+def _verify_with_retries(plan, project_root: Path, attempts: int = 120, *, verbose: bool = False) -> dict:
     """Allow newly started containers and migrations a bounded readiness window."""
     report = {}
     for attempt in range(attempts):
+        if verbose:
+            print(f"[VERBOSE] final verification attempt {attempt + 1}/{attempts}", flush=True)
         report = verify(plan, project_root)
         if report.get("ok"):
             return report
@@ -302,6 +323,31 @@ def _run_inventory_editor(path: Path) -> None:
         print("[INFO] Inventory editor closed without saving.")
 
 
+def _resolved_document(path: Path) -> dict:
+    """Return v3 for either input format, for read-only CLI inspection."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if raw.get("format") == "dark-operator-inventory":
+        return resolve_inventory_path(path).document
+    load_inventory(path)
+    return raw
+
+
+def _inventory_changes(before: dict, after: dict) -> dict:
+    """Compact semantic diff intended for operator review, not a JSON patch."""
+    def ids(document: dict, key: str) -> set[str]:
+        return set(document.get(key, {}))
+    result = {}
+    for key in ("machines", "services", "groups"):
+        old, new = ids(before, key), ids(after, key)
+        common = old & new
+        changed = sorted(item for item in common if before[key][item] != after[key][item])
+        result[key] = {"added": sorted(new - old), "removed": sorted(old - new), "changed": changed}
+    for key in ("deployment", "blockchain", "storage", "infrastructure", "settings", "components", "secrets"):
+        if before.get(key) != after.get(key):
+            result.setdefault("changed_sections", []).append(key)
+    return result
+
+
 def main() -> None:
     args = _parser().parse_args()
     try:
@@ -313,6 +359,30 @@ def main() -> None:
             return
         if args.action == "inventory-edit":
             _run_inventory_editor(args.inventory)
+            return
+        if args.action == "inventory-resolve":
+            resolution = resolve_inventory_path(args.inventory)
+            if args.output.exists():
+                raise ValueError(f"refusing to overwrite existing output: {args.output}")
+            args.output.write_text(json.dumps(resolution.document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            print(f"[OK] Resolved {resolution.metadata['catalog']} to {args.output}")
+            for warning in resolution.warnings:
+                print(f"[WARN] {warning}")
+            return
+        if args.action == "inventory-explain":
+            resolution = resolve_inventory_path(args.inventory)
+            pointer = args.path.rstrip("/") or "/"
+            source = resolution.provenance.get(pointer)
+            if source is None:
+                candidates = [key for key in resolution.provenance if pointer.startswith(key + "/")]
+                source = resolution.provenance[max(candidates, key=len)] if candidates else "explicit v3 field or derived recipe detail"
+            print(json.dumps({"path": pointer, "source": source, "metadata": resolution.metadata}, indent=2, sort_keys=True))
+            return
+        if args.action == "inventory-diff":
+            before = _resolved_document(args.before)
+            after = _resolved_document(args.after)
+            changes = _inventory_changes(before, after)
+            print(json.dumps(changes, indent=2, sort_keys=True))
             return
         if args.action == "validate":
             raw, machines, services, _ = load_inventory(args.inventory)

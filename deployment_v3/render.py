@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 from pathlib import Path
 
 import yaml
@@ -12,6 +11,7 @@ import yaml
 from .model import DeploymentPlan, Machine, ServiceInstance
 from .network import endpoint_for
 from .services import compose_document
+from .inventory_resolver import resolve_inventory_path
 
 
 def _json(value): return json.dumps(value, indent=2, sort_keys=True) + "\n"
@@ -123,9 +123,21 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
 def render_plan(plan: DeploymentPlan, output: Path) -> Path:
     if output.exists() and any(output.iterdir()): raise ValueError(f"render output must be empty: {output}")
     output.mkdir(parents=True); shared = output / "shared"; shared.mkdir()
-    shutil.copyfile(plan.inventory_path, shared / "deployment-topology.json")
+    # `inventory_path` may be an operator inventory.  The bundle contract is
+    # always the fully resolved v3 document consumed by renderer and runner.
+    (shared / "deployment-topology.json").write_text(_json(plan.raw))
+    try:
+        original = json.loads(plan.inventory_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        original = {}
+    if original.get("format") == "dark-operator-inventory":
+        resolution = resolve_inventory_path(plan.inventory_path)
+        resolution_path = shared / "inventory-resolution.json"
+        resolution_path.write_text(_json({"metadata": resolution.metadata, "provenance": resolution.provenance, "warnings": resolution.warnings}))
     (shared / "plan.json").write_text(_json({"deployment_id": plan.deployment_id, "groups": [item.__dict__ for item in plan.groups], "steps": [item.__dict__ for item in plan.steps]}))
     root = output / "machines"; root.mkdir(); manifest = {}
+    if (shared / "inventory-resolution.json").exists():
+        manifest["shared/inventory-resolution.json"] = _sha256(shared / "inventory-resolution.json")
     for machine in plan.machines:
         assigned = tuple(service for service in plan.services if service.machine_id == machine.id)
         target = root / machine.id; target.mkdir(); (target / "env").mkdir(); (target / "config").mkdir()

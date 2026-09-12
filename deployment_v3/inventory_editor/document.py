@@ -11,6 +11,7 @@ import tempfile
 from typing import Any
 
 from ..inventory import InventoryError, load_inventory
+from ..inventory_resolver import resolve_inventory
 
 
 class InventoryDocumentError(ValueError):
@@ -62,6 +63,9 @@ class InventoryDocument:
         """Run the canonical inventory loader without persisting the candidate."""
         candidate = self.raw if raw is None else raw
         try:
+            if candidate.get("format") == "dark-operator-inventory":
+                resolve_inventory(candidate, source_path=self.path)
+                return
             with tempfile.TemporaryDirectory(prefix="dark-inventory-check-") as temporary:
                 candidate_path = Path(temporary) / "inventory.json"
                 candidate_path.write_text(json.dumps(candidate), encoding="utf-8")

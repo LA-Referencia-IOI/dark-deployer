@@ -22,6 +22,12 @@ Developer templates simulate these machines on one Docker host. Maintained
 templates are in [`examples/deployment-v3/`](examples/deployment-v3/):
 `local-simple.json`, `local-ha.json`, and `production-five-host.json`.
 
+Compact operator templates are in
+[`examples/operator-inventory/`](examples/operator-inventory/). They describe
+placement, storage, routing and access decisions and resolve to the complete v3
+inventory before execution. See [`OPERATIONS-MANUAL.md`](OPERATIONS-MANUAL.md)
+for the compact workflow and the Minter shoulder override.
+
 ## Requirements
 
 - Python 3.10+ (3.12 recommended)

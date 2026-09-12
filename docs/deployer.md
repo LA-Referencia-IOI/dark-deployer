@@ -2,12 +2,16 @@
 
 ## Single source of truth
 
-`deployment-topology.json` is the only deployment inventory. Maintained
-templates are `examples/deployment-v3/local-simple.json`, `local-ha.json`, and
-`production-five-host.json`. The inventory describes hosts, execution mode,
-Docker networks per machine, explicit server groups and service placement, Besu assignments, storage peers, component repositories
-and branches, public endpoints, and references to secret files. It contains no
-secret values. `.env` is optional runtime input, not a second inventory.
+The complete v3 document is the execution inventory. It is written directly by
+the maintained templates in `examples/deployment-v3/` or generated from the
+compact operator format in `examples/operator-inventory/`. The compact format
+describes operator decisions; the resolver expands it into the complete v3
+document before validation, planning, rendering or execution. `.env` is
+optional runtime input, not a second inventory.
+
+Both formats contain no secret values. They may contain controller-side source
+paths for private material. The generated `shared/deployment-topology.json` in
+every bundle is always the fully resolved v3 document.
 
 ## CLI
 
@@ -21,6 +25,24 @@ venv/bin/python deploy.py install --inventory deployment-topology.json
 venv/bin/python deploy.py status --inventory deployment-topology.json
 venv/bin/python deploy.py verify --inventory deployment-topology.json
 ```
+
+For a compact operator inventory:
+
+```bash
+venv/bin/python deploy.py inventory-create \
+  --template operator-local-ha --output deployment-topology.json
+venv/bin/python deploy.py inventory-resolve \
+  --inventory deployment-topology.json --output resolved-topology.json
+venv/bin/python deploy.py inventory-explain \
+  --inventory deployment-topology.json --path /services/store-api
+venv/bin/python deploy.py inventory-diff \
+  --before previous.json --after deployment-topology.json
+venv/bin/python deploy.py validate --inventory deployment-topology.json
+venv/bin/python deploy.py plan --inventory deployment-topology.json --json
+```
+
+These inspection commands are offline. They do not access Docker, SSH, Git or
+secret contents. `inventory-resolve` refuses to overwrite its output.
 
 Remote deployments use `push`, then `apply`; `resume` continues an interrupted
 run. `recreate --service <service> --build` rebuilds one service without
@@ -73,6 +95,72 @@ The recommended HA shape is five logical server groups: `apps`,
 map all five groups to one daemon; a remote deployment maps them to five
 machines. The group boundary is retained in the rendered plan.
 
+## Compact operator inventory
+
+The compact format uses `format: "dark-operator-inventory"` and
+`format_version: 1`. It selects the immutable `dark-standard-1` catalogue and
+records the decisions that normally change between installations:
+
+- `deployment`: stable ID and label;
+- `machines`: local or SSH hosts and their network addresses;
+- `placement`: the authoritative group-to-machine mapping;
+- `blockchain`: chain ID, RPC identity and validator group placement;
+- `storage`: peer IDs, peer groups and replica thresholds;
+- `networks` and `routing`: networks used by remote traffic;
+- `access`: `none`, `local-direct` or `gateway` exposure policy;
+- `secrets`: controller-side source root or explicit source files;
+- `overrides`: supported changes to catalogue settings/components and placement.
+
+The catalogue expands application services, dependencies, component defaults,
+settings, ports, secret consumers and the complete v3 graph. It creates the
+Kubo/Cluster pair for each declared peer. One peer is a one-copy deployment;
+two peers on one Docker host test replication but do not provide host-failure
+tolerance.
+
+The Minter shoulder is explicit in all compact examples:
+
+```json
+{
+  "overrides": {
+    "settings": {
+      "minter": {"shoulder": "200"}
+    }
+  }
+}
+```
+
+The value must use the current `2MM` format. The resolver validates the whole
+expanded document before a plan is built. Invalid shoulders, missing groups,
+unsupported peers, ambiguous routes and invalid replica counts fail early.
+
+The current catalogue supports the fixed dARK topology: four validators, one
+RPC, the Minter stack, dashboard, Store, and one or two storage peers named
+`storage-a` and `storage-b`. Use the complete v3 format for a topology outside
+that catalogue.
+
+Same-machine dependencies use Docker DNS. A remote dependency receives the
+network selected by `routing`, TCP, and a matching private provider exposure.
+Store's Kubo route is derived from each declared Cluster peer, so it does not
+need to be duplicated in the compact file.
+
+Catalogue private exposures disappear when no remote dependency needs them.
+`local-direct` then adds loopback access for the normal APIs and explorer;
+`gateway` keeps the edge proxy and requires an explicit bind and port. It does
+not make APIs public automatically.
+
+The resolver records the input digest, catalogue digest and resolver version.
+Rendering writes this evidence to `shared/inventory-resolution.json` alongside
+the fully resolved topology.
+
+The Textual editor detects compact inventories and presents decision-oriented
+sections for placement, storage, routing, access and overrides. It validates
+the expansion when changing a section or saving, and keeps atomic saves and
+timestamped backups.
+
+Available compact templates are `operator-local-simple`, `operator-local-ha`
+and `operator-production-five-host`. The production template uses documentation
+network ranges and `REPLACE` paths; replace them before preflight.
+
 ## Networks, ports and storage bootstrap
 
 The inventory declares named `lan`/`vpn` networks and each machine has one
@@ -108,6 +196,10 @@ venv/bin/python deploy.py inventory-edit --inventory deployment-topology.json
 
 The editor validates the complete document and saves atomically with a backup.
 It never starts Docker or reads secret contents.
+
+For a compact inventory, the saved file remains compact. The resolved v3
+document is produced explicitly with `inventory-resolve` or implicitly by
+`validate`, `plan`, `render`, `push`, `apply` and `install`.
 
 For the v3 service graph and endpoint rules, see
 [deployment-v3-service-placement.md](deployment-v3-service-placement.md).

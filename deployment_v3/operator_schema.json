@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dARK operator inventory",
+  "type": "object",
+  "required": ["format", "format_version", "catalog", "deployment", "machines", "placement", "blockchain", "storage"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {"const": "dark-operator-inventory"},
+    "format_version": {"const": 1},
+    "catalog": {"const": "dark-standard-1"},
+    "deployment": {"type": "object"},
+    "defaults": {"type": "object"},
+    "networks": {"type": "object"},
+    "machines": {"type": "object", "minProperties": 1},
+    "placement": {"type": "object", "minProperties": 1},
+    "routing": {"type": "object"},
+    "blockchain": {"type": "object"},
+    "storage": {"type": "object"},
+    "access": {"type": "object"},
+    "secrets": {"type": "object"},
+    "overrides": {"type": "object"}
+  }
+}

@@ -21,10 +21,34 @@ destino por host y el modo `0600`; no guardar valores en Git.
 
 ## 2. Topología
 
-Usar un inventario JSON v3 (por ejemplo uno de `examples/deployment-v3/`) y
-adaptarlo al entorno. La topología es la fuente de verdad para hosts, redes,
-roles, blockchain, storage, ramas, política de puertos, secretos y rutas LAN/VPN
-por dependencia.
+Usar un inventario JSON v3 completo, por ejemplo uno de
+`examples/deployment-v3/`, o un inventario compacto de
+`examples/operator-inventory/`. La topología es la fuente de verdad para
+hosts, redes, roles, blockchain, storage, ramas, política de puertos, secretos
+y rutas LAN/VPN por dependencia. El formato compacto describe decisiones del
+operador y se expande automáticamente al contrato v3 antes de validar o
+ejecutar.
+
+Los ejemplos compactos mantenidos son:
+
+- `local-simple.json`: un host Docker y un peer de storage; una copia.
+- `local-ha.json`: cinco grupos lógicos en un host Docker y dos peers; prueba
+  replicación, pero no pérdida de un host.
+- `production-five-host.json`: cinco máquinas SSH con LAN/VPN de documentación;
+  requiere sustituir los valores `REPLACE`.
+
+El formato compacto usa `format: "dark-operator-inventory"`,
+`format_version: 1` y `catalog: "dark-standard-1"`. Sus secciones
+principales son `machines`, `placement`, `blockchain`, `storage`,
+`networks`, `routing`, `access`, `secrets` y `overrides`. La
+colocación se declara una sola vez por grupo; servicios, dependencias,
+consumidores de secretos, grupos v3 y exposiciones privadas se derivan del
+catálogo y de las rutas.
+
+El catálogo actual soporta cuatro validadores, un RPC, el conjunto completo de
+Minter, dashboard, Store y uno o dos peers de storage llamados `storage-a` y
+`storage-b`. Para topologías fuera de esa receta se debe usar el inventario v3
+completo.
 
 Para la instalación normal se puede ejecutar directamente:
 
@@ -53,6 +77,113 @@ sobrescribe cambios locales. Si la rama local y la remota divergen, la
 adquisición se detiene para que el operador revise, guarde o integre los
 cambios explícitamente.
 
+### Trabajo diario con el formato compacto
+
+Crear una topología compacta desde una plantilla:
+
+```bash
+venv/bin/python deploy.py inventory-create \
+  --template operator-local-ha \
+  --output deployment-topology.json
+```
+
+Antes de instalar, revisar la expansión completa y su evidencia:
+
+```bash
+venv/bin/python deploy.py inventory-resolve \
+  --inventory deployment-topology.json \
+  --output resolved-topology.json
+
+venv/bin/python deploy.py inventory-explain \
+  --inventory deployment-topology.json \
+  --path /services/store-api
+
+venv/bin/python deploy.py plan \
+  --inventory deployment-topology.json --json
+```
+
+`inventory-resolve`, `inventory-explain` e `inventory-diff` son comandos
+offline: no usan Docker, SSH, Git ni leen contenidos de secretos.
+`inventory-resolve` no sobrescribe un archivo de salida existente. Para
+comparar dos decisiones:
+
+```bash
+venv/bin/python deploy.py inventory-diff \
+  --before previous.json \
+  --after deployment-topology.json
+```
+
+Validar y ejecutar usa directamente el compacto:
+
+```bash
+venv/bin/python deploy.py validate --inventory deployment-topology.json
+venv/bin/python deploy.py render --inventory deployment-topology.json --output /tmp/dark-render
+venv/bin/python deploy.py install --inventory deployment-topology.json
+```
+
+El bundle contiene el v3 resuelto en
+`shared/deployment-topology.json` y la evidencia en
+`shared/inventory-resolution.json`. Esta evidencia registra el digest de la
+entrada, el digest del catálogo y la versión del resolver.
+
+### Ajustes operativos del compacto
+
+El shoulder del Minter se edita explícitamente en:
+
+```json
+{
+  "overrides": {
+    "settings": {
+      "minter": {"shoulder": "200"}
+    }
+  }
+}
+```
+
+Los tres ejemplos compactos contienen `"200"`. El valor debe respetar el
+formato `2MM`, por ejemplo `200`, `245` o `299`. El catálogo aporta
+settings y componentes por defecto; `overrides.settings` y
+`overrides.components` permiten excepciones controladas.
+
+Para añadir storage se declara un peer lógico y su grupo:
+
+```json
+{
+  "storage": {
+    "peers": {
+      "storage-a": {"group": "storage-1"},
+      "storage-b": {"group": "storage-2"}
+    },
+    "replication": {
+      "publish_after_replicas": 1,
+      "target_replicas": 2
+    }
+  }
+}
+```
+
+El resolver crea el par Kubo/Cluster, actualiza Store y asigna los consumidores
+de secretos. No hay que editar esas relaciones internas manualmente.
+
+Para una dependencia entre máquinas, `routing` selecciona la red por clase de
+tráfico:
+
+```json
+{
+  "routing": {
+    "blockchain_p2p": "vpn",
+    "storage_p2p": "vpn",
+    "storage_api": "vpn",
+    "application_api": "lan"
+  }
+}
+```
+
+El resolver usa Docker DNS dentro de una máquina. Entre máquinas añade red,
+TCP y exposición privada al proveedor. Nunca convierte automáticamente un
+servicio en público. `access.local-direct` publica APIs en loopback;
+`access.gateway` usa el edge proxy y necesita `bind` y puerto explícitos.
+
 Validar antes de generar cualquier bundle:
 
 ```bash
@@ -61,7 +192,8 @@ venv/bin/python -m deployment_v3.cli validate \
 venv/bin/python -m deployment_v3.cli plan \
   --inventory examples/deployment-v3/local-ha.json
 venv/bin/python -m deployment_v3.cli render \
-  --inventory examples/deployment-v3/local-ha.json
+  --inventory examples/deployment-v3/local-ha.json \
+  --output /tmp/dark-local-ha-render
 ```
 
 `plan` no debe modificar Docker, repositorios ni el filesystem operativo.
@@ -85,11 +217,13 @@ venv/bin/python deploy.py inventory-edit \
   --inventory deployment-topology.json
 ```
 
-El editor organiza la topología por secciones: deployment, defaults, redes,
-máquinas, servicios, infraestructura, blockchain, storage, componentes,
-settings y secretos. Cada sección se valida con las mismas reglas semánticas que usa el
-instalador antes de incorporarla al documento. `Ctrl+V` valida la sección,
-`Ctrl+S` guarda y `Ctrl+Q` sale.
+El editor organiza un inventario v3 por deployment, defaults, redes, máquinas,
+grupos, servicios, infraestructura, blockchain, storage, componentes, settings
+y secretos. Para un inventario compacto presenta deployment, máquinas,
+placement, blockchain, storage, redes, routing, access, fuentes de secretos y
+overrides. Cada sección se valida contra la expansión completa antes de
+incorporarla al documento. `Ctrl+V` valida la sección, `Ctrl+S` guarda y
+`Ctrl+Q` sale.
 
 El guardado valida el inventario completo y crea una copia
 `deployment-topology.json.bak-AAAAMMDD-HHMMSSZ` antes de reemplazarlo de forma
@@ -144,14 +278,29 @@ Inicializar o verificar los artefactos solo cuando corresponda a una cadena
 nueva:
 
 ```bash
-venv/bin/python -m deployment_v3.cli chain-init --inventory deployment-topology.json
-venv/bin/python -m deployment_v3.cli chain-static-nodes --inventory deployment-topology.json
-venv/bin/python -m deployment_v3.cli chain-export --inventory deployment-topology.json
-venv/bin/python -m deployment_v3.cli chain-verify --inventory deployment-topology.json
+venv/bin/python deploy.py chain-init \
+  --inventory deployment-topology.json \
+  --output /secure/dark/secrets \
+  --master-wallet-address 0x...
+venv/bin/python deploy.py chain-static-nodes \
+  --inventory deployment-topology.json \
+  --artifact-root /secure/dark/secrets/blockchain/role-artifact \
+  --public-keys /secure/dark/secrets/blockchain/public-keys.json
+venv/bin/python deploy.py chain-export \
+  --inventory deployment-topology.json \
+  --artifact-root /secure/dark/secrets/blockchain/role-artifact \
+  --role validators-a \
+  --output /secure/dark/secrets/blockchain/validators-a
+venv/bin/python deploy.py chain-verify \
+  --inventory deployment-topology.json \
+  --artifact-root /secure/dark/secrets/blockchain/role-artifact
 ```
 
-No regenerar genesis ni identidades en una cadena existente sin una decisión
-operativa explícita.
+chain-init es para una red nueva y requiere un --master-wallet-address.
+chain-static-nodes necesita un JSON que mapee los cinco nodos a sus claves
+públicas. chain-export separa rpc, validators-a o validators-b. No regenerar
+genesis ni identidades en una cadena existente sin una decisión operativa
+explícita.
 
 ## 6. Verificación posterior
 

@@ -2,11 +2,26 @@
 
 ## Install
 
-Use Python 3.12, Docker Engine and Compose v2. Create or adapt an inventory,
-run `validate`, review `plan`, then run `install`. For production, provision
+Use Python 3.12, Docker Engine and Compose v2. Create or adapt a complete v3 or
+compact operator inventory, run `validate`, review `plan`, then run `install`.
+For production, provision
 SSH access, VPN addresses, secret files, chain artifacts and storage paths
 before `preflight`. Apply in dependency order: validators-a, validators-b,
 apps/RPC and contracts, storage, then application services and dashboard.
+
+For a compact inventory, inspect the generated contract before an operational
+run:
+
+```bash
+venv/bin/python deploy.py inventory-resolve \
+  --inventory deployment-topology.json --output resolved-topology.json
+venv/bin/python deploy.py inventory-explain \
+  --inventory deployment-topology.json --path /settings/minter/shoulder
+venv/bin/python deploy.py plan --inventory deployment-topology.json --json
+```
+
+The compact Minter shoulder is set under
+`overrides.settings.minter.shoulder`; the maintained examples show `200`.
 
 ## Verification
 
