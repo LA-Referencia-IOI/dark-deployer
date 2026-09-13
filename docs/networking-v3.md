@@ -91,3 +91,18 @@ P2P address and port expected for that route.
 
 The route preflight proves routing, not that a firewall allows a service that
 has not started yet. The post-start probes provide that protocol-level proof.
+
+## Public proxies
+
+`edge-proxy` is an explicit service with `configuration.sites`: each site has
+an optional host name and an ordered set of public path prefixes. A rule names
+a declared proxy connection and an `upstream_path`; it never embeds an IP or a
+URL. Prefix routes are rendered before `/`, so `/admin/`, `/explorer/` and
+`/api/` win over the Resolver catch-all.
+
+The proxy configuration accepts `tls.mode` as `http`, `external` (TLS ends at a
+trusted load balancer) or `direct` (certificate and key secret IDs supplied by
+the operator). A direct TLS proxy mounts only those declared secrets. The proxy
+always forwards host, scheme, client and prefix headers. Dashboard trusts those
+headers so cookies, redirects and assets remain under `/admin/`; Explorer is
+rendered with `/explorer/` as its SPA base.

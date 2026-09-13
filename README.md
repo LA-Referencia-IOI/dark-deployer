@@ -13,6 +13,7 @@ Choose the inventory that matches the deployment you are building:
 | Fast local functional test | `operator-local-simple` | One storage peer and the end-to-end service path |
 | Local replication simulation | `operator-local-ha` | Two peers and five logical groups on one Docker host |
 | Standard production shape | `operator-production-five-host` | Five SSH hosts with explicit LAN/VPN routing |
+| Dedicated public Resolver | `operator-production-six-host` | Six SSH hosts with separate Resolver and apps gateways |
 | Non-standard service layout | `examples/deployment-v3/` | Direct control of the full v3 execution inventory |
 
 Create, inspect, validate, plan, and install a compact inventory:
@@ -49,11 +50,12 @@ production layout is:
 
 Developer templates simulate these machines on one Docker host. Maintained
 templates are in [`examples/deployment-v3/`](examples/deployment-v3/):
-`local-simple.json`, `local-ha.json`, and `production-five-host.json`.
+`local-simple.json`, `local-ha.json`, `production-five-host.json`, and
+`production-six-host.json`.
 
 Compact operator templates are in
 [`examples/operator-inventory/`](examples/operator-inventory/). They describe
-placement, storage, routing and access decisions and resolve to the complete v3
+placement, storage, routing and proxy decisions and resolve to the complete v3
 inventory before execution. See [`OPERATIONS-MANUAL.md`](OPERATIONS-MANUAL.md)
 for the compact workflow and the Minter shoulder override.
 
@@ -96,7 +98,7 @@ existing `blockchain/master-wallet.txt`.
 
 The operator inventory is intentionally small: it declares machines,
 group-to-machine placement, blockchain identity, storage peers and replication,
-networks and routing, operator access, secret sources, and typed overrides.
+networks and routing, explicit proxy listeners/routes, secret sources, and typed overrides.
 The catalogue derives service instances, connections, secret consumers, and
 private endpoint exposure. Use `inventory-explain` to see why a resolved field
 exists; use `inventory-diff` before applying a configuration change.

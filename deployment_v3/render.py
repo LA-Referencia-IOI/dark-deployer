@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 from .model import DeploymentPlan, Machine, ServiceInstance
-from .network import endpoint_for, has_remote_peer, p2p_endpoint
+from .network import endpoint_for, has_remote_peer, p2p_endpoint, internal_port
 from .services import compose_document
 from .inventory_resolver import resolve_inventory_path
 
@@ -19,12 +19,71 @@ def _yaml(value): return yaml.safe_dump(value, sort_keys=False, default_flow_sty
 def _sha256(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _nginx_proxy_config(plan: DeploymentPlan, proxy: ServiceInstance) -> str:
+    """Render one or more virtual hosts from the validated proxy contract."""
+    tls = proxy.configuration.get("tls", {"mode": "http"})
+    mode = tls.get("mode", "http")
+    port = internal_port(proxy)
+    servers: list[str] = []
+    for site in proxy.configuration["sites"]:
+        host = site.get("host", "")
+        lines = ["server {", f"  listen {port}" + (" ssl;" if mode == "direct" else ";"), f"  server_name {host or '_'};"]
+        if mode == "direct":
+            lines.extend((
+                f"  ssl_certificate /run/secrets/{tls['certificate_secret']};",
+                f"  ssl_certificate_key /run/secrets/{tls['key_secret']};",
+            ))
+        # Longest paths first makes the intent evident and protects a future
+        # switch to regex locations; nginx itself also prefers the longer
+        # prefix over the catch-all resolver route.
+        for route in sorted(site["routes"], key=lambda item: len(item["path"]), reverse=True):
+            upstream = _url(plan, proxy, proxy.connections[route["connection"]]["service"], proxy.connections[route["connection"]]) + route["upstream_path"]
+            location = f"location = {route['path']}" if not route["path"].endswith("/") else f"location {route['path']}"
+            forwarded_prefix = route["path"].rstrip("/") or "/"
+            lines.extend((
+                f"  {location} {{",
+                f"    proxy_pass {upstream};",
+                "    proxy_http_version 1.1;",
+                "    proxy_set_header Host $host;",
+                "    proxy_set_header X-Real-IP $remote_addr;",
+                "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+                "    proxy_set_header X-Forwarded-Host $host;",
+                "    proxy_set_header X-Forwarded-Port $server_port;",
+                "    proxy_set_header X-Forwarded-Proto $scheme;",
+                f"    proxy_set_header X-Forwarded-Prefix {forwarded_prefix};",
+                "    proxy_redirect off;",
+                "  }",
+            ))
+        lines.append("}")
+        servers.append("\n".join(lines))
+    return "\n\n".join(servers) + "\n"
+
+
 def _url(plan: DeploymentPlan, consumer: ServiceInstance, provider_id: str, connection: dict[str, str] | None = None) -> str:
     provider = plan.service(provider_id)
     if connection is None and provider.machine_id != consumer.machine_id:
         network = provider.exposure.get("network") if provider.exposure else None
         connection = {"service": provider_id, **({"network": network} if network else {})}
     return endpoint_for(provider, plan.machine(provider.machine_id), plan.machine(consumer.machine_id), connection or {"service": provider_id}).url
+
+
+def _dashboard_public_url(plan: DeploymentPlan, dashboard: ServiceInstance) -> str:
+    """Return the declared gateway URL used for Laravel absolute URLs."""
+    dashboard_id = dashboard.id
+    if dashboard.type == "dashboard-migrate":
+        dashboard_id = next(item.id for item in plan.services if item.type == "dashboard")
+    for proxy in (item for item in plan.services if item.type == "edge-proxy"):
+        for site in proxy.configuration.get("sites", []):
+            for route in site.get("routes", []):
+                connection = proxy.connections.get(route.get("connection", ""), {})
+                if connection.get("service") != dashboard_id:
+                    continue
+                origin = site.get("public_origin")
+                if origin:
+                    return origin.rstrip("/") + route["path"].rstrip("/")
+    # An empty-host Lima listener intentionally follows the browser Host
+    # header.  Relative links still work through X-Forwarded-Prefix.
+    return "http://localhost:8081"
 
 
 def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
@@ -67,7 +126,7 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
         cluster = next(item for item in plan.services if item.type == "ipfs-cluster")
         rpc_url = _url(plan, service, rpc.id)
         values |= {
-            "APP_ENV": "production", "APP_DEBUG": "false", "APP_URL": "http://localhost:8081", "FORCE_HTTPS": "false",
+            "APP_ENV": "production", "APP_DEBUG": "false", "APP_URL": _dashboard_public_url(plan, service), "FORCE_HTTPS": "false",
             "DB_CONNECTION": "mysql", "DB_HOST": host("database"), "DB_DATABASE": "dark", "DB_USERNAME": "dark", "REDIS_HOST": host("redis"),
             "ADMIN_API_BASE_URL": connection("admin_api"), "MINTER_BASE_URL": connection("minter_api"), "RESOLVER_BASE_URL": connection("resolver_api"), "STORE_API_BASE_URL": connection("store_api"),
             "WORKER_STATUS_URL": connection("minter_api") + "/api/v1/worker/status",
@@ -179,10 +238,8 @@ def render_plan(plan: DeploymentPlan, output: Path) -> Path:
             for service in target_services:
                 path = target_dir / "env" / f"{service.id}.env"; path.write_text("".join(f"{key}={value}\n" for key, value in sorted(_env(plan, service).items()))); manifest[str(path.relative_to(output))] = _sha256(path)
                 if service.type == "edge-proxy":
-                    dashboard = _url(plan, service, service.connections["dashboard"]["service"], service.connections["dashboard"])
-                    explorer = _url(plan, service, service.connections["explorer"]["service"], service.connections["explorer"])
-                    nginx_path = target_dir / "config" / "nginx.conf"
-                    nginx_path.write_text("server {\n  listen 80;\n  location /explorer/ { proxy_pass " + explorer + "/; proxy_set_header Host $host; }\n  location / { proxy_pass " + dashboard + "/; proxy_set_header Host $host; }\n}\n")
+                    nginx_path = target_dir / "config" / f"nginx-{service.id}.conf"
+                    nginx_path.write_text(_nginx_proxy_config(plan, service))
                     manifest[str(nginx_path.relative_to(output))] = _sha256(nginx_path)
     firewall = {}
     for machine in plan.machines:

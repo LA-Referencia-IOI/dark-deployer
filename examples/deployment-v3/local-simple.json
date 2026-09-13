@@ -35,16 +35,32 @@
       }
     }
   },
+  "groups": {
+    "apps": {
+      "kind": "apps",
+      "machine": "local",
+      "members": ["rpc01"],
+      "services": ["admin-api", "chain-worker", "contracts-deploy", "dashboard", "dashboard-migrate", "dashboard-mysql", "dashboard-redis", "edge-proxy", "explorer", "metadata-worker", "minter-api", "minter-migrate", "minter-postgres", "replication-worker", "resolver-api", "rpc01", "store-api"]
+    },
+    "validators": {
+      "kind": "validators",
+      "machine": "local",
+      "members": ["validator01", "validator02", "validator03", "validator04"],
+      "services": ["validator01", "validator02", "validator03", "validator04"]
+    },
+    "storage-1": {
+      "kind": "storage",
+      "machine": "local",
+      "members": ["storage-a"],
+      "services": ["ipfs-storage-a", "cluster-storage-a"]
+    }
+  },
   "services": {
     "rpc01": {
       "type": "besu-rpc",
       "machine": "local",
       "configuration": {
         "node_id": "rpc01"
-      },
-      "exposure": {
-        "mode": "loopback",
-        "port": 8545
       }
     },
     "validator01": {
@@ -82,10 +98,6 @@
         "rpc": {
           "service": "rpc01"
         }
-      },
-      "exposure": {
-        "mode": "loopback",
-        "port": 25000
       }
     },
     "minter-postgres": {
@@ -104,10 +116,6 @@
     "store-api": {
       "type": "store-api",
       "machine": "local",
-      "exposure": {
-        "mode": "loopback",
-        "port": 8003
-      },
       "connections": {
         "cluster_cluster-storage-a": {
           "service": "cluster-storage-a"
@@ -221,10 +229,6 @@
         "contracts": {
           "service": "contracts-deploy"
         }
-      },
-      "exposure": {
-        "mode": "loopback",
-        "port": 8000
       }
     },
     "resolver-api": {
@@ -240,10 +244,6 @@
         "contracts": {
           "service": "contracts-deploy"
         }
-      },
-      "exposure": {
-        "mode": "loopback",
-        "port": 8002
       }
     },
     "dashboard-mysql": {
@@ -303,10 +303,6 @@
         "migration": {
           "service": "dashboard-migrate"
         }
-      },
-      "exposure": {
-        "mode": "loopback",
-        "port": 8081
       }
     },
     "ipfs-storage-a": {
@@ -327,6 +323,26 @@
           "service": "ipfs-storage-a"
         }
       }
+    },
+    "edge-proxy": {
+      "type": "edge-proxy",
+      "machine": "local",
+      "connections": {
+        "resolver": {"service": "resolver-api"}, "dashboard": {"service": "dashboard"},
+        "explorer": {"service": "explorer"}, "minter": {"service": "minter-api"}
+      },
+      "configuration": {
+        "tls": {"mode": "http"},
+        "sites": [{"host": "localhost", "public_origin": "http://localhost", "routes": [
+          {"id": "dashboard", "path": "/admin/", "connection": "dashboard", "upstream_path": "/"},
+          {"id": "explorer", "path": "/explorer/", "connection": "explorer", "upstream_path": "/"},
+          {"id": "minter-v1", "path": "/api/v1/", "connection": "minter", "upstream_path": "/api/v1/"},
+          {"id": "minter-docs", "path": "/api/docs", "connection": "minter", "upstream_path": "/docs"},
+          {"id": "minter-openapi", "path": "/api/openapi.json", "connection": "minter", "upstream_path": "/openapi.json"},
+          {"id": "resolver", "path": "/", "connection": "resolver", "upstream_path": "/api/v1/arks/"}
+        ]}]
+      },
+      "exposure": {"mode": "loopback", "port": 80, "protocols": ["tcp"]}
     },
     "contracts-deploy": {
       "type": "contracts-deploy",
@@ -525,7 +541,7 @@
       "p2p_port": 9096
     },
     "web": {
-      "http_port": 8080
+      "http_port": 80
     }
   }
 }

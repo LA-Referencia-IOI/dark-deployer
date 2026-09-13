@@ -68,7 +68,7 @@ práctica es:
 | Grupo | Entrada mínima |
 | --- | --- |
 | `dark-controller` | Sin entrada requerida por dARK |
-| `dark-apps` | SSH 22 desde controller; RPC 8545 desde blockchain; HTTP 8080 desde ALB o red administradora |
+| `dark-apps` | SSH 22 desde controller; RPC 8545 desde blockchain; HTTP 80 desde ALB o red administradora |
 | `dark-blockchain` | SSH 22 desde controller; Besu P2P 30303-30307 TCP/UDP desde apps y blockchain; explorer 25000 desde apps |
 | `dark-storage` | SSH 22 desde controller; Kubo API 5001 desde apps/storage; Kubo P2P 4001 TCP/UDP desde storage; Cluster API 9094 desde apps/storage; Cluster P2P 9096 TCP desde storage |
 
@@ -77,7 +77,7 @@ con `shared/firewall-suggestion.json`, que es la evidencia exacta derivada del
 inventario. El deployer no modifica Security Groups ni firewalls.
 
 Si el edge proxy es público, colocar un Application Load Balancer con TLS
-delante de `apps:8080` y aceptar ese puerto únicamente desde el Security Group
+delante de `apps:80` y aceptar ese puerto únicamente desde el Security Group
 del balanceador. RPC, Kubo, Cluster y las APIs internas no deben exponerse a
 Internet.
 

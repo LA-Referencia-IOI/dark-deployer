@@ -125,7 +125,12 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
         elif service.type == "explorer":
             result[service.id] = {**common, "build": {"context": f"{machine.workspace_root}/components/dark-explorador", "dockerfile": "Dockerfile"}, "env_file": env, "ports": _ports(machine, service)}
         elif service.type == "edge-proxy":
-            result[service.id] = {**common, "image": "nginx:1.27-alpine", "ports": _ports(machine, service), "volumes": ["./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro"]}
+            volumes = [f"./config/nginx-{service.id}.conf:/etc/nginx/conf.d/default.conf:ro"]
+            tls = service.configuration.get("tls", {})
+            if tls.get("mode") == "direct":
+                for secret_id in (tls["certificate_secret"], tls["key_secret"]):
+                    volumes.append(f"{secret_path(secret_id)}:/run/secrets/{secret_id}:ro")
+            result[service.id] = {**common, "image": "nginx:1.27-alpine", "ports": _ports(machine, service), "volumes": volumes}
         elif service.type in {"contracts-deploy", "rpc-probe"}:
             result[service.id] = {**common, "profiles": ["setup"], "build": {"context": machine.workspace_root, "dockerfile": "deployment_v3/Dockerfile.contracts"}, "env_file": env, "volumes": [f"{secret_path('contract-signer')}:/run/secrets/contract-signer:ro", "./artifacts/contracts:/contracts:ro", f"{data}/contracts:/runtime"]}
     project = f"{plan.deployment_id}-{machine.id}" + (f"-{group_id}" if group_id else "")

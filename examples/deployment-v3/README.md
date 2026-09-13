@@ -23,6 +23,7 @@ bundles contain neither their values nor their hashes.
 | `local-ha.json` | Full deployment shape simulated on one Docker host | 1 local Docker host | 2 copies |
 | `lima-five-host.json` | Lima reference snapshot; generate current VM data through `local-infra/generate-lima-inventory.py` | 5 SSH hosts | 2 copies |
 | `production-five-host.json` | Production reference to adapt for a LAN/VPN | 5 SSH hosts | 2 copies |
+| `production-six-host.json` | Dedicated public Resolver plus LAN/VPN apps gateway | 6 SSH hosts | 2 copies |
 
 `local-simple` retains one local IPFS peer and exercises the Store API and
 Cluster layout with a one-copy target. It is not a replication or two-host
@@ -93,6 +94,16 @@ storage-2     ipfs-storage-b, cluster-storage-b
 - `public`: bind on all interfaces. Only the `edge-proxy` should use it.
 - omitted: no host port is published. Same-machine consumers still use Docker
   DNS and the container port.
+
+## Public proxy rules
+
+An `edge-proxy` is the only normal public entry point. Each machine can run at
+most one proxy. Its `exposure.port` is the host listener; Nginx listens on
+container port 80 for HTTP/external TLS and 443 for direct TLS. Every site
+declares `host`, `public_origin`, and routes. `public_origin` is the user-facing
+URL used by Dashboard redirects and assets, and can differ from an internal
+load-balancer listener. The documented proxy examples publish HTTP on port 80;
+an external load balancer may terminate TLS and forward to that listener.
 
 ## Required private material
 

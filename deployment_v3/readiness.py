@@ -31,13 +31,16 @@ def _host_url(service, machine) -> str:
         raise ReadinessError(f"{service.id} has no host exposure for a local probe")
     mode = service.exposure["mode"]
     port = service.exposure["port"]
+    scheme = "https" if service.type == "edge-proxy" and service.configuration.get("tls", {}).get("mode") == "direct" else "http"
     if mode == "public":
-        return f"http://127.0.0.1:{port}"
-    return f"http://127.0.0.1:{port}" if mode == "loopback" else f"http://{machine.address_on(service.exposure['network'])}:{port}"
+        return f"{scheme}://127.0.0.1:{port}"
+    return f"{scheme}://127.0.0.1:{port}" if mode == "loopback" else f"{scheme}://{machine.address_on(service.exposure['network'])}:{port}"
 
 
 def _curl(plan, machine, url, payload: str | None = None):
     argv = ["curl", "-fsS", "--max-time", "5"]
+    if url.startswith("https://"):
+        argv.append("-k")
     if payload is not None:
         argv.extend(["-H", "Content-Type: application/json", "--data", payload])
     argv.append(url)

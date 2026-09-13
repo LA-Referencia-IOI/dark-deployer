@@ -75,3 +75,11 @@ To test recovery, stop `dark-storage-2`, run verification (it must fail with a
 peer-specific reason), start it again, and rerun verification. A subsequent
 `deploy.py install --resume` must reuse completed steps and only revalidate the
 uncertain storage steps.
+
+To discard the complete local lab and recreate it from zero, use the managed
+cleanup script. It removes only the five role VMs and the temporary base VM;
+the store directory remains available for the next `lima-up.sh` run:
+
+```bash
+local-infra/lima-clean.sh --store /Volumes/Test/dark-lab
+```

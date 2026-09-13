@@ -58,12 +58,15 @@ projects and volumes.
 
 ## Production layout
 
-The normal deployment has apps, blockchain-a, blockchain-b and two storage
-hosts. RPC is private and available to APIs through the apps network and the
-explorer reaches it through the authorized LAN/VPN route. Storage peers share
-Cluster state, while each host keeps its own local Docker network. The
-`edge-proxy` in apps publishes dashboard and explorer over HTTP; direct public
-exposure is otherwise avoided.
+The normal five-host deployment has apps, blockchain-a, blockchain-b and two
+storage hosts. The six-host reference adds a dedicated Resolver host. RPC is
+private and available to APIs through the apps network and the explorer reaches
+it through the authorized LAN/VPN route. Storage peers share Cluster state,
+while each host keeps its own local Docker network. Each machine may run one
+`edge-proxy`: the standard gateway publishes Resolver at `/`, Dashboard at
+`/admin/`, Explorer at `/explorer/`, and Minter API/documentation under `/api/`.
+The six-host reference separates a public Resolver proxy from a LAN/VPN apps
+proxy. Direct backend exposure is otherwise avoided.
 
 Every cross-host connection in the inventory names its LAN/VPN and protocol;
 the consumer must share that network or declare an existing directional route.

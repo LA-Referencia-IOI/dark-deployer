@@ -90,6 +90,7 @@ class DeploymentV3Tests(unittest.TestCase):
     def test_operator_supports_routes_nat_and_p2p_advertisement(self):
         source = ROOT / "examples" / "operator-inventory" / "production-five-host.json"
         document = json.loads(source.read_text())
+        document.pop("proxies")
         document["access"] = {"mode": "none"}
         document["machines"]["observer"] = {
             "execution": "ssh", "management_address": "192.0.2.20", "addresses": {"lan": "192.0.2.20"},
@@ -239,8 +240,7 @@ class DeploymentV3Tests(unittest.TestCase):
 
     def test_kubo_entrypoint_consumes_rendered_bootstrap_variable(self):
         entrypoint = (ROOT / "components" / "dark-ipfs" / "scripts" / "ipfs-entrypoint.sh").read_text()
-        self.assertIn('BOOTSTRAP_MULTIADDRESSES="${IPFS_BOOTSTRAP_ENDPOINTS:-}"', entrypoint)
-        self.assertNotIn("IPFS_BOOTSTRAP_MULTIADDRESSES", entrypoint)
+        self.assertIn('BOOTSTRAP_ENDPOINTS="${IPFS_BOOTSTRAP_ENDPOINTS:-${IPFS_BOOTSTRAP_API_MULTIADDRESSES:-${IPFS_BOOTSTRAP_MULTIADDRESSES:-}}}"', entrypoint)
 
     def test_editor_exposes_v3_services_and_help(self):
         identifiers = tuple(identifier for identifier, _ in SECTIONS)
@@ -285,7 +285,7 @@ class DeploymentV3Tests(unittest.TestCase):
                     self.assertIn("name: dark-local-ha-local-apps", (machine / "groups" / "apps" / "compose.yaml").read_text())
 
     def test_operator_examples_resolve_to_valid_v3_and_render_resolved_contract(self):
-        for name, services in (("local-simple", 22), ("local-ha", 24), ("production-five-host", 25)):
+        for name, services in (("local-simple", 23), ("local-ha", 25), ("production-five-host", 25)):
             source = ROOT / "examples" / "operator-inventory" / f"{name}.json"
             resolution = resolve_inventory_path(source)
             self.assertEqual(len(resolution.document["services"]), services)
@@ -347,7 +347,7 @@ class DeploymentV3Tests(unittest.TestCase):
             output = Path(temporary) / "bundle"
             render_plan(plan, output)
             compose = (output / "machines" / "apps" / "groups" / "apps" / "compose.yaml").read_text()
-        self.assertIn("0.0.0.0:8080:80/tcp", compose)
+        self.assertIn("0.0.0.0:80:80/tcp", compose)
 
     def test_local_chain_context_uses_standard_internal_p2p_port(self):
         plan = build_plan(ROOT / "examples" / "deployment-v3" / "local-ha.json")
@@ -391,15 +391,16 @@ class DeploymentV3Tests(unittest.TestCase):
     def test_data_readiness_probes_store_health_not_root(self):
         plan = build_plan(ROOT / "examples" / "deployment-v3" / "local-ha.json")
         calls = []
-        original = readiness._curl
+        original = readiness._run
         try:
-            readiness._curl = lambda _plan, _machine, url, payload=None: calls.append(url) or type("Result", (), {"returncode": 0})()
+            readiness._run = lambda _plan, _machine, _root, service_id, shell: calls.append((service_id, shell)) or type("Result", (), {"returncode": 0})()
             ok, evidence = readiness.check_phase(plan, ROOT, "data")
         finally:
-            readiness._curl = original
+            readiness._run = original
         self.assertTrue(ok)
         self.assertEqual(evidence, "Store API health is ready")
-        self.assertEqual(calls, ["http://127.0.0.1:8003/health"])
+        self.assertEqual(calls[0][0], "store-api")
+        self.assertIn("http://127.0.0.1:8003/health", calls[0][1])
 
     def test_data_readiness_probes_unexposed_store_from_its_container(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
@@ -432,6 +433,42 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertIn("IPFS_API_BASE_URL=http://ipfs-storage-a:5001\n", env)
         self.assertIn("IPFS_CLUSTER_API_URL=http://cluster-storage-a:9094\n", env)
         self.assertIn("WORKER_STATUS_URL=http://minter-api:8001/api/v1/worker/status\n", env)
+
+    def test_proxy_uses_container_listener_and_public_origin(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-five-host.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "bundle"
+            render_plan(plan, output)
+            nginx = (output / "machines" / "apps" / "groups" / "apps" / "config" / "nginx-gateway.conf").read_text()
+            compose = (output / "machines" / "apps" / "groups" / "apps" / "compose.yaml").read_text()
+            dashboard_env = (output / "machines" / "apps" / "groups" / "apps" / "env" / "dashboard.env").read_text()
+        self.assertIn("listen 80;", nginx)
+        self.assertIn("0.0.0.0:80:80/tcp", compose)
+        self.assertIn("APP_URL=https://dark.example.org/admin", dashboard_env)
+
+    def test_rejects_two_proxies_on_one_machine(self):
+        document = json.loads((ROOT / "examples" / "deployment-v3" / "local-ha.json").read_text())
+        duplicate = json.loads(json.dumps(document["services"]["edge-proxy"]))
+        duplicate["connections"] = {"resolver": duplicate["connections"]["resolver"]}
+        duplicate["configuration"]["sites"][0]["routes"] = [
+            {"id": "second-resolver", "path": "/second/", "connection": "resolver", "upstream_path": "/api/v1/arks/"}
+        ]
+        document["services"]["second-proxy"] = duplicate
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "two-proxies.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "may run only one edge-proxy"):
+                build_plan(path)
+
+    def test_legacy_access_gateway_remains_supported(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "production-five-host.json").read_text())
+        document.pop("proxies")
+        document["access"] = {"mode": "gateway", "bind": "public", "port": 80}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "legacy-access.json"
+            path.write_text(json.dumps(document))
+            plan = build_plan(path)
+        self.assertEqual(len([service for service in plan.services if service.type == "edge-proxy"]), 1)
 
     def test_cross_host_connection_requires_explicit_shared_network(self):
         source = ROOT / "examples" / "deployment-v3" / "production-five-host.json"

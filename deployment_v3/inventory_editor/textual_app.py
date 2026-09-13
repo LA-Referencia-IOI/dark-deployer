@@ -48,7 +48,7 @@ OPERATOR_SECTIONS = (
     ("deployment", "Deployment"), ("machines", "Machines"),
     ("placement", "Placement"), ("blockchain", "Blockchain"),
     ("storage", "Storage"), ("networks", "Networks"),
-    ("routing", "Remote routing"), ("access", "Access"),
+    ("routing", "Remote routing"), ("proxies", "Proxies"), ("access", "Legacy access"),
     ("secrets", "Secret sources"), ("overrides", "Advanced overrides"),
 )
 
@@ -60,7 +60,8 @@ OPERATOR_SECTION_HELP = {
     "storage": "Logical storage peers, group assignment, and durability policy.",
     "networks": "Named LAN/VPN CIDRs used only when traffic crosses hosts.",
     "routing": "Select the network for each class of remote traffic.",
-    "access": "Operator or public access. Internal private ports are derived from dependencies.",
+    "proxies": "One proxy may run on each machine. Define its listener, public origin, TLS mode and route rules here.",
+    "access": "Legacy compatibility field. It cannot be used together with proxies.",
     "secrets": "References to controller-side secret files; values are never displayed.",
     "overrides": "Deliberate exceptions to catalogue defaults. The resolved preview shows their effect.",
 }

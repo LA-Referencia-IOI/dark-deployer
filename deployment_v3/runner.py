@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import ipaddress
+import base64
 import shlex
 import shutil
 import subprocess
@@ -73,6 +74,36 @@ def _reject_existing_chain_data(plan: DeploymentPlan, *, resume: bool, clean: bo
 
 def _require(result, description):
     if result.returncode: raise ApplyError(f"{description}: {result.stderr.strip() or result.stdout.strip() or 'no command output'}")
+
+
+def _distribute_contract_runtime(plan, producer) -> list[str]:
+    """Copy the generated public contract environment to remote consumers.
+
+    ``contracts-deploy`` is a one-shot producer rather than an HTTP service.
+    Consumers can be on another host (notably a dedicated Resolver), so the
+    runtime handoff must be explicit and occur before their application phase.
+    """
+    source_machine = plan.machine(producer.machine_id)
+    source_path = Path(source_machine.data_root) / plan.deployment_id / "contracts" / "contracts.env"
+    source = resolve_executor(source_machine).run(("cat", str(source_path)), timeout=20)
+    _require(source, f"read generated contract environment from {source_machine.id}")
+    payload = base64.b64encode(source.stdout.encode()).decode()
+    recipients = {
+        service.machine_id
+        for service in plan.services
+        if service.machine_id != producer.machine_id
+        and any(connection.get("service") == producer.id for connection in service.connections.values())
+    }
+    for machine_id in sorted(recipients):
+        machine = plan.machine(machine_id)
+        target = Path(machine.data_root) / plan.deployment_id / "contracts" / "contracts.env"
+        command = (
+            "umask 077; mkdir -p " + shlex.quote(str(target.parent)) + "; "
+            "printf %s " + shlex.quote(payload) + " | "
+            "(base64 -d 2>/dev/null || base64 -D) > " + shlex.quote(str(target)) + "; chmod 600 " + shlex.quote(str(target))
+        )
+        _require(resolve_executor(machine).run(("sh", "-lc", command), timeout=30), f"distribute contract environment to {machine_id}")
+    return sorted(recipients)
 
 
 def _network_conflicts(executor, subnet: str) -> list[tuple[str, str, int]]:
@@ -489,6 +520,9 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                             prompt_cleanup_empty_network_conflicts=prompt_cleanup_empty_network_conflicts,
                         )
                         status["services"][service.id]="applied"; record(root,{"step":step.id,"state":"succeeded","service":service.id})
+                    if service.type == "contracts-deploy":
+                        targets = _distribute_contract_runtime(effective, service)
+                        record(root, {"step": step.id, "state": "contract_runtime_distributed", "machines": targets})
                 elif step.action == "readiness":
                     from .readiness import ReadinessError, wait_for_phase
                     phase = step.id.split(":", 1)[1]

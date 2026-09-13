@@ -7,6 +7,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from jsonschema import Draft202012Validator
 
@@ -46,7 +47,9 @@ CONNECTION_CONTRACTS = {
     "dashboard": {"database": "dashboard-mysql", "redis": "dashboard-redis", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api", "migration": "dashboard-migrate"},
     "dashboard-migrate": {"database": "dashboard-mysql", "redis": "dashboard-redis", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api"},
     "ipfs-cluster": {"kubo": "ipfs-kubo"},
-    "edge-proxy": {"dashboard": "dashboard", "explorer": "explorer"},
+    # Proxy connections are named by the inventory routes.  Their type and
+    # completeness are validated from ``configuration.sites[].routes`` below.
+    "edge-proxy": {},
     "contracts-deploy": {"rpc": "besu-rpc"},
     "rpc-probe": {"rpc": "besu-rpc"},
 }
@@ -510,6 +513,76 @@ def _provider_id(connection: dict[str, str]) -> str:
     return connection["service"]
 
 
+def _proxy_routes(service: ServiceInstance) -> list[dict[str, str]]:
+    """Validate and return the public routing contract of an edge proxy.
+
+    A route is deliberately a connection name plus two path prefixes.  This
+    keeps addresses out of public configuration: same-host routes use Docker
+    DNS and remote routes use the normal private connection derivation.
+    """
+    configuration = service.configuration
+    _only_keys(configuration, f"services.{service.id}.configuration", {"sites", "tls"})
+    sites = configuration.get("sites")
+    if not isinstance(sites, list) or not sites:
+        raise _error(f"services.{service.id}.configuration.sites must be a non-empty list")
+    tls = configuration.get("tls", {"mode": "http"})
+    tls = _object(tls, f"services.{service.id}.configuration.tls")
+    _only_keys(tls, f"services.{service.id}.configuration.tls", {"mode", "certificate_secret", "key_secret"})
+    mode = tls.get("mode", "http")
+    if mode not in {"http", "direct", "external"}:
+        raise _error(f"services.{service.id}.configuration.tls.mode must be http, direct or external")
+    if mode == "direct":
+        if not isinstance(tls.get("certificate_secret"), str) or not isinstance(tls.get("key_secret"), str):
+            raise _error(f"services.{service.id}.configuration.tls direct mode requires certificate_secret and key_secret")
+    elif "certificate_secret" in tls or "key_secret" in tls:
+        raise _error(f"services.{service.id}.configuration.tls certificate secrets are only valid for direct TLS")
+
+    routes: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    route_ids: set[str] = set()
+    for site_index, site in enumerate(sites):
+        site = _object(site, f"services.{service.id}.configuration.sites[{site_index}]")
+        _only_keys(site, f"services.{service.id}.configuration.sites[{site_index}]", {"host", "public_origin", "routes"})
+        host = site.get("host", "")
+        if not isinstance(host, str) or any(char.isspace() for char in host):
+            raise _error(f"services.{service.id}.configuration.sites[{site_index}].host must be a hostname or empty")
+        origin = site.get("public_origin")
+        if not isinstance(origin, str):
+            raise _error(f"services.{service.id}.configuration.sites[{site_index}].public_origin is required")
+        parsed = urlparse(origin)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+            raise _error(f"services.{service.id}.configuration.sites[{site_index}].public_origin must be an http(s) origin")
+        if host and parsed.hostname != host:
+            raise _error(f"services.{service.id}.configuration.sites[{site_index}].public_origin host must match host")
+        if mode == "direct" and parsed.scheme != "https":
+            raise _error(f"services.{service.id}.configuration.sites[{site_index}].public_origin must use https for direct TLS")
+        definitions = site.get("routes")
+        if not isinstance(definitions, list) or not definitions:
+            raise _error(f"services.{service.id}.configuration.sites[{site_index}].routes must be a non-empty list")
+        for route_index, route in enumerate(definitions):
+            path = f"services.{service.id}.configuration.sites[{site_index}].routes[{route_index}]"
+            route = _object(route, path)
+            _only_keys(route, path, {"id", "path", "connection", "upstream_path"})
+            route_id = _identifier(route.get("id"), path + ".id")
+            if route_id in route_ids:
+                raise _error(f"{path}.id duplicates another proxy route")
+            route_ids.add(route_id)
+            public_path = route.get("path")
+            upstream_path = route.get("upstream_path")
+            connection = route.get("connection")
+            for value, label in ((public_path, "path"), (upstream_path, "upstream_path")):
+                if not isinstance(value, str) or not value.startswith("/") or "//" in value or "/../" in value or value.endswith("/.."):
+                    raise _error(f"{path}.{label} must be an absolute, normalized path prefix")
+            if not isinstance(connection, str) or connection not in service.connections:
+                raise _error(f"{path}.connection must name a declared proxy connection")
+            key = (host.lower(), public_path)
+            if key in seen:
+                raise _error(f"{path}.path duplicates another route for host {host or '<default>'}")
+            seen.add(key)
+            routes.append({"host": host, "id": route["id"], "path": public_path, "connection": connection, "upstream_path": upstream_path})
+    return routes
+
+
 def _validate_domain(
     raw: dict[str, Any],
     services: list[ServiceInstance],
@@ -537,6 +610,15 @@ def _validate_domain(
                 raise _error(f"services.{service.id}.connections must contain only ipfs-cluster services")
             if {provider.id for provider in providers} != {cluster.id for cluster in clusters}:
                 raise _error(f"services.{service.id}.connections must name every ipfs-cluster service exactly once")
+        elif service.type == "edge-proxy":
+            routes = _proxy_routes(service)
+            used = {route["connection"] for route in routes}
+            if set(service.connections) != used:
+                raise _error(f"services.{service.id}.connections must contain exactly the connections used by its routes")
+            for name in used:
+                provider = by_id.get(_provider_id(service.connections[name]))
+                if provider and provider.type not in {"dashboard", "explorer", "minter-api", "resolver-api"}:
+                    raise _error(f"services.{service.id}.connections.{name} must reference an HTTP application service")
         else:
             if set(service.connections) != set(contract):
                 expected = ", ".join(sorted(contract)) or "none"
@@ -549,6 +631,12 @@ def _validate_domain(
     missing_types = sorted(item for item in required if not by_type.get(item))
     if missing_types:
         raise _error("services missing required types: " + ", ".join(missing_types))
+    proxies_by_machine: dict[str, list[str]] = {}
+    for service in by_type.get("edge-proxy", []):
+        proxies_by_machine.setdefault(service.machine_id, []).append(service.id)
+    for machine_id, proxy_ids in proxies_by_machine.items():
+        if len(proxy_ids) > 1:
+            raise _error(f"machine {machine_id} may run only one edge-proxy: " + ", ".join(sorted(proxy_ids)))
     infrastructure = raw["infrastructure"]
     policy_ports = {
         "besu-rpc": infrastructure["besu"]["rpc_port"],
@@ -587,6 +675,8 @@ def _validate_domain(
         for consumer in services:
             for name, connection in consumer.connections.items():
                 provider = by_id[_provider_id(connection)]
+                if provider.type == "contracts-deploy":
+                    continue
                 if consumer.machine_id == provider.machine_id:
                     if "network" in connection or "protocol" in connection:
                         raise _error(f"services.{consumer.id}.connections.{name}.network/protocol are only valid between hosts")
@@ -700,3 +790,11 @@ def _validate_domain(
         unknown_consumers = sorted(set(consumers).difference(by_id))
         if unknown_consumers:
             raise _error(f"secrets.{secret_id}.consumers references unknown service(s): " + ", ".join(unknown_consumers))
+    for proxy in by_type.get("edge-proxy", []):
+        tls = proxy.configuration.get("tls", {})
+        if tls.get("mode") == "direct":
+            for secret_id in (tls["certificate_secret"], tls["key_secret"]):
+                if secret_id not in secrets:
+                    raise _error(f"services.{proxy.id}.configuration.tls references unknown secret {secret_id}")
+                if proxy.id not in secrets[secret_id].get("consumers", []):
+                    raise _error(f"secrets.{secret_id}.consumers must include TLS proxy {proxy.id}")

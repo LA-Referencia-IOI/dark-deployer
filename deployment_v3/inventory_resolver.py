@@ -201,8 +201,10 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         suffix = peer_id.removeprefix("storage-")
         group_services.setdefault(group_id, []).extend([f"ipfs-storage-{suffix}", f"cluster-storage-{suffix}"])
         group_members.setdefault(group_id, []).append(peer_id)
+    if "access" in raw and "proxies" in raw:
+        raise _fail("access is a legacy compatibility field and cannot be combined with proxies")
     overrides = _object(raw.get("overrides", {}), "overrides")
-    _only_keys(overrides, "overrides", {"explorer", "settings", "components"})
+    _only_keys(overrides, "overrides", {"explorer", "resolver", "settings", "components"})
     explorer_override = _object(overrides.get("explorer", {}), "overrides.explorer")
     _only_keys(explorer_override, "overrides.explorer", {"group"})
     explorer_group = explorer_override.get("group", "apps")
@@ -210,6 +212,13 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         group_services["apps"].remove("explorer")
         group_services.setdefault(explorer_group, []).append("explorer")
         group_members.setdefault(explorer_group, []).append("explorer")
+    resolver_override = _object(overrides.get("resolver", {}), "overrides.resolver")
+    _only_keys(resolver_override, "overrides.resolver", {"group"})
+    resolver_group = resolver_override.get("group", "apps")
+    if resolver_group != "apps":
+        group_services["apps"].remove("resolver-api")
+        group_services.setdefault(resolver_group, []).append("resolver-api")
+        group_members.setdefault(resolver_group, []).append("resolver-api")
     for group_id, services in group_services.items():
         if not services:
             continue
@@ -230,7 +239,65 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     mode = access.get("mode", "none")
     if mode not in {"none", "local-direct", "gateway"}:
         raise _fail("access.mode must be none, local-direct or gateway")
-    if mode != "gateway":
+    if "proxies" in raw:
+        # The catalogue has an old single edge service only so old operator
+        # documents remain resolvable.  New documents declare every proxy and
+        # every public rule explicitly.
+        result["services"].pop("edge-proxy", None)
+        for group in result["groups"].values():
+            group["services"] = [service for service in group["services"] if service != "edge-proxy"]
+        proxies = _object(raw["proxies"], "proxies")
+        if not proxies:
+            raise _fail("proxies must contain at least one proxy")
+        for proxy_id, definition in proxies.items():
+            _identifier(proxy_id, f"proxies.{proxy_id}")
+            definition = _object(definition, f"proxies.{proxy_id}")
+            _only_keys(definition, f"proxies.{proxy_id}", {"group", "listener", "tls", "sites"})
+            group_id = definition.get("group")
+            if not isinstance(group_id, str) or group_id not in result["groups"]:
+                raise _fail(f"proxies.{proxy_id}.group must name a placed group")
+            listener = _object(definition.get("listener"), f"proxies.{proxy_id}.listener")
+            _only_keys(listener, f"proxies.{proxy_id}.listener", {"bind", "port", "network"})
+            bind = listener.get("bind")
+            port = listener.get("port")
+            if bind not in {"loopback", "private", "public"} or not isinstance(port, int) or not 1 <= port <= 65535:
+                raise _fail(f"proxies.{proxy_id}.listener requires bind (loopback, private or public) and a TCP port")
+            exposure = {"mode": bind, "port": port, "protocols": ["tcp"]}
+            if bind == "private":
+                network = listener.get("network")
+                if not isinstance(network, str):
+                    raise _fail(f"proxies.{proxy_id}.listener.network is required for private bind")
+                exposure["network"] = network
+            elif "network" in listener:
+                raise _fail(f"proxies.{proxy_id}.listener.network is only valid for private bind")
+            sites = definition.get("sites")
+            if not isinstance(sites, list):
+                raise _fail(f"proxies.{proxy_id}.sites must be a list")
+            connections = {}
+            normalized_sites = []
+            for site_index, site in enumerate(sites):
+                site = _object(site, f"proxies.{proxy_id}.sites[{site_index}]")
+                _only_keys(site, f"proxies.{proxy_id}.sites[{site_index}]", {"host", "public_origin", "routes"})
+                routes = site.get("routes")
+                if not isinstance(routes, list):
+                    raise _fail(f"proxies.{proxy_id}.sites[{site_index}].routes must be a list")
+                normalized_routes = []
+                for route_index, route in enumerate(routes):
+                    route = _object(route, f"proxies.{proxy_id}.sites[{site_index}].routes[{route_index}]")
+                    _only_keys(route, f"proxies.{proxy_id}.sites[{site_index}].routes[{route_index}]", {"id", "path", "service", "upstream_path"})
+                    route_id = _identifier(route.get("id"), f"proxies.{proxy_id}.sites[{site_index}].routes[{route_index}].id")
+                    service_id = route.get("service")
+                    if not isinstance(service_id, str) or service_id not in result["services"]:
+                        raise _fail(f"proxies.{proxy_id}.sites[{site_index}].routes[{route_index}].service must name a catalogue service")
+                    if route_id in connections:
+                        raise _fail(f"proxies.{proxy_id} has duplicate route id {route_id}")
+                    connections[route_id] = {"service": service_id}
+                    normalized_routes.append({"id": route_id, "path": route.get("path"), "connection": route_id, "upstream_path": route.get("upstream_path")})
+                normalized_sites.append({"host": site.get("host", ""), "public_origin": site.get("public_origin"), "routes": normalized_routes})
+            configuration = {"sites": normalized_sites, "tls": deepcopy(definition.get("tls", {"mode": "http"}))}
+            result["services"][proxy_id] = {"type": "edge-proxy", "machine": result["groups"][group_id]["machine"], "connections": connections, "configuration": configuration, "exposure": exposure}
+            result["groups"][group_id]["services"].append(proxy_id)
+    elif mode != "gateway":
         result["services"].pop("edge-proxy", None)
         for services in group_services.values():
             if "edge-proxy" in services:
@@ -259,6 +326,12 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     for consumer in result["services"].values():
         for connection in consumer.get("connections", {}).values():
             provider = result["services"][connection["service"]]
+            # contracts-deploy is a one-shot artifact producer, not an HTTP
+            # endpoint. Its dependency orders consumers after the handoff but
+            # must never manufacture a private listener.
+            if provider["type"] == "contracts-deploy":
+                connection.pop("network", None); connection.pop("protocol", None)
+                continue
             if consumer["machine"] == provider["machine"]:
                 connection.pop("network", None); connection.pop("protocol", None)
                 continue
@@ -295,7 +368,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         service["exposure"] = {"mode": "private", "network": network, "port": port, "protocols": ["tcp"]}
     for service_id, service in result["services"].items():
         exposure = service.get("exposure")
-        if exposure and exposure.get("mode") == "private" and service_id not in required_network:
+        if exposure and exposure.get("mode") == "private" and service_id not in required_network and service.get("type") != "edge-proxy":
             # Catalogued private endpoints are examples, not a request to
             # publish a port when no resolved remote dependency needs it.
             service.pop("exposure", None)

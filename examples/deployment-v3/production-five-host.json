@@ -418,6 +418,9 @@
       "type": "edge-proxy",
       "machine": "apps",
       "connections": {
+        "resolver": {
+          "service": "resolver-api"
+        },
         "dashboard": {
           "service": "dashboard"
         },
@@ -425,11 +428,29 @@
           "service": "explorer",
           "network": "lan",
           "protocol": "tcp"
+        },
+        "minter": {
+          "service": "minter-api"
         }
+      },
+      "configuration": {
+        "tls": {"mode": "external"},
+        "sites": [{
+          "host": "dark.example.org",
+          "public_origin": "https://dark.example.org",
+          "routes": [
+            {"id": "dashboard", "path": "/admin/", "connection": "dashboard", "upstream_path": "/"},
+            {"id": "explorer", "path": "/explorer/", "connection": "explorer", "upstream_path": "/"},
+            {"id": "minter-v1", "path": "/api/v1/", "connection": "minter", "upstream_path": "/api/v1/"},
+            {"id": "minter-docs", "path": "/api/docs", "connection": "minter", "upstream_path": "/docs"},
+            {"id": "minter-openapi", "path": "/api/openapi.json", "connection": "minter", "upstream_path": "/openapi.json"},
+            {"id": "resolver", "path": "/", "connection": "resolver", "upstream_path": "/api/v1/arks/"}
+          ]
+        }]
       },
       "exposure": {
         "mode": "public",
-        "port": 8080,
+        "port": 80,
         "protocols": [
           "tcp"
         ]
@@ -633,7 +654,7 @@
       "p2p_port": 9096
     },
     "web": {
-      "http_port": 8080
+      "http_port": 80
     }
   }
 }

@@ -35,6 +35,8 @@ def allocate_docker_subnets(machines: tuple[Machine, ...], raw: dict) -> dict[st
 
 
 def internal_port(service: ServiceInstance) -> int:
+    if service.type == "edge-proxy" and service.configuration.get("tls", {}).get("mode") == "direct":
+        return 443
     return int(service.configuration.get("port", DEFAULT_PORTS.get(service.type, 0)))
 
 
@@ -62,6 +64,8 @@ def derive_endpoints(machines: tuple[Machine, ...], services: tuple[ServiceInsta
     for consumer in services:
         for connection in consumer.connections.values():
             provider = by_id[connection["service"]]
+            if provider.type == "contracts-deploy":
+                continue
             result[(consumer.id, provider.id)] = endpoint_for(provider, by_machine[provider.machine_id], by_machine[consumer.machine_id], connection)
     return tuple(result.values())
 

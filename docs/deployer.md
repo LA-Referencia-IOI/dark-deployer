@@ -117,7 +117,9 @@ records the decisions that normally change between installations:
 - `networks`, `routes` and `routing`: networks, existing directional routes,
   and traffic choices used by remote traffic;
 - `networking`: optional NAT addresses and translated P2P ports;
-- `access`: `none`, `local-direct` or `gateway` exposure policy;
+- `proxies`: explicit proxy instances, listeners, TLS mode, virtual hosts and
+  path-to-service rules. `access` is retained only for legacy inventories and
+  cannot be combined with `proxies`;
 - `secrets`: controller-side source root or explicit source files;
 - `overrides`: supported changes to catalogue settings/components and placement.
 
@@ -157,22 +159,22 @@ Store's Kubo route is derived from each declared Cluster peer, so it does not
 need to be duplicated in the compact file.
 
 Catalogue private exposures disappear when no remote dependency needs them.
-`local-direct` then adds loopback access for the normal APIs and explorer;
-`gateway` keeps the edge proxy and requires an explicit bind and port. It does
-not make APIs public automatically.
+Active examples declare a proxy explicitly; a proxy listener does not make any
+backend public. Its routes alone decide which application paths are published.
 
 The resolver records the input digest, catalogue digest and resolver version.
 Rendering writes this evidence to `shared/inventory-resolution.json` alongside
 the fully resolved inventory.
 
 The Textual editor detects compact inventories and presents decision-oriented
-sections for placement, storage, routing, access and overrides. It validates
+sections for placement, storage, routing, proxies, legacy access and overrides. It validates
 the expansion when changing a section or saving, and keeps atomic saves and
 timestamped backups.
 
-Available compact templates are `operator-local-simple`, `operator-local-ha`
-and `operator-production-five-host`. The production template uses documentation
-network ranges and `REPLACE` paths; replace them before preflight.
+Available compact templates are `operator-local-simple`, `operator-local-ha`,
+`operator-production-five-host` and `operator-production-six-host`. Production
+templates use documentation network ranges and `REPLACE` paths; replace them
+before preflight.
 
 ## Networks, ports and storage bootstrap
 
@@ -193,8 +195,12 @@ The central `infrastructure` policy is the source of published ports:
   (`tcp` and `udp`).
 - IPFS Cluster publishes its REST API privately on `api_port` and its libp2p
   port on `p2p_port`.
-- `edge-proxy` is the only `public` exposure and maps `/explorer/` to the
-  explorer service and `/` to the dashboard.
+- `edge-proxy` can have several instances across different machines, with at
+  most one proxy per machine. Each rule references a typed HTTP
+  service connection, so local destinations use Docker DNS and remote ones use
+  the selected private LAN/VPN endpoint. The standard gateway maps `/` to the
+  Resolver's `/api/v1/arks/`, `/admin/` to Dashboard, `/explorer/` to Explorer,
+  and `/api/` documentation/API routes to Minter.
 
 Bootstrap environment variables use the peer API endpoint deliberately: the
 Kubo and Cluster entrypoints resolve those endpoints to the peer's announced

@@ -4,7 +4,7 @@ This is the practical guide for installing, inspecting, operating, and troublesh
 
 ## 1. Choose an inventory path
 
-An **inventory** is the source of truth for an installation: machines, placement, networks, components, secrets, blockchain, storage, and access. There are two supported authoring paths.
+An **inventory** is the source of truth for an installation: machines, placement, networks, components, secrets, blockchain, storage, and public proxies. There are two supported authoring paths.
 
 | Path | Start with | Best for | Trade-off |
 | --- | --- | --- | --- |
@@ -21,7 +21,7 @@ venv/bin/python deploy.py inventory-create \
   --output deployment-inventory.json
 ```
 
-Available templates are `operator-local-simple`, `operator-local-ha`, and `operator-production-five-host`; their complete-v3 equivalents omit the `operator-` prefix. `local-simple` has one storage peer. `local-ha` has two peers on one Docker host and tests replication, not host-loss tolerance. `production-five-host` is documentation-only until every `REPLACE` value is replaced with real infrastructure values.
+Available templates are `operator-local-simple`, `operator-local-ha`, `operator-production-five-host`, and `operator-production-six-host`. `local-simple` has one storage peer. `local-ha` has two peers on one Docker host and tests replication, not host-loss tolerance. Production templates are documentation-only until every `REPLACE` value is replaced with real infrastructure values.
 
 ## 2. Prepare the controller
 
@@ -80,7 +80,7 @@ Create `operator-local-ha`. Its five logical groups run on one Docker daemon: `a
 
 ### Standard five-host deployment
 
-Start with `operator-production-five-host`, then replace all sample network addresses, SSH settings, paths, source references, and `access` settings. The normal placement is apps, two blockchain hosts, and two storage hosts. Route traffic intentionally:
+Start with `operator-production-five-host`, then replace all sample network addresses, SSH settings, paths, source references, public origins and proxy settings. The normal placement is apps, two blockchain hosts, and two storage hosts. Route traffic intentionally:
 
 ```json
 {
@@ -90,7 +90,25 @@ Start with `operator-production-five-host`, then replace all sample network addr
     "storage_api": "vpn",
     "application_api": "lan"
   },
-  "access": {"mode": "gateway", "bind": "public", "port": 8080}
+  "proxies": {
+    "gateway": {
+      "group": "apps",
+      "listener": {"bind": "public", "port": 80},
+      "tls": {"mode": "external"},
+      "sites": [{
+        "host": "dark.example.org",
+        "public_origin": "https://dark.example.org",
+        "routes": [
+          {"id": "resolver", "path": "/", "service": "resolver-api", "upstream_path": "/api/v1/arks/"},
+          {"id": "dashboard", "path": "/admin/", "service": "dashboard", "upstream_path": "/"},
+          {"id": "explorer", "path": "/explorer/", "service": "explorer", "upstream_path": "/"},
+          {"id": "minter-v1", "path": "/api/v1/", "service": "minter-api", "upstream_path": "/api/v1/"},
+          {"id": "minter-docs", "path": "/api/docs", "service": "minter-api", "upstream_path": "/docs"},
+          {"id": "minter-openapi", "path": "/api/openapi.json", "service": "minter-api", "upstream_path": "/openapi.json"}
+        ]
+      }]
+    }
+  }
 }
 ```
 

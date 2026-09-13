@@ -17,7 +17,9 @@ venv/bin/python deploy.py inventory-resolve \
 venv/bin/python deploy.py plan --inventory examples/operator-inventory/local-ha.json
 ```
 
-The compact inventory has one source of truth for `placement` and `storage`.
+The compact inventory has one source of truth for `placement`, `storage` and
+`proxies`. Each proxy owns a machine, listener, public origin, TLS mode and
+typed route destinations; a machine may run only one proxy.
 The catalogue derives application services, connections, private endpoint
 exposures, secret consumers, and v3 groups. Review the resolved output or run
 `inventory-explain` before applying changes. `inventory-resolve`, `plan`, and

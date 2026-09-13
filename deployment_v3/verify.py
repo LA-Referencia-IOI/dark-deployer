@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 from .executor import resolve_executor
 from .runner import _compose_directory, _compose_project, _effective_plan, _machine_directory
 from .state import record, run_root, write_status
 from .readiness import _host_url, _curl, store_health_probe, ReadinessError
+from .network import internal_port
 
 
 class VerifyError(RuntimeError):
@@ -24,7 +26,9 @@ def _probe(plan, machine, root, service, command: str):
 
 
 def _store_health_url(store, machine) -> str:
-    return _host_url(store, machine) + "/health?refresh=true"
+    if store.exposure and store.exposure.get("mode") != "none":
+        return _host_url(store, machine) + "/health?refresh=true"
+    return f"http://127.0.0.1:{internal_port(store)}/health?refresh=true"
 
 
 def _append(report, service, name, result):
@@ -33,6 +37,18 @@ def _append(report, service, name, result):
     entry[name] = item
     entry["ok"] = bool(entry["ok"] and item["ok"])
     report["ok"] = bool(report["ok"] and item["ok"])
+
+
+def _proxy_route_probe(plan, machine, url: str, host: str):
+    """Accept backend 4xx while rejecting an unavailable proxy/backend."""
+    host_header = host or "localhost"
+    command = (
+        "status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 -H "
+        + shlex.quote("Host: " + host_header)
+        + " " + shlex.quote(url)
+        + "); test \"$status\" -lt 500; printf '%s' \"$status\""
+    )
+    return resolve_executor(machine).run(("sh", "-lc", command), timeout=15)
 
 
 def verify(plan, project_root: Path) -> dict:
@@ -105,11 +121,15 @@ def verify(plan, project_root: Path) -> dict:
         worker = service.configuration.get("worker", "")
         cmd = worker_kind_cmd.get(worker, "true")
         _append(report, service, "heartbeat", _probe(effective, effective.machine(service.machine_id), root, service.id, cmd))
-    proxy = next((item for item in effective.services if item.type == "edge-proxy"), None)
-    if proxy:
+    for proxy in (item for item in effective.services if item.type == "edge-proxy"):
         proxy_machine = effective.machine(proxy.machine_id)
-        _append(report, proxy, "http", _curl(effective, proxy_machine, _host_url(proxy, proxy_machine)))
-        _append(report, proxy, "explorer", _curl(effective, proxy_machine, _host_url(proxy, proxy_machine) + "/explorer/"))
+        base_url = _host_url(proxy, proxy_machine)
+        for site in proxy.configuration["sites"]:
+            for route in site["routes"]:
+                # The status code belongs to the backend contract (an unknown
+                # ARK may be 404); curl's transport success proves the proxy
+                # selected a route. Route names remain visible in the report.
+                _append(report, proxy, "route:" + route["id"], _proxy_route_probe(effective, proxy_machine, base_url + route["path"], site.get("host", "")))
 
     status = json.loads((root / "status.json").read_text())
     status["verification"] = report

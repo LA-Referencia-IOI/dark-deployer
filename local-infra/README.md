@@ -150,7 +150,16 @@ LIMA_HOME=/Volumes/Test/dark-lab/.lima limactl stop dark-storage-2
 LIMA_HOME=/Volumes/Test/dark-lab/.lima limactl start dark-storage-2
 ```
 
-VM disks are not removed when stopped. `lima-down.sh` stops the lab only; it
-does not provide a destructive cleanup command. The inventory carries storage
+VM disks are not removed when stopped. `lima-down.sh` stops the lab only. To
+permanently remove the six managed instances while keeping the store directory
+itself, use the explicit cleanup script:
+
+```bash
+local-infra/lima-clean.sh --store /Volumes/Test/dark-lab
+```
+
+It asks for confirmation and removes only `dark-apps`, `dark-blockchain-a`,
+`dark-blockchain-b`, `dark-storage-1`, `dark-storage-2`, and `dark-lab-base`.
+Use `--yes` only for an unattended cleanup. The inventory carries storage
 and network decisions. Do not edit a conceptual storage file with live
 addresses as a substitute for the generated deployment inventory.

@@ -168,10 +168,20 @@
       "target_replicas": 2
     }
   },
-  "access": {
-    "mode": "gateway",
-    "bind": "public",
-    "port": 8080
+  "proxies": {
+    "gateway": {
+      "group": "apps",
+      "listener": {"bind": "public", "port": 80},
+      "tls": {"mode": "http"},
+      "sites": [{"host": "", "public_origin": "http://127.0.0.1", "routes": [
+        {"id": "dashboard", "path": "/admin/", "service": "dashboard", "upstream_path": "/"},
+        {"id": "explorer", "path": "/explorer/", "service": "explorer", "upstream_path": "/"},
+        {"id": "minter-v1", "path": "/api/v1/", "service": "minter-api", "upstream_path": "/api/v1/"},
+        {"id": "minter-docs", "path": "/api/docs", "service": "minter-api", "upstream_path": "/docs"},
+        {"id": "minter-openapi", "path": "/api/openapi.json", "service": "minter-api", "upstream_path": "/openapi.json"},
+        {"id": "resolver", "path": "/", "service": "resolver-api", "upstream_path": "/api/v1/arks/"}
+      ]}]
+    }
   },
   "overrides": {
     "explorer": {

@@ -101,7 +101,21 @@ def main() -> None:
         "application_api": "lab",
     }
     topology["storage"]["cluster_name"] = "dark-lima"
-    topology["access"] = {"mode": "gateway", "bind": "public", "port": 8080}
+    topology["proxies"] = {
+        "gateway": {
+            "group": "apps",
+            "listener": {"bind": "public", "port": 80},
+            "tls": {"mode": "http"},
+            "sites": [{"host": topology["machines"]["apps"]["addresses"]["lab"], "public_origin": "http://" + topology["machines"]["apps"]["addresses"]["lab"], "routes": [
+                {"id": "dashboard", "path": "/admin/", "service": "dashboard", "upstream_path": "/"},
+                {"id": "explorer", "path": "/explorer/", "service": "explorer", "upstream_path": "/"},
+                {"id": "minter-v1", "path": "/api/v1/", "service": "minter-api", "upstream_path": "/api/v1/"},
+                {"id": "minter-docs", "path": "/api/docs", "service": "minter-api", "upstream_path": "/docs"},
+                {"id": "minter-openapi", "path": "/api/openapi.json", "service": "minter-api", "upstream_path": "/openapi.json"},
+                {"id": "resolver", "path": "/", "service": "resolver-api", "upstream_path": "/api/v1/arks/"},
+            ]}],
+        }
+    }
     # Production examples contain intentionally unusable controller-side
     # placeholders. The Lima lab either generates these during installation
     # or receives explicit sources from the operator after review.

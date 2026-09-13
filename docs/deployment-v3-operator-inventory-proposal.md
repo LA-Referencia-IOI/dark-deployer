@@ -14,7 +14,7 @@ operator to repeat relationships that are fixed by the dARK application model.
 
 The operator inventory is a compact authoring contract. It lets an operator
 state the installation's identity, machines, placement, networks, storage,
-access, and secret sources once. A versioned catalogue expands those decisions
+proxies, and secret sources once. A versioned catalogue expands those decisions
 to a complete v3 document before validation, planning, rendering, or execution.
 
 The current terminology is **deployment inventory**. It has two forms:
@@ -63,7 +63,8 @@ Important sections are:
 | `storage` | Logical peers and replica policy | Kubo/Cluster pairs and Store relationships |
 | `networks`, `routes`, `routing` | Networks, existing directional routes, and traffic choice | Route checks and private exposures |
 | `networking` | Optional NAT addresses and translated P2P ports | Advertised endpoints and Compose mappings |
-| `access` | No access, loopback access, or gateway | Public/loopback listener configuration |
+| `proxies` | One proxy per machine, listener, TLS, origin and routes | Explicit gateway services and typed backend connections |
+| `access` | Legacy compatibility only | Rejected when combined with `proxies` |
 | `secrets` | Controller-side sources | Consumers, destinations, and modes |
 | `overrides` | Supported settings/components exceptions | Validated changes to catalogue defaults |
 
@@ -88,7 +89,7 @@ Use a complete v3 inventory when the requested application or service shape is
 outside this catalogue. The compact format must not become a generic JSON patch
 mechanism for the resolved document.
 
-## Network and access rules
+## Network and proxy rules
 
 The operator chooses a network for each remote traffic class:
 `blockchain_p2p`, `storage_p2p`, `storage_api`, and `application_api`.
@@ -101,12 +102,11 @@ exposure, and rejects collisions. Same-machine dependencies use Docker DNS.
 port. These values describe existing network translation; they do not
 configure routers or firewalls.
 
-`access.mode` expresses requested operator or user access:
-
-- `none` adds no external application access;
-- `local-direct` adds catalogue-defined loopback APIs for local use;
-- `gateway` creates the dashboard/explorer edge route and requires an explicit
-  `loopback`, `private`, or `public` bind and a port.
+`proxies` expresses requested operator or user access. A proxy declares its
+group, listener, TLS mode, site host, public origin and path rules. It is the
+only normal application entry point; backends stay unexposed unless a typed
+cross-host dependency derives a private listener. The legacy `access` field is
+accepted only for old inventories and cannot be combined with `proxies`.
 
 No route turns a service public implicitly. The renderer's firewall suggestion
 is evidence for host firewall automation, not an automatic firewall change.

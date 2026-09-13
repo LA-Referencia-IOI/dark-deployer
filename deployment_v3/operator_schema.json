@@ -18,6 +18,7 @@
     "networking": {"type": "object"},
     "blockchain": {"type": "object"},
     "storage": {"type": "object"},
+    "proxies": {"type": "object"},
     "access": {"type": "object"},
     "secrets": {"type": "object"},
     "overrides": {"type": "object"}
