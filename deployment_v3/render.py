@@ -105,16 +105,10 @@ def _dashboard_public_url(plan: DeploymentPlan, dashboard: ServiceInstance) -> s
 
 
 def _dashboard_public_path(plan: DeploymentPlan, dashboard: ServiceInstance) -> str:
-    """Return the declared public mount used for dashboard cookies."""
-    dashboard_id = dashboard.id
-    if dashboard.type == "dashboard-migrate":
-        dashboard_id = next(item.id for item in plan.services if item.type == "dashboard")
-    for proxy in (item for item in plan.services if item.type == "edge-proxy"):
-        for site in proxy.configuration.get("sites", []):
-            for route in site.get("routes", []):
-                connection = proxy.connections.get(route.get("connection", ""), {})
-                if connection.get("service") == dashboard_id:
-                    return route["path"].rstrip("/") or "/"
+    """Return the upstream cookie path; the edge proxy adds the public mount."""
+    # The dashboard is served behind an edge-proxy location such as /admin/.
+    # nginx applies proxy_cookie_path once to the upstream root cookie path.
+    # Returning /admin here would therefore produce /admin/admin in Set-Cookie.
     return "/"
 
 
