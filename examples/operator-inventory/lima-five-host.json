@@ -1,7 +1,8 @@
 {
   "format": "dark-operator-inventory",
-  "format_version": 1,
+  "format_version": 2,
   "catalog": "dark-standard-1",
+  "profile": "lab",
   "deployment": {
     "id": "dark-lima-five-host",
     "label": "dARK Lima five-host acceptance lab"
@@ -121,7 +122,8 @@
     "blockchain-a": "blockchain-a",
     "blockchain-b": "blockchain-b",
     "storage-1": "storage-1",
-    "storage-2": "storage-2"
+    "storage-2": "storage-2",
+    "explorer": "blockchain-a"
   },
   "routing": {
     "blockchain_p2p": "lab",
@@ -131,22 +133,21 @@
   },
   "blockchain": {
     "chain_id": 2025,
-    "rpc": {
-      "id": "rpc01",
-      "group": "apps"
+    "validator_groups": {
+      "blockchain-a": {
+        "validator_count": 2
+      },
+      "blockchain-b": {
+        "validator_count": 2
+      }
     },
-    "validators": {
-      "validator01": {
-        "group": "blockchain-a"
-      },
-      "validator02": {
-        "group": "blockchain-a"
-      },
-      "validator03": {
-        "group": "blockchain-b"
-      },
-      "validator04": {
-        "group": "blockchain-b"
+    "observer_groups": {},
+    "rpc": {
+      "primary": "rpc01",
+      "nodes": {
+        "rpc01": {
+          "group": "apps"
+        }
       }
     },
     "artifact": {
@@ -171,21 +172,62 @@
   "proxies": {
     "gateway": {
       "group": "apps",
-      "listener": {"bind": "public", "port": 80},
-      "tls": {"mode": "http"},
-      "sites": [{"host": "", "public_origin": "http://127.0.0.1", "routes": [
-        {"id": "dashboard", "path": "/admin/", "service": "dashboard", "upstream_path": "/"},
-        {"id": "explorer", "path": "/explorer/", "service": "explorer", "upstream_path": "/"},
-        {"id": "minter-v1", "path": "/api/v1/", "service": "minter-api", "upstream_path": "/api/v1/"},
-        {"id": "minter-docs", "path": "/api/docs", "service": "minter-api", "upstream_path": "/docs"},
-        {"id": "minter-openapi", "path": "/api/openapi.json", "service": "minter-api", "upstream_path": "/openapi.json"},
-        {"id": "resolver", "path": "/", "service": "resolver-api", "upstream_path": "/api/v1/arks/"}
-      ]}]
+      "listener": {
+        "bind": "public",
+        "port": 80
+      },
+      "tls": {
+        "mode": "http"
+      },
+      "sites": [
+        {
+          "host": "",
+          "public_origin": "http://127.0.0.1",
+          "routes": [
+            {
+              "id": "dashboard",
+              "path": "/admin/",
+              "service": "dashboard",
+              "upstream_path": "/"
+            },
+            {
+              "id": "explorer",
+              "path": "/explorer/",
+              "service": "explorer",
+              "upstream_path": "/"
+            },
+            {
+              "id": "minter-v1",
+              "path": "/api/v1/",
+              "service": "minter-api",
+              "upstream_path": "/api/v1/"
+            },
+            {
+              "id": "minter-docs",
+              "path": "/api/docs",
+              "service": "minter-api",
+              "upstream_path": "/docs"
+            },
+            {
+              "id": "minter-openapi",
+              "path": "/api/openapi.json",
+              "service": "minter-api",
+              "upstream_path": "/openapi.json"
+            },
+            {
+              "id": "resolver",
+              "path": "/",
+              "service": "resolver-api",
+              "upstream_path": "/api/v1/arks/"
+            }
+          ]
+        }
+      ]
     }
   },
   "overrides": {
     "explorer": {
-      "group": "blockchain-a"
+      "group": "explorer"
     },
     "settings": {
       "minter": {

@@ -94,6 +94,44 @@ def _service_group(service_id: str, services: dict, groups: dict) -> str:
     raise _fail(f"internal recipe did not place {service_id}")
 
 
+def _validate_production_objectives(raw: dict, result: dict) -> tuple[str, ...]:
+    if raw.get("profile") != "production":
+        return ()
+    policy = _object(raw.get("availability"), "availability")
+    objectives = set(policy.get("objectives", []))
+    acknowledgements = set(policy.get("acknowledgements", []))
+    if not objectives:
+        raise _fail("production profile requires availability.objectives")
+    services = result["services"]
+    groups = result["groups"]
+    validators = [key for key, value in services.items() if value["type"] == "besu-validator"]
+    observers = [key for key, value in services.items() if value["type"] == "besu-observer"]
+    rpcs = [key for key, value in services.items() if value["type"] == "besu-rpc"]
+    quorum = (2 * len(validators)) // 3 + 1
+    validator_groups = [sum(service in validators for service in group["services"]) for group in groups.values()]
+    machines = set(value["machine"] for value in services.values())
+    validators_by_machine = [sum(value["type"] == "besu-validator" and value["machine"] == machine for value in services.values()) for machine in machines]
+    storage_by_machine = [sum(value["type"] == "ipfs-kubo" and value["machine"] == machine for value in services.values()) for machine in machines]
+    target = result["storage"]["replication"]["target_replicas"]
+    storage_count = sum(value["type"] == "ipfs-kubo" for value in services.values())
+    satisfied = {
+        "tolerate_validator_individual": len(validators) - 1 >= quorum,
+        "tolerate_validator_group": all(len(validators) - lost >= quorum for lost in validator_groups),
+        "tolerate_machine": all(len(validators) - lost >= quorum for lost in validators_by_machine),
+        "observer_copy": bool(observers),
+        "rpc_redundant": len(rpcs) >= 2,
+        "storage_durable": all(storage_count - lost >= target for lost in storage_by_machine),
+    }
+    unmet = sorted(objective for objective in objectives if not satisfied[objective])
+    unacknowledged = [objective for objective in unmet if objective not in acknowledgements]
+    if unacknowledged:
+        raise _fail("production availability objective(s) not met and not acknowledged: " + ", ".join(unacknowledged))
+    irrelevant = sorted(acknowledgements - set(unmet))
+    if irrelevant:
+        raise _fail("availability.acknowledgements contains satisfied or unselected objective(s): " + ", ".join(irrelevant))
+    return tuple(f"Production objective acknowledged but not met: {objective}." for objective in unmet)
+
+
 def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionResult:
     """Expand a compact document without executing, acquiring, or reading secrets."""
     schema_path = Path(__file__).with_name("operator_schema.json")
@@ -112,16 +150,73 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     peers = _object(storage.get("peers"), "storage.peers")
     if not peers:
         raise _fail("storage.peers must contain at least one peer")
-    if set(blockchain) - {"chain_id", "rpc", "validators", "artifact", "besu_image", "qbft"}:
+    if set(blockchain) - {"chain_id", "rpc", "validator_groups", "observer_groups", "artifact", "besu_image", "qbft", "observer_max_block_lag"}:
         raise _fail("blockchain contains unsupported fields")
     rpc = _object(blockchain.get("rpc"), "blockchain.rpc")
-    validators = _object(blockchain.get("validators"), "blockchain.validators")
-    if set(validators) != {"validator01", "validator02", "validator03", "validator04"}:
-        raise _fail("blockchain.validators must contain validator01 through validator04")
-    if rpc.get("id") != "rpc01":
-        raise _fail("blockchain.rpc.id must be rpc01 in dark-standard-1")
+    validator_groups = _object(blockchain.get("validator_groups"), "blockchain.validator_groups")
+    if not validator_groups:
+        raise _fail("blockchain.validator_groups must contain at least one group")
+    validators = {}
+    index = 1
+    for group_id, definition in validator_groups.items():
+        _identifier(group_id, f"blockchain.validator_groups.{group_id}")
+        count = _object(definition, f"blockchain.validator_groups.{group_id}").get("validator_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise _fail(f"blockchain.validator_groups.{group_id}.validator_count must be a positive integer")
+        for _ in range(count):
+            validators[f"validator{index:02d}"] = {"group": group_id}; index += 1
+    observers = {}
+    index = 1
+    for group_id, definition in _object(blockchain.get("observer_groups", {}), "blockchain.observer_groups").items():
+        _identifier(group_id, f"blockchain.observer_groups.{group_id}")
+        count = _object(definition, f"blockchain.observer_groups.{group_id}").get("observer_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise _fail(f"blockchain.observer_groups.{group_id}.observer_count must be a positive integer")
+        for _ in range(count):
+            observers[f"observer{index:02d}"] = {"group": group_id}; index += 1
+    rpc_nodes = _object(rpc.get("nodes"), "blockchain.rpc.nodes")
+    primary_rpc = rpc.get("primary")
+    if not rpc_nodes or primary_rpc not in rpc_nodes:
+        raise _fail("blockchain.rpc.primary must name a declared RPC node")
+    if not validators or not rpc_nodes:
+        raise _fail("blockchain requires at least one validator and one RPC")
 
     result = deepcopy(catalog.document)
+    templates = deepcopy(catalog.service_templates)
+    dynamic_types = {"besu-validator", "besu-rpc", "besu-observer", "ipfs-kubo", "ipfs-cluster"}
+    result["services"] = {key: value for key, value in result["services"].items() if value["type"] not in dynamic_types}
+    for service in result["services"].values():
+        for connection in service.get("connections", {}).values():
+            if connection.get("service") == "rpc01":
+                connection["service"] = primary_rpc
+    for node_id, definition in rpc_nodes.items():
+        _identifier(node_id, f"blockchain.rpc.nodes.{node_id}")
+        service = deepcopy(templates["besu-rpc"]); service["configuration"]["node_id"] = node_id
+        result["services"][node_id] = service
+    for node_id in validators:
+        service = deepcopy(templates["besu-validator"]); service["configuration"]["node_id"] = node_id
+        result["services"][node_id] = service
+    for node_id in observers:
+        service = deepcopy(templates["besu-observer"]); service["configuration"]["node_id"] = node_id
+        result["services"][node_id] = service
+    bindings = _object(rpc.get("bindings", {}), "blockchain.rpc.bindings")
+    rpc_providers = set(rpc_nodes) | set(observers)
+    for consumer_id, provider_id in bindings.items():
+        if consumer_id not in result["services"]:
+            raise _fail(f"blockchain.rpc.bindings.{consumer_id} names an unknown consumer service")
+        if provider_id not in rpc_providers:
+            raise _fail(f"blockchain.rpc.bindings.{consumer_id} must name an RPC or observer node")
+        connections = result["services"][consumer_id].get("connections", {})
+        if "rpc" not in connections:
+            raise _fail(f"blockchain.rpc.bindings.{consumer_id} does not have an RPC connection")
+        connections["rpc"]["service"] = provider_id
+    result["blockchain"]["nodes"] = {
+        **{node: {"role": "validator", "p2p_port": 30303} for node in validators},
+        **{node: {"role": "rpc", "p2p_port": 30303} for node in rpc_nodes},
+        **{node: {"role": "observer", "p2p_port": 30303} for node in observers},
+    }
+    result["blockchain"]["primary_rpc"] = primary_rpc
+    result["blockchain"]["observer_max_block_lag"] = blockchain.get("observer_max_block_lag", 1)
     # A catalogue records destinations and consumers, never site-local private
     # sources.  Production's REPLACE values must not leak into a local site.
     result["blockchain"]["artifact"].pop("source", None)
@@ -169,31 +264,47 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
             raise _fail(f"placement.{group_id} must name a declared machine")
         return value
 
-    # Start with the recipe and remove the second storage pair for a one-copy site.
-    if set(peers) - {"storage-a", "storage-b"}:
-        raise _fail("dark-standard-1 supports storage-a and storage-b")
-    if "storage-a" not in peers:
-        raise _fail("storage-a is required by dark-standard-1")
-    if "storage-b" not in peers:
-        for service_id in ("ipfs-storage-b", "cluster-storage-b"):
-            result["services"].pop(service_id, None)
-        result["services"]["store-api"]["connections"].pop("cluster_cluster-storage-b", None)
-        for definition in result["secrets"].values():
-            definition["consumers"] = [item for item in definition.get("consumers", []) if item not in {"ipfs-storage-b", "cluster-storage-b"}]
+    if not peers:
+        raise _fail("storage.peers must contain at least one peer")
+    result["services"]["store-api"]["connections"] = {}
+    for peer_id, definition in peers.items():
+        _identifier(peer_id, f"storage.peers.{peer_id}")
+        suffix = peer_id.removeprefix("storage-")
+        kubo_id, cluster_id = f"ipfs-storage-{suffix}", f"cluster-storage-{suffix}"
+        kubo = deepcopy(templates["ipfs-kubo"]); kubo["configuration"]["peer_name"] = peer_id
+        cluster = deepcopy(templates["ipfs-cluster"]); cluster["configuration"]["peer_name"] = peer_id
+        cluster["connections"] = {"kubo": {"service": kubo_id}}
+        result["services"][kubo_id] = kubo; result["services"][cluster_id] = cluster
+        result["services"]["store-api"]["connections"][f"cluster_{cluster_id}"] = {"service": cluster_id}
+    result["secrets"]["ipfs-swarm-key"]["consumers"] = sorted(
+        service_id for service_id, service in result["services"].items() if service["type"] == "ipfs-kubo"
+    )
+    result["secrets"]["ipfs-cluster-secret"]["consumers"] = sorted(
+        service_id for service_id, service in result["services"].items() if service["type"] == "ipfs-cluster"
+    )
     result["storage"]["cluster_name"] = storage.get("cluster_name", result["storage"]["cluster_name"])
     result["storage"]["nodes"] = list(peers)
     result["storage"]["replication"] = deepcopy(_object(storage.get("replication"), "storage.replication"))
 
     result["groups"] = {}
     app_machine = group_machine("apps")
-    group_services = {"apps": [sid for sid in result["services"] if sid not in {"validator01", "validator02", "validator03", "validator04", "ipfs-storage-a", "cluster-storage-a", "ipfs-storage-b", "cluster-storage-b"}]}
-    group_members = {"apps": ["rpc01"]}
+    dynamic_ids = set(validators) | set(observers) | set(rpc_nodes) | {sid for sid, service in result["services"].items() if service["type"] in {"ipfs-kubo", "ipfs-cluster"}}
+    group_services = {"apps": [sid for sid in result["services"] if sid not in dynamic_ids]}
+    group_members = {"apps": []}
+    for rpc_id, definition in rpc_nodes.items():
+        group_id = _object(definition, f"blockchain.rpc.nodes.{rpc_id}").get("group")
+        if not isinstance(group_id, str): raise _fail(f"blockchain.rpc.nodes.{rpc_id}.group is required")
+        group_services.setdefault(group_id, []).append(rpc_id); group_members.setdefault(group_id, []).append(rpc_id)
     for validator_id, definition in validators.items():
         group_id = _object(definition, f"blockchain.validators.{validator_id}").get("group")
         if not isinstance(group_id, str):
             raise _fail(f"blockchain.validators.{validator_id}.group is required")
         group_services.setdefault(group_id, []).append(validator_id)
         group_members.setdefault(group_id, []).append(validator_id)
+    for observer_id, definition in observers.items():
+        group_id = _object(definition, f"blockchain.observers.{observer_id}").get("group")
+        group_services.setdefault(group_id, []).append(observer_id)
+        group_members.setdefault(group_id, []).append(observer_id)
     for peer_id, definition in peers.items():
         group_id = _object(definition, f"storage.peers.{peer_id}").get("group")
         if not isinstance(group_id, str):
@@ -222,7 +333,8 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     for group_id, services in group_services.items():
         if not services:
             continue
-        kind = "apps" if group_id == "apps" else ("storage" if group_id.startswith("storage") else "validators")
+        types = {result["services"][service]["type"] for service in services}
+        kind = "storage" if types <= {"ipfs-kubo", "ipfs-cluster"} else "observers" if types == {"besu-observer"} else "validators" if types == {"besu-validator"} else "apps"
         result["groups"][group_id] = {"kind": kind, "machine": group_machine(group_id), "members": group_members[group_id], "services": services}
         for service_id in services:
             result["services"][service_id]["machine"] = result["groups"][group_id]["machine"]
@@ -375,11 +487,11 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     # Besu deliberately ships without curl/wget. For an all-local deployment,
     # expose RPC only on loopback so controller-side readiness and verification
     # can perform real JSON-RPC checks without making the endpoint public.
-    rpc_service = result["services"]["rpc01"]
+    rpc_service = result["services"][primary_rpc]
     if all(machine.get("execution") == "local" for machine in machines.values()) and not rpc_service.get("exposure"):
         rpc_service["exposure"] = {"mode": "loopback", "port": _PORTS["besu-rpc"], "protocols": ["tcp"]}
     if mode == "local-direct":
-        for service_id in ("rpc01", "store-api", "minter-api", "admin-api", "resolver-api", "dashboard", "explorer"):
+        for service_id in (primary_rpc, "store-api", "minter-api", "admin-api", "resolver-api", "dashboard", "explorer"):
             service = result["services"].get(service_id)
             if service and service["machine"] == app_machine:
                 service["exposure"] = {"mode": "loopback", "port": _PORTS[service["type"]], "protocols": ["tcp"]}
@@ -387,7 +499,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     networking = _object(raw.get("networking", {}), "networking")
     _only_keys(networking, "networking", {"services"})
     service_networking = _object(networking.get("services", {}), "networking.services")
-    p2p_types = {"besu-rpc", "besu-validator", "ipfs-kubo", "ipfs-cluster"}
+    p2p_types = {"besu-rpc", "besu-validator", "besu-observer", "ipfs-kubo", "ipfs-cluster"}
     for service_id, configuration in service_networking.items():
         _identifier(service_id, f"networking.services.{service_id}")
         if service_id not in result["services"]:
@@ -429,10 +541,29 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     except InventoryError as exc:
         raise _fail(str(exc).removeprefix("deployment topology v3: ")) from exc
     provenance = {"/components": "catalog:dark-standard-1", "/settings": "catalog:dark-standard-1", "/services": "catalog recipe + placement/routing", "/groups": "placement", "/storage": "storage", "/blockchain": "blockchain"}
+    for node_id, definition in result["blockchain"]["nodes"].items():
+        role = definition["role"]
+        if role == "validator":
+            source = "blockchain.validator_groups"
+        elif role == "observer":
+            source = "blockchain.observer_groups"
+        else:
+            source = f"blockchain.rpc.nodes.{node_id}"
+        provenance[f"/blockchain/nodes/{node_id}"] = source
+    for group_id in result["groups"]:
+        provenance[f"/groups/{group_id}"] = f"placement.{group_id}"
+    for service_id, service in result["services"].items():
+        provenance[f"/services/{service_id}"] = "catalog singleton" if service_id not in dynamic_ids else "operator cardinality + catalog template"
+        for connection_id in service.get("connections", {}):
+            provenance[f"/services/{service_id}/connections/{connection_id}"] = "catalog dependency + routing"
+        if "exposure" in service:
+            provenance[f"/services/{service_id}/exposure"] = "resolved consumer reachability or explicit proxy listener"
     canonical = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
-    metadata = {"catalog": catalog.id, "catalog_sha256": catalog.digest, "resolver_version": "1", "input_sha256": sha256(canonical).hexdigest()}
-    warnings = ("Two storage peers on one machine provide replication but not host-failure tolerance.",) if len(peers) > 1 and len({result["groups"][g]["machine"] for g in result["groups"] if g.startswith("storage")}) == 1 else ()
-    return ResolutionResult(result, provenance, warnings, metadata)
+    metadata = {"catalog": catalog.id, "catalog_sha256": catalog.digest, "operator_format_version": "2", "resolver_version": "2", "input_sha256": sha256(canonical).hexdigest()}
+    warnings = list(_validate_production_objectives(raw, result))
+    if len(peers) > 1 and len({result["groups"][g]["machine"] for g in result["groups"] if g.startswith("storage")}) == 1:
+        warnings.append("Multiple storage peers on one machine provide replication but not host-failure tolerance.")
+    return ResolutionResult(result, provenance, tuple(warnings), metadata)
 
 
 def resolve_inventory_path(path: Path) -> ResolutionResult:

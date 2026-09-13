@@ -28,7 +28,7 @@ REQUIRED_COMPONENTS = frozenset(
     }
 )
 SERVICE_TYPES = frozenset({
-    "besu-rpc", "besu-validator", "explorer", "minter-api", "minter-worker",
+    "besu-rpc", "besu-validator", "besu-observer", "explorer", "minter-api", "minter-worker",
     "minter-postgres", "minter-migrate", "admin-api", "resolver-api", "store-api",
     "dashboard", "dashboard-mysql", "dashboard-redis", "dashboard-migrate",
     "ipfs-kubo", "ipfs-cluster", "contracts-deploy", "rpc-probe", "edge-proxy",
@@ -387,8 +387,8 @@ def groups_for_inventory(raw: dict[str, Any], machines: tuple[Machine, ...], ser
         definition = _object(definition, f"groups.{group_id}")
         _only_keys(definition, f"groups.{group_id}", {"kind", "machine", "members", "services"})
         kind = definition.get("kind")
-        if kind not in {"apps", "validators", "storage"}:
-            raise _error(f"groups.{group_id}.kind must be apps, validators or storage")
+        if kind not in {"apps", "validators", "observers", "storage"}:
+            raise _error(f"groups.{group_id}.kind must be apps, validators, observers or storage")
         machine_id = _string(definition.get("machine"), f"groups.{group_id}.machine")
         if machine_id not in machine_ids:
             raise _error(f"groups.{group_id}.machine references unknown machine {machine_id}")
@@ -411,6 +411,11 @@ def groups_for_inventory(raw: dict[str, Any], machines: tuple[Machine, ...], ser
                 service_ids.extend(matches)
         if not service_ids:
             raise _error(f"groups.{group_id} must resolve at least one service")
+        expected_type = {"validators": "besu-validator", "observers": "besu-observer"}.get(kind)
+        if expected_type and any(by_service[service_id].type != expected_type for service_id in service_ids):
+            raise _error(f"groups.{group_id}.{kind} may contain only {expected_type} services")
+        if kind == "storage" and any(by_service[service_id].type not in {"ipfs-kubo", "ipfs-cluster"} for service_id in service_ids):
+            raise _error(f"groups.{group_id}.storage may contain only IPFS storage services")
         for service_id in service_ids:
             if by_service[service_id].machine_id != machine_id:
                 raise _error(f"groups.{group_id}.services.{service_id} is assigned to another machine")
@@ -625,7 +630,12 @@ def _validate_domain(
                 raise _error(f"services.{service.id}.connections must contain exactly: {expected}")
             for name, provider_type in contract.items():
                 provider = by_id.get(_provider_id(service.connections[name]))
-                if provider and provider.type != provider_type:
+                allowed_types = {provider_type}
+                if provider_type == "besu-rpc":
+                    # Observers keep RPC private but may intentionally serve a
+                    # colocated or routed Resolver/API consumer.
+                    allowed_types.add("besu-observer")
+                if provider and provider.type not in allowed_types:
                     raise _error(f"services.{service.id}.connections.{name} must reference {provider_type}")
     required = {"besu-rpc", "minter-api", "minter-postgres", "store-api", "admin-api", "resolver-api", "dashboard", "ipfs-kubo", "ipfs-cluster"}
     missing_types = sorted(item for item in required if not by_type.get(item))
@@ -700,7 +710,7 @@ def _validate_domain(
                 if protocol not in provider.exposure.get("protocols", ["tcp"]):
                     raise _error(f"services.{consumer.id}.connections.{name}.protocol is not exposed by {provider.id}")
         p2p_policies = (
-            ("besu", {"besu-rpc", "besu-validator"}),
+            ("besu", {"besu-rpc", "besu-validator", "besu-observer"}),
             ("ipfs", {"ipfs-kubo"}),
             ("cluster", {"ipfs-cluster"}),
         )
@@ -713,7 +723,10 @@ def _validate_domain(
                 if network not in machine_by_id[peer.machine_id].addresses:
                     raise _error(f"services.{peer.id} requires {network} for cross-host {policy} P2P")
     blockchain = _object(raw["blockchain"], "blockchain")
-    _only_keys(blockchain, "blockchain", {"chain_id", "besu_image", "nodes", "qbft", "artifact"})
+    _only_keys(blockchain, "blockchain", {"chain_id", "besu_image", "nodes", "qbft", "artifact", "primary_rpc", "observer_max_block_lag"})
+    observer_max_block_lag = blockchain.get("observer_max_block_lag", 1)
+    if not isinstance(observer_max_block_lag, int) or isinstance(observer_max_block_lag, bool) or observer_max_block_lag < 0:
+        raise _error("blockchain.observer_max_block_lag must be a non-negative integer")
     artifact = _object(blockchain.get("artifact", {}), "blockchain.artifact")
     if artifact:
         _only_keys(artifact, "blockchain.artifact", {"path", "source"})
@@ -731,18 +744,27 @@ def _validate_domain(
     nodes = _object(blockchain.get("nodes"), "blockchain.nodes")
     validators = []
     rpc = []
+    observers = []
     for node_id, item in nodes.items():
         definition = _object(item, f"blockchain.nodes.{node_id}")
-        _only_keys(definition, f"blockchain.nodes.{node_id}", {"validator", "p2p_port"})
-        if definition.get("validator") is True:
+        _only_keys(definition, f"blockchain.nodes.{node_id}", {"role", "p2p_port"})
+        role = definition.get("role")
+        if role == "validator":
             validators.append(node_id)
-        elif definition.get("validator") is False:
+        elif role == "rpc":
             rpc.append(node_id)
-    if len(validators) != 4 or len(rpc) != 1:
-        raise _error("blockchain.nodes requires four validators and one non-validator RPC")
-    declared_nodes = {service.configuration.get("node_id") for service in by_type.get("besu-validator", []) + by_type.get("besu-rpc", [])}
-    if set(validators + rpc) != declared_nodes:
+        elif role == "observer":
+            observers.append(node_id)
+        else:
+            raise _error(f"blockchain.nodes.{node_id}.role must be validator, rpc or observer")
+    if not validators or not rpc:
+        raise _error("blockchain.nodes requires at least one validator and one RPC")
+    declared_nodes = {service.configuration.get("node_id") for service in by_type.get("besu-validator", []) + by_type.get("besu-rpc", []) + by_type.get("besu-observer", [])}
+    if set(validators + rpc + observers) != declared_nodes:
         raise _error("blockchain nodes must match besu service instances")
+    primary_rpc = blockchain.get("primary_rpc")
+    if primary_rpc not in rpc:
+        raise _error("blockchain.primary_rpc must name a besu-rpc node")
     storage = _object(raw["storage"], "storage")
     _only_keys(storage, "storage", {"cluster_name", "nodes", "replication"})
     node_ids = storage.get("nodes")

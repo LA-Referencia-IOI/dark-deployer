@@ -147,7 +147,7 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
     elif service.type == "resolver-api":
         values |= {"RESOLVER_API_HOST": "0.0.0.0", "RESOLVER_API_PORT": "8002", "DARK_RPC_URL": connection("rpc"), "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]), "METADATA_STORE_API_URL": connection("store_api")}
     elif service.type in {"dashboard", "dashboard-migrate"}:
-        rpc = next(item for item in plan.services if item.type == "besu-rpc")
+        rpc = plan.primary_rpc()
         kubo = next(item for item in plan.services if item.type == "ipfs-kubo")
         cluster = next(item for item in plan.services if item.type == "ipfs-cluster")
         rpc_url = _url(plan, service, rpc.id)
@@ -274,7 +274,7 @@ def render_plan(plan: DeploymentPlan, output: Path) -> Path:
         for service in (entry for entry in plan.services if entry.machine_id == machine.id):
             if service.exposure and service.exposure.get("mode") != "none":
                 entries.append({"service": service.id, "bind": service.exposure["mode"], "network": service.exposure.get("network"), "port": service.exposure["port"], "protocols": service.exposure.get("protocols", ["tcp"])})
-            if service.type in {"besu-validator", "besu-rpc"}:
+            if service.type in {"besu-validator", "besu-rpc", "besu-observer"}:
                 node_id = service.configuration["node_id"]
                 node_order = list(plan.raw["blockchain"]["nodes"]).index(node_id)
                 p2p_port = 30303 if machine.execution == "local" else plan.raw["infrastructure"]["besu"]["p2p_port_start"] + node_order

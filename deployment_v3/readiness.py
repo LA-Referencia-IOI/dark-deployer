@@ -47,6 +47,61 @@ def _curl(plan, machine, url, payload: str | None = None):
     return resolve_executor(machine).run(tuple(argv), timeout=15)
 
 
+def _json_rpc_result(result, method: str):
+    if result.returncode:
+        raise ReadinessError(result.stderr.strip() or result.stdout.strip() or f"{method} failed")
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ReadinessError(f"{method} returned invalid JSON") from exc
+    if "error" in response or "result" not in response:
+        raise ReadinessError(f"{method} returned an RPC error: {response.get('error')}")
+    return response["result"]
+
+
+def _observer_rpc(plan, machine, observer, method: str, params: list | None = None):
+    """Query an observer without publishing its RPC port on the host."""
+    payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params or [], "id": 1})
+    network = f"{plan.deployment_id}-{machine.id}"
+    return resolve_executor(machine).run((
+        "docker", "run", "--rm", "--network", network,
+        "curlimages/curl:8.12.1", "-fsS", "--max-time", "5",
+        "-H", "Content-Type: application/json", "--data", payload,
+        f"http://{observer.id}:8545",
+    ), timeout=20)
+
+
+def observer_status(plan, root, observer) -> tuple[bool, str, dict]:
+    """Validate observer connectivity, synchronization and non-validator role."""
+    machine = plan.machine(observer.machine_id)
+    try:
+        peers = int(_json_rpc_result(_observer_rpc(plan, machine, observer, "net_peerCount"), "net_peerCount"), 16)
+        height = int(_json_rpc_result(_observer_rpc(plan, machine, observer, "eth_blockNumber"), "eth_blockNumber"), 16)
+        coinbase = str(_json_rpc_result(_observer_rpc(plan, machine, observer, "eth_coinbase"), "eth_coinbase")).lower()
+        validators = {
+            str(value).lower() for value in _json_rpc_result(
+                _observer_rpc(plan, machine, observer, "qbft_getValidatorsByBlockNumber", ["latest"]),
+                "qbft_getValidatorsByBlockNumber",
+            )
+        }
+        primary = plan.primary_rpc()
+        primary_result = _curl(plan, plan.machine(primary.machine_id), _host_url(primary, plan.machine(primary.machine_id)), '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}')
+        primary_height = int(_json_rpc_result(primary_result, "primary eth_blockNumber"), 16)
+    except (ReadinessError, TypeError, ValueError) as exc:
+        return False, f"{observer.id}: {exc}", {}
+    lag = primary_height - height
+    max_lag = int(plan.raw["blockchain"].get("observer_max_block_lag", 1))
+    min_peers = min(3, max(0, sum(item.type in {"besu-validator", "besu-rpc", "besu-observer"} for item in plan.services) - 1))
+    details = {"peers": peers, "height": height, "primary_height": primary_height, "lag": lag, "max_lag": max_lag, "coinbase": coinbase}
+    if peers < min_peers:
+        return False, f"{observer.id} peers={peers}; expected at least {min_peers}", details
+    if lag > max_lag:
+        return False, f"{observer.id} block lag={lag}; maximum {max_lag}", details
+    if coinbase in validators:
+        return False, f"{observer.id} is present in the QBFT validator set", details
+    return True, f"{observer.id} synchronized at block {height} with lag {lag} and {peers} peers", details
+
+
 def store_health_probe(plan, machine, root, service, *, refresh: bool = False):
     """Probe Store without requiring an unnecessary host-published port.
 
@@ -64,7 +119,7 @@ def store_health_probe(plan, machine, root, service, *, refresh: bool = False):
 
 
 def _rpc(plan, root):
-    rpc = next(item for item in plan.services if item.type == "besu-rpc")
+    rpc = plan.primary_rpc()
     machine = plan.machine(rpc.machine_id)
     payload = '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'
     result = _curl(plan, machine, _host_url(rpc, machine), payload)
@@ -74,7 +129,8 @@ def _rpc(plan, root):
         peers = int(json.loads(result.stdout)["result"], 16)
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return False, "RPC returned invalid net_peerCount response"
-    return peers >= 4, f"RPC peers={peers}; expected at least 4"
+    expected = max(0, sum(item.type in {"besu-validator", "besu-rpc", "besu-observer"} for item in plan.services) - 1)
+    return peers >= expected, f"RPC peers={peers}; expected at least {expected}"
 
 
 def _json_stream(payload: str) -> list[dict]:
@@ -170,6 +226,15 @@ def check_phase(plan, project_root: Path, phase: str) -> tuple[bool, str]:
         return True, "all validators are running"
     if phase == "rpc":
         return _rpc(effective, root)
+    if phase == "observers":
+        observers = [item for item in effective.services if item.type == "besu-observer"]
+        evidence = []
+        for observer in observers:
+            ok, message, _ = observer_status(effective, root, observer)
+            if not ok:
+                return False, message
+            evidence.append(message)
+        return True, "; ".join(evidence) if evidence else "no observers declared"
     if phase == "storage":
         kubo = [item for item in effective.services if item.type == "ipfs-kubo"]
         cluster = [item for item in effective.services if item.type == "ipfs-cluster"]

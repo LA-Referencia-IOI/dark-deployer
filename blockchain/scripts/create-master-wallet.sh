@@ -6,7 +6,7 @@
 #
 #  Output files:
 #    master-wallet.txt       — plain-text credentials (KEEP SECRET)
-#    config/master-wallet    — address only, used by setup.sh
+#    config/master-wallet    — address-only companion for the generated wallet
 # =============================================================================
 
 set -euo pipefail
@@ -121,7 +121,7 @@ cat > "$OUTPUT_FILE" <<EOF
 ================================================================================
 EOF
 
-# Save address only for setup.sh consumption
+# Save a public address-only companion for operator inspection.
 echo "$ADDRESS" > "$ADDRESS_FILE"
 
 # Restrict file permissions (owner read only)
@@ -141,5 +141,5 @@ echo ""
 echo -e "${RED}  ⚠  Keep master-wallet.txt SECRET — it contains the private key.${NC}"
 echo ""
 echo -e "  Next step:"
-echo -e "    ${YELLOW}./setup.sh${NC}  (will allocate the full genesis balance to this address)"
+echo -e "    ${YELLOW}venv/bin/python deploy.py chain-init --inventory inventory.json${NC}"
 echo ""

@@ -2,22 +2,30 @@
 
 ## Install
 
-Use Python 3.12, Docker Engine and Compose v2. Create or adapt a complete v3 or
-compact operator inventory, run `validate`, review `plan`, then run `install`.
+Use Python 3.12, Docker Engine and Compose v2. A maintained compact operator
+inventory can be installed directly; copy and offline review commands are
+optional.
 For production, provision
 SSH access, VPN addresses, secret files, chain artifacts and storage paths
-before `preflight`. Apply in dependency order: validators-a, validators-b,
-apps/RPC and contracts, storage, then application services and dashboard.
+before `preflight`. The generated plan applies every declared validator group,
+the RPC nodes, observer groups, contracts, storage peers, and finally the
+application services in dependency order.
 
-For a compact inventory, inspect the generated contract before an operational
-run:
+For a compact inventory, install directly:
+
+```bash
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-ha.json --verbose
+```
+
+If you need to inspect the generated contract before an operational run:
 
 ```bash
 venv/bin/python deploy.py inventory-resolve \
-  --inventory deployment-inventory.json --output resolved-inventory.json
+  --inventory inventory.json --output resolved-inventory.json
 venv/bin/python deploy.py inventory-explain \
-  --inventory deployment-inventory.json --path /settings/minter/shoulder
-venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
+  --inventory inventory.json --path /settings/minter/shoulder
+venv/bin/python deploy.py plan --inventory inventory.json --json
 ```
 
 The compact Minter shoulder is set under
@@ -26,7 +34,7 @@ The compact Minter shoulder is set under
 ## Verification
 
 Run `status` for a cheap summary and `verify` for bounded diagnostics. Confirm
-RPC block production, four validators, Store API health, two storage peers, API
+RPC block production, every declared validator, Store API health, all storage peers, API
 health endpoints and the three Minter workers. The dashboard consumes the
 internal status APIs; it does not call worker recovery actions.
 

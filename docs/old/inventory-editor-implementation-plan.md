@@ -25,10 +25,10 @@ Estado de la primera entrega:
 ## Comandos propuestos
 
 ```text
-venv/bin/python deploy.py inventory-create --template local-simple --output deployment-inventory.json
-venv/bin/python deploy.py inventory-create --template local-ha --output deployment-inventory.json
-venv/bin/python deploy.py inventory-create --template production-five-host --output deployment-inventory.json
-venv/bin/python deploy.py inventory-edit --inventory deployment-inventory.json
+venv/bin/python deploy.py inventory-create --template local-simple --output inventory.json
+venv/bin/python deploy.py inventory-create --template local-ha --output inventory.json
+venv/bin/python deploy.py inventory-create --template production-five-host --output inventory.json
+venv/bin/python deploy.py inventory-edit --inventory inventory.json
 ```
 
 El editor debe permitir seleccionar un archivo existente o crear uno desde una

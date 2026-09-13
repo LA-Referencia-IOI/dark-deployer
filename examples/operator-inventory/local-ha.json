@@ -1,7 +1,8 @@
 {
   "format": "dark-operator-inventory",
-  "format_version": 1,
+  "format_version": 2,
   "catalog": "dark-standard-1",
+  "profile": "lab",
   "deployment": {"id": "dark-operator-local-ha", "label": "dARK local HA simulation"},
   "networks": {"lab": {"kind": "lan", "cidr": "10.99.0.0/24"}},
   "machines": {"local": {"execution": "local"}},
@@ -9,11 +10,12 @@
   "routing": {"blockchain_p2p": "lab", "storage_p2p": "lab", "storage_api": "lab", "application_api": "lab"},
   "blockchain": {
     "chain_id": 2025,
-    "rpc": {"id": "rpc01", "group": "apps"},
-    "validators": {
-      "validator01": {"group": "blockchain-a"}, "validator02": {"group": "blockchain-a"},
-      "validator03": {"group": "blockchain-b"}, "validator04": {"group": "blockchain-b"}
-    }
+    "validator_groups": {
+      "blockchain-a": {"validator_count": 2},
+      "blockchain-b": {"validator_count": 2}
+    },
+    "observer_groups": {},
+    "rpc": {"primary": "rpc01", "nodes": {"rpc01": {"group": "apps"}}}
   },
   "storage": {
     "cluster_name": "dark-local",

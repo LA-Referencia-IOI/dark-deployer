@@ -1,1 +1,862 @@
-{"blockchain":{"artifact":{"path":"blockchain/role-artifact","source":"REPLACE/secrets/chain-artifact"},"besu_image":"hyperledger/besu:26.6.1","chain_id":2025,"nodes":{"rpc01":{"validator":false},"validator01":{"validator":true},"validator02":{"validator":true},"validator03":{"validator":true},"validator04":{"validator":true}},"qbft":{"block_period_seconds":6,"epoch_length":30000,"request_timeout_seconds":10}},"components":{"dark-core-admin-api":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dark-core-admin-api.git"},"dark-core-lib":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dark-core-lib.git"},"dark-core-minter-api":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dark-core-minter-api.git"},"dark-core-resolver-api":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dark-core-resolver-api.git"},"dark-dapp":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dark-dapp.git"},"dark-explorador":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dark-explorer.git"},"dark-ipfs":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dark-ipfs.git"},"dark-store-api":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dark-store-api.git"},"dashboard-web":{"branch":"main","repository_url":"git@github.com:LA-Referencia-IOI/dashboard-web.git"}},"defaults":{"docker":{"subnet_pool":"172.30.0.0/16","subnet_prefix":24},"paths":{"data_root":"/srv/dark/data","secrets_root":"/srv/dark/secrets","workspace_root":"/srv/dark"},"ssh":{"port":22,"private_key_file":"/etc/dark-deployer/ssh/REPLACE-deploy-ed25519","user":"dark"}},"deployment":{"id":"dark-production-six","label":"REPLACE: dARK six-host deployment with dedicated Resolver"},"groups":{"apps":{"kind":"apps","machine":"apps","members":["rpc01"],"services":["rpc01","minter-postgres","minter-migrate","store-api","minter-api","metadata-worker","replication-worker","chain-worker","admin-api","dashboard-mysql","dashboard-redis","dashboard-migrate","dashboard","contracts-deploy","apps-private"]},"blockchain-a":{"kind":"validators","machine":"blockchain-a","members":["validator01","validator02","explorer"],"services":["validator01","validator02","explorer"]},"blockchain-b":{"kind":"validators","machine":"blockchain-b","members":["validator03","validator04"],"services":["validator03","validator04"]},"resolver":{"kind":"validators","machine":"resolver","members":["resolver-api"],"services":["resolver-api","resolver-public"]},"storage-1":{"kind":"storage","machine":"storage-1","members":["storage-a"],"services":["ipfs-storage-a","cluster-storage-a"]},"storage-2":{"kind":"storage","machine":"storage-2","members":["storage-b"],"services":["ipfs-storage-b","cluster-storage-b"]}},"infrastructure":{"besu":{"network":"vpn","p2p_port_start":30303,"rpc_port":8545},"cluster":{"api_port":9094,"network":"vpn","p2p_port":9096},"ipfs":{"api_port":5001,"network":"vpn","swarm_port":4001},"web":{"http_port":80}},"machines":{"apps":{"addresses":{"lan":"192.0.2.10","vpn":"198.51.100.10"},"execution":"ssh","management_address":"192.0.2.10"},"blockchain-a":{"addresses":{"lan":"192.0.2.11","vpn":"198.51.100.11"},"execution":"ssh","management_address":"192.0.2.11"},"blockchain-b":{"addresses":{"lan":"192.0.2.12","vpn":"198.51.100.12"},"execution":"ssh","management_address":"192.0.2.12"},"resolver":{"addresses":{"lan":"192.0.2.15","vpn":"198.51.100.15"},"execution":"ssh","management_address":"192.0.2.15"},"storage-1":{"addresses":{"lan":"192.0.2.13","vpn":"198.51.100.13"},"execution":"ssh","management_address":"192.0.2.13"},"storage-2":{"addresses":{"lan":"192.0.2.14","vpn":"198.51.100.14"},"execution":"ssh","management_address":"192.0.2.14"}},"networks":{"lan":{"cidr":"192.0.2.0/24","kind":"lan"},"vpn":{"cidr":"198.51.100.0/24","kind":"vpn"}},"secrets":{"contract-signer":{"consumers":["contracts-deploy"],"mode":"0600","path":"blockchain/contract-signer","source":"/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/blockchain/contract-signer"},"dashboard-runtime-env":{"consumers":["dashboard-mysql","dashboard-migrate","dashboard"],"mode":"0600","path":"runtime/dashboard.private.env","source":"/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/runtime/dashboard.private.env"},"ipfs-cluster-secret":{"consumers":["cluster-storage-a","cluster-storage-b"],"mode":"0600","path":"ipfs/cluster.secret","source":"/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/ipfs/cluster.secret"},"ipfs-swarm-key":{"consumers":["ipfs-storage-a","ipfs-storage-b"],"mode":"0600","path":"ipfs/swarm.key","source":"/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/ipfs/swarm.key"},"master-wallet":{"consumers":[],"mode":"0600","path":"blockchain/master-wallet","source":"/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/blockchain/master-wallet"},"minter-db-password":{"consumers":[],"mode":"0600","path":"minter/db-password","source":"/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/minter/db-password"},"minter-runtime-env":{"consumers":["minter-postgres","minter-migrate","minter-api","metadata-worker","replication-worker","chain-worker","admin-api"],"mode":"0600","path":"runtime/minter.private.env","source":"/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/runtime/minter.private.env"}},"services":{"admin-api":{"connections":{"contracts":{"service":"contracts-deploy"},"rpc":{"service":"rpc01"}},"machine":"apps","type":"admin-api"},"apps-private":{"configuration":{"sites":[{"host":"apps.dark.example.org","public_origin":"https://apps.dark.example.org","routes":[{"connection":"dashboard","id":"dashboard","path":"/admin/","upstream_path":"/"},{"connection":"explorer","id":"explorer","path":"/explorer/","upstream_path":"/"},{"connection":"minter-v1","id":"minter-v1","path":"/api/v1/","upstream_path":"/api/v1/"},{"connection":"minter-docs","id":"minter-docs","path":"/api/docs","upstream_path":"/docs"},{"connection":"minter-openapi","id":"minter-openapi","path":"/api/openapi.json","upstream_path":"/openapi.json"}]}],"tls":{"mode":"external"}},"connections":{"dashboard":{"service":"dashboard"},"explorer":{"network":"lan","protocol":"tcp","service":"explorer"},"minter-docs":{"service":"minter-api"},"minter-openapi":{"service":"minter-api"},"minter-v1":{"service":"minter-api"}},"exposure":{"mode":"private","network":"lan","port":80,"protocols":["tcp"]},"machine":"apps","type":"edge-proxy"},"chain-worker":{"configuration":{"worker":"chain"},"connections":{"contracts":{"service":"contracts-deploy"},"database":{"service":"minter-postgres"},"migration":{"service":"minter-migrate"},"rpc":{"service":"rpc01"},"store_api":{"service":"store-api"}},"machine":"apps","type":"minter-worker"},"cluster-storage-a":{"configuration":{"peer_name":"storage-a"},"connections":{"kubo":{"service":"ipfs-storage-a"}},"exposure":{"mode":"private","network":"vpn","port":9094,"protocols":["tcp"]},"machine":"storage-1","type":"ipfs-cluster"},"cluster-storage-b":{"configuration":{"peer_name":"storage-b"},"connections":{"kubo":{"service":"ipfs-storage-b"}},"exposure":{"mode":"private","network":"vpn","port":9094,"protocols":["tcp"]},"machine":"storage-2","type":"ipfs-cluster"},"contracts-deploy":{"connections":{"rpc":{"service":"rpc01"}},"machine":"apps","type":"contracts-deploy"},"dashboard":{"connections":{"admin_api":{"service":"admin-api"},"database":{"service":"dashboard-mysql"},"migration":{"service":"dashboard-migrate"},"minter_api":{"service":"minter-api"},"redis":{"service":"dashboard-redis"},"resolver_api":{"network":"lan","protocol":"tcp","service":"resolver-api"},"store_api":{"service":"store-api"}},"machine":"apps","type":"dashboard"},"dashboard-migrate":{"connections":{"admin_api":{"service":"admin-api"},"database":{"service":"dashboard-mysql"},"minter_api":{"service":"minter-api"},"redis":{"service":"dashboard-redis"},"resolver_api":{"network":"lan","protocol":"tcp","service":"resolver-api"},"store_api":{"service":"store-api"}},"machine":"apps","type":"dashboard-migrate"},"dashboard-mysql":{"machine":"apps","type":"dashboard-mysql"},"dashboard-redis":{"machine":"apps","type":"dashboard-redis"},"explorer":{"connections":{"rpc":{"network":"lan","protocol":"tcp","service":"rpc01"}},"exposure":{"mode":"private","network":"lan","port":25000,"protocols":["tcp"]},"machine":"blockchain-a","type":"explorer"},"ipfs-storage-a":{"configuration":{"peer_name":"storage-a"},"exposure":{"mode":"private","network":"vpn","port":5001,"protocols":["tcp"]},"machine":"storage-1","type":"ipfs-kubo"},"ipfs-storage-b":{"configuration":{"peer_name":"storage-b"},"exposure":{"mode":"private","network":"vpn","port":5001,"protocols":["tcp"]},"machine":"storage-2","type":"ipfs-kubo"},"metadata-worker":{"configuration":{"worker":"metadata"},"connections":{"contracts":{"service":"contracts-deploy"},"database":{"service":"minter-postgres"},"migration":{"service":"minter-migrate"},"rpc":{"service":"rpc01"},"store_api":{"service":"store-api"}},"machine":"apps","type":"minter-worker"},"minter-api":{"connections":{"contracts":{"service":"contracts-deploy"},"database":{"service":"minter-postgres"},"migration":{"service":"minter-migrate"},"rpc":{"service":"rpc01"},"store_api":{"service":"store-api"}},"machine":"apps","type":"minter-api"},"minter-migrate":{"connections":{"database":{"service":"minter-postgres"}},"machine":"apps","type":"minter-migrate"},"minter-postgres":{"machine":"apps","type":"minter-postgres"},"replication-worker":{"configuration":{"worker":"replication"},"connections":{"contracts":{"service":"contracts-deploy"},"database":{"service":"minter-postgres"},"migration":{"service":"minter-migrate"},"rpc":{"service":"rpc01"},"store_api":{"service":"store-api"}},"machine":"apps","type":"minter-worker"},"resolver-api":{"connections":{"contracts":{"service":"contracts-deploy"},"rpc":{"network":"lan","protocol":"tcp","service":"rpc01"},"store_api":{"network":"lan","protocol":"tcp","service":"store-api"}},"exposure":{"mode":"private","network":"lan","port":8002,"protocols":["tcp"]},"machine":"resolver","type":"resolver-api"},"resolver-public":{"configuration":{"sites":[{"host":"resolve.dark.example.org","public_origin":"https://resolve.dark.example.org","routes":[{"connection":"arks","id":"arks","path":"/","upstream_path":"/api/v1/arks/"}]}],"tls":{"mode":"external"}},"connections":{"arks":{"service":"resolver-api"}},"exposure":{"mode":"public","port":80,"protocols":["tcp"]},"machine":"resolver","type":"edge-proxy"},"rpc01":{"configuration":{"node_id":"rpc01"},"exposure":{"mode":"private","network":"lan","port":8545,"protocols":["tcp"]},"machine":"apps","type":"besu-rpc"},"store-api":{"connections":{"cluster_cluster-storage-a":{"network":"vpn","protocol":"tcp","service":"cluster-storage-a"},"cluster_cluster-storage-b":{"network":"vpn","protocol":"tcp","service":"cluster-storage-b"}},"exposure":{"mode":"private","network":"lan","port":8003,"protocols":["tcp"]},"machine":"apps","type":"store-api"},"validator01":{"configuration":{"node_id":"validator01"},"machine":"blockchain-a","type":"besu-validator"},"validator02":{"configuration":{"node_id":"validator02"},"machine":"blockchain-a","type":"besu-validator"},"validator03":{"configuration":{"node_id":"validator03"},"machine":"blockchain-b","type":"besu-validator"},"validator04":{"configuration":{"node_id":"validator04"},"machine":"blockchain-b","type":"besu-validator"}},"settings":{"minter":{"chain":{"page_size":100,"rpc_batch_size":50},"metadata":{"concurrency":4,"min_concurrency":2,"page_size":100},"replication":{"concurrency":2,"durability_max_recheck_seconds":3600,"durability_recheck_seconds":300,"durability_second_recheck_seconds":900,"enabled":true,"first_pin_max_recheck_seconds":300,"first_pin_recheck_seconds":15,"first_pin_second_recheck_seconds":60,"idle_sleep_seconds":2,"maintenance_cycle_seconds":5,"page_size":100,"promotion_batch_size":100,"promotion_min_batch_size":20,"promotion_pressure_high_percent":80,"promotion_pressure_medium_percent":50,"status_batch_size":200,"storage_retry_seconds":10},"shoulder":"200"},"store":{"add_concurrency":4,"promotion_concurrency":4,"status_concurrency":6}},"storage":{"cluster_name":"REPLACE-dark-production","nodes":["storage-a","storage-b"],"replication":{"publish_after_replicas":1,"target_replicas":2}},"version":3}
+{
+  "blockchain": {
+    "primary_rpc": "rpc01",
+    "artifact": {
+      "path": "blockchain/role-artifact",
+      "source": "REPLACE/secrets/chain-artifact"
+    },
+    "besu_image": "hyperledger/besu:26.6.1",
+    "chain_id": 2025,
+    "nodes": {
+      "rpc01": {
+        "role": "rpc"
+      },
+      "validator01": {
+        "role": "validator"
+      },
+      "validator02": {
+        "role": "validator"
+      },
+      "validator03": {
+        "role": "validator"
+      },
+      "validator04": {
+        "role": "validator"
+      }
+    },
+    "qbft": {
+      "block_period_seconds": 6,
+      "epoch_length": 30000,
+      "request_timeout_seconds": 10
+    }
+  },
+  "components": {
+    "dark-core-admin-api": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dark-core-admin-api.git"
+    },
+    "dark-core-lib": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dark-core-lib.git"
+    },
+    "dark-core-minter-api": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dark-core-minter-api.git"
+    },
+    "dark-core-resolver-api": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dark-core-resolver-api.git"
+    },
+    "dark-dapp": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dark-dapp.git"
+    },
+    "dark-explorador": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dark-explorer.git"
+    },
+    "dark-ipfs": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dark-ipfs.git"
+    },
+    "dark-store-api": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dark-store-api.git"
+    },
+    "dashboard-web": {
+      "branch": "main",
+      "repository_url": "git@github.com:LA-Referencia-IOI/dashboard-web.git"
+    }
+  },
+  "defaults": {
+    "docker": {
+      "subnet_pool": "172.30.0.0/16",
+      "subnet_prefix": 24
+    },
+    "paths": {
+      "data_root": "/srv/dark/data",
+      "secrets_root": "/srv/dark/secrets",
+      "workspace_root": "/srv/dark"
+    },
+    "ssh": {
+      "port": 22,
+      "private_key_file": "/etc/dark-deployer/ssh/REPLACE-deploy-ed25519",
+      "user": "dark"
+    }
+  },
+  "deployment": {
+    "id": "dark-production-six",
+    "label": "REPLACE: dARK six-host deployment with dedicated Resolver"
+  },
+  "groups": {
+    "apps": {
+      "kind": "apps",
+      "machine": "apps",
+      "members": [
+        "rpc01"
+      ],
+      "services": [
+        "rpc01",
+        "minter-postgres",
+        "minter-migrate",
+        "store-api",
+        "minter-api",
+        "metadata-worker",
+        "replication-worker",
+        "chain-worker",
+        "admin-api",
+        "dashboard-mysql",
+        "dashboard-redis",
+        "dashboard-migrate",
+        "dashboard",
+        "contracts-deploy",
+        "apps-private"
+      ]
+    },
+    "blockchain-a": {
+      "kind": "validators",
+      "machine": "blockchain-a",
+      "members": [
+        "validator01",
+        "validator02"
+      ],
+      "services": [
+        "validator01",
+        "validator02"
+      ]
+    },
+    "blockchain-b": {
+      "kind": "validators",
+      "machine": "blockchain-b",
+      "members": [
+        "validator03",
+        "validator04"
+      ],
+      "services": [
+        "validator03",
+        "validator04"
+      ]
+    },
+    "resolver": {
+      "kind": "apps",
+      "machine": "resolver",
+      "members": [
+        "resolver-api"
+      ],
+      "services": [
+        "resolver-api",
+        "resolver-public"
+      ]
+    },
+    "storage-1": {
+      "kind": "storage",
+      "machine": "storage-1",
+      "members": [
+        "storage-a"
+      ],
+      "services": [
+        "ipfs-storage-a",
+        "cluster-storage-a"
+      ]
+    },
+    "storage-2": {
+      "kind": "storage",
+      "machine": "storage-2",
+      "members": [
+        "storage-b"
+      ],
+      "services": [
+        "ipfs-storage-b",
+        "cluster-storage-b"
+      ]
+    },
+    "explorer": {
+      "kind": "apps",
+      "machine": "blockchain-a",
+      "members": [
+        "explorer"
+      ],
+      "services": [
+        "explorer"
+      ]
+    }
+  },
+  "infrastructure": {
+    "besu": {
+      "network": "vpn",
+      "p2p_port_start": 30303,
+      "rpc_port": 8545
+    },
+    "cluster": {
+      "api_port": 9094,
+      "network": "vpn",
+      "p2p_port": 9096
+    },
+    "ipfs": {
+      "api_port": 5001,
+      "network": "vpn",
+      "swarm_port": 4001
+    },
+    "web": {
+      "http_port": 80
+    }
+  },
+  "machines": {
+    "apps": {
+      "addresses": {
+        "lan": "192.0.2.10",
+        "vpn": "198.51.100.10"
+      },
+      "execution": "ssh",
+      "management_address": "192.0.2.10"
+    },
+    "blockchain-a": {
+      "addresses": {
+        "lan": "192.0.2.11",
+        "vpn": "198.51.100.11"
+      },
+      "execution": "ssh",
+      "management_address": "192.0.2.11"
+    },
+    "blockchain-b": {
+      "addresses": {
+        "lan": "192.0.2.12",
+        "vpn": "198.51.100.12"
+      },
+      "execution": "ssh",
+      "management_address": "192.0.2.12"
+    },
+    "resolver": {
+      "addresses": {
+        "lan": "192.0.2.15",
+        "vpn": "198.51.100.15"
+      },
+      "execution": "ssh",
+      "management_address": "192.0.2.15"
+    },
+    "storage-1": {
+      "addresses": {
+        "lan": "192.0.2.13",
+        "vpn": "198.51.100.13"
+      },
+      "execution": "ssh",
+      "management_address": "192.0.2.13"
+    },
+    "storage-2": {
+      "addresses": {
+        "lan": "192.0.2.14",
+        "vpn": "198.51.100.14"
+      },
+      "execution": "ssh",
+      "management_address": "192.0.2.14"
+    }
+  },
+  "networks": {
+    "lan": {
+      "cidr": "192.0.2.0/24",
+      "kind": "lan"
+    },
+    "vpn": {
+      "cidr": "198.51.100.0/24",
+      "kind": "vpn"
+    }
+  },
+  "secrets": {
+    "contract-signer": {
+      "consumers": [
+        "contracts-deploy"
+      ],
+      "mode": "0600",
+      "path": "blockchain/contract-signer",
+      "source": "/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/blockchain/contract-signer"
+    },
+    "dashboard-runtime-env": {
+      "consumers": [
+        "dashboard-mysql",
+        "dashboard-migrate",
+        "dashboard"
+      ],
+      "mode": "0600",
+      "path": "runtime/dashboard.private.env",
+      "source": "/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/runtime/dashboard.private.env"
+    },
+    "ipfs-cluster-secret": {
+      "consumers": [
+        "cluster-storage-a",
+        "cluster-storage-b"
+      ],
+      "mode": "0600",
+      "path": "ipfs/cluster.secret",
+      "source": "/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/ipfs/cluster.secret"
+    },
+    "ipfs-swarm-key": {
+      "consumers": [
+        "ipfs-storage-a",
+        "ipfs-storage-b"
+      ],
+      "mode": "0600",
+      "path": "ipfs/swarm.key",
+      "source": "/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/ipfs/swarm.key"
+    },
+    "master-wallet": {
+      "consumers": [],
+      "mode": "0600",
+      "path": "blockchain/master-wallet",
+      "source": "/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/blockchain/master-wallet"
+    },
+    "minter-db-password": {
+      "consumers": [],
+      "mode": "0600",
+      "path": "minter/db-password",
+      "source": "/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/minter/db-password"
+    },
+    "minter-runtime-env": {
+      "consumers": [
+        "minter-postgres",
+        "minter-migrate",
+        "minter-api",
+        "metadata-worker",
+        "replication-worker",
+        "chain-worker",
+        "admin-api"
+      ],
+      "mode": "0600",
+      "path": "runtime/minter.private.env",
+      "source": "/Users/lmatas/source/dark-deployer/examples/operator-inventory/REPLACE/secrets/runtime/minter.private.env"
+    }
+  },
+  "services": {
+    "admin-api": {
+      "connections": {
+        "contracts": {
+          "service": "contracts-deploy"
+        },
+        "rpc": {
+          "service": "rpc01"
+        }
+      },
+      "machine": "apps",
+      "type": "admin-api"
+    },
+    "apps-private": {
+      "configuration": {
+        "sites": [
+          {
+            "host": "apps.dark.example.org",
+            "public_origin": "https://apps.dark.example.org",
+            "routes": [
+              {
+                "connection": "dashboard",
+                "id": "dashboard",
+                "path": "/admin/",
+                "upstream_path": "/"
+              },
+              {
+                "connection": "explorer",
+                "id": "explorer",
+                "path": "/explorer/",
+                "upstream_path": "/"
+              },
+              {
+                "connection": "minter-v1",
+                "id": "minter-v1",
+                "path": "/api/v1/",
+                "upstream_path": "/api/v1/"
+              },
+              {
+                "connection": "minter-docs",
+                "id": "minter-docs",
+                "path": "/api/docs",
+                "upstream_path": "/docs"
+              },
+              {
+                "connection": "minter-openapi",
+                "id": "minter-openapi",
+                "path": "/api/openapi.json",
+                "upstream_path": "/openapi.json"
+              }
+            ]
+          }
+        ],
+        "tls": {
+          "mode": "external"
+        }
+      },
+      "connections": {
+        "dashboard": {
+          "service": "dashboard"
+        },
+        "explorer": {
+          "network": "lan",
+          "protocol": "tcp",
+          "service": "explorer"
+        },
+        "minter-docs": {
+          "service": "minter-api"
+        },
+        "minter-openapi": {
+          "service": "minter-api"
+        },
+        "minter-v1": {
+          "service": "minter-api"
+        }
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "lan",
+        "port": 80,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "apps",
+      "type": "edge-proxy"
+    },
+    "chain-worker": {
+      "configuration": {
+        "worker": "chain"
+      },
+      "connections": {
+        "contracts": {
+          "service": "contracts-deploy"
+        },
+        "database": {
+          "service": "minter-postgres"
+        },
+        "migration": {
+          "service": "minter-migrate"
+        },
+        "rpc": {
+          "service": "rpc01"
+        },
+        "store_api": {
+          "service": "store-api"
+        }
+      },
+      "machine": "apps",
+      "type": "minter-worker"
+    },
+    "cluster-storage-a": {
+      "configuration": {
+        "peer_name": "storage-a"
+      },
+      "connections": {
+        "kubo": {
+          "service": "ipfs-storage-a"
+        }
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "vpn",
+        "port": 9094,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "storage-1",
+      "type": "ipfs-cluster"
+    },
+    "cluster-storage-b": {
+      "configuration": {
+        "peer_name": "storage-b"
+      },
+      "connections": {
+        "kubo": {
+          "service": "ipfs-storage-b"
+        }
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "vpn",
+        "port": 9094,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "storage-2",
+      "type": "ipfs-cluster"
+    },
+    "contracts-deploy": {
+      "connections": {
+        "rpc": {
+          "service": "rpc01"
+        }
+      },
+      "machine": "apps",
+      "type": "contracts-deploy"
+    },
+    "dashboard": {
+      "connections": {
+        "admin_api": {
+          "service": "admin-api"
+        },
+        "database": {
+          "service": "dashboard-mysql"
+        },
+        "migration": {
+          "service": "dashboard-migrate"
+        },
+        "minter_api": {
+          "service": "minter-api"
+        },
+        "redis": {
+          "service": "dashboard-redis"
+        },
+        "resolver_api": {
+          "network": "lan",
+          "protocol": "tcp",
+          "service": "resolver-api"
+        },
+        "store_api": {
+          "service": "store-api"
+        }
+      },
+      "machine": "apps",
+      "type": "dashboard"
+    },
+    "dashboard-migrate": {
+      "connections": {
+        "admin_api": {
+          "service": "admin-api"
+        },
+        "database": {
+          "service": "dashboard-mysql"
+        },
+        "minter_api": {
+          "service": "minter-api"
+        },
+        "redis": {
+          "service": "dashboard-redis"
+        },
+        "resolver_api": {
+          "network": "lan",
+          "protocol": "tcp",
+          "service": "resolver-api"
+        },
+        "store_api": {
+          "service": "store-api"
+        }
+      },
+      "machine": "apps",
+      "type": "dashboard-migrate"
+    },
+    "dashboard-mysql": {
+      "machine": "apps",
+      "type": "dashboard-mysql"
+    },
+    "dashboard-redis": {
+      "machine": "apps",
+      "type": "dashboard-redis"
+    },
+    "explorer": {
+      "connections": {
+        "rpc": {
+          "network": "lan",
+          "protocol": "tcp",
+          "service": "rpc01"
+        }
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "lan",
+        "port": 25000,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "blockchain-a",
+      "type": "explorer"
+    },
+    "ipfs-storage-a": {
+      "configuration": {
+        "peer_name": "storage-a"
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "vpn",
+        "port": 5001,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "storage-1",
+      "type": "ipfs-kubo"
+    },
+    "ipfs-storage-b": {
+      "configuration": {
+        "peer_name": "storage-b"
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "vpn",
+        "port": 5001,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "storage-2",
+      "type": "ipfs-kubo"
+    },
+    "metadata-worker": {
+      "configuration": {
+        "worker": "metadata"
+      },
+      "connections": {
+        "contracts": {
+          "service": "contracts-deploy"
+        },
+        "database": {
+          "service": "minter-postgres"
+        },
+        "migration": {
+          "service": "minter-migrate"
+        },
+        "rpc": {
+          "service": "rpc01"
+        },
+        "store_api": {
+          "service": "store-api"
+        }
+      },
+      "machine": "apps",
+      "type": "minter-worker"
+    },
+    "minter-api": {
+      "connections": {
+        "contracts": {
+          "service": "contracts-deploy"
+        },
+        "database": {
+          "service": "minter-postgres"
+        },
+        "migration": {
+          "service": "minter-migrate"
+        },
+        "rpc": {
+          "service": "rpc01"
+        },
+        "store_api": {
+          "service": "store-api"
+        }
+      },
+      "machine": "apps",
+      "type": "minter-api"
+    },
+    "minter-migrate": {
+      "connections": {
+        "database": {
+          "service": "minter-postgres"
+        }
+      },
+      "machine": "apps",
+      "type": "minter-migrate"
+    },
+    "minter-postgres": {
+      "machine": "apps",
+      "type": "minter-postgres"
+    },
+    "replication-worker": {
+      "configuration": {
+        "worker": "replication"
+      },
+      "connections": {
+        "contracts": {
+          "service": "contracts-deploy"
+        },
+        "database": {
+          "service": "minter-postgres"
+        },
+        "migration": {
+          "service": "minter-migrate"
+        },
+        "rpc": {
+          "service": "rpc01"
+        },
+        "store_api": {
+          "service": "store-api"
+        }
+      },
+      "machine": "apps",
+      "type": "minter-worker"
+    },
+    "resolver-api": {
+      "connections": {
+        "contracts": {
+          "service": "contracts-deploy"
+        },
+        "rpc": {
+          "network": "lan",
+          "protocol": "tcp",
+          "service": "rpc01"
+        },
+        "store_api": {
+          "network": "lan",
+          "protocol": "tcp",
+          "service": "store-api"
+        }
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "lan",
+        "port": 8002,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "resolver",
+      "type": "resolver-api"
+    },
+    "resolver-public": {
+      "configuration": {
+        "sites": [
+          {
+            "host": "resolve.dark.example.org",
+            "public_origin": "https://resolve.dark.example.org",
+            "routes": [
+              {
+                "connection": "arks",
+                "id": "arks",
+                "path": "/",
+                "upstream_path": "/api/v1/arks/"
+              }
+            ]
+          }
+        ],
+        "tls": {
+          "mode": "external"
+        }
+      },
+      "connections": {
+        "arks": {
+          "service": "resolver-api"
+        }
+      },
+      "exposure": {
+        "mode": "public",
+        "port": 80,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "resolver",
+      "type": "edge-proxy"
+    },
+    "rpc01": {
+      "configuration": {
+        "node_id": "rpc01"
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "lan",
+        "port": 8545,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "apps",
+      "type": "besu-rpc"
+    },
+    "store-api": {
+      "connections": {
+        "cluster_cluster-storage-a": {
+          "network": "vpn",
+          "protocol": "tcp",
+          "service": "cluster-storage-a"
+        },
+        "cluster_cluster-storage-b": {
+          "network": "vpn",
+          "protocol": "tcp",
+          "service": "cluster-storage-b"
+        }
+      },
+      "exposure": {
+        "mode": "private",
+        "network": "lan",
+        "port": 8003,
+        "protocols": [
+          "tcp"
+        ]
+      },
+      "machine": "apps",
+      "type": "store-api"
+    },
+    "validator01": {
+      "configuration": {
+        "node_id": "validator01"
+      },
+      "machine": "blockchain-a",
+      "type": "besu-validator"
+    },
+    "validator02": {
+      "configuration": {
+        "node_id": "validator02"
+      },
+      "machine": "blockchain-a",
+      "type": "besu-validator"
+    },
+    "validator03": {
+      "configuration": {
+        "node_id": "validator03"
+      },
+      "machine": "blockchain-b",
+      "type": "besu-validator"
+    },
+    "validator04": {
+      "configuration": {
+        "node_id": "validator04"
+      },
+      "machine": "blockchain-b",
+      "type": "besu-validator"
+    }
+  },
+  "settings": {
+    "minter": {
+      "chain": {
+        "page_size": 100,
+        "rpc_batch_size": 50
+      },
+      "metadata": {
+        "concurrency": 4,
+        "min_concurrency": 2,
+        "page_size": 100
+      },
+      "replication": {
+        "concurrency": 2,
+        "durability_max_recheck_seconds": 3600,
+        "durability_recheck_seconds": 300,
+        "durability_second_recheck_seconds": 900,
+        "enabled": true,
+        "first_pin_max_recheck_seconds": 300,
+        "first_pin_recheck_seconds": 15,
+        "first_pin_second_recheck_seconds": 60,
+        "idle_sleep_seconds": 2,
+        "maintenance_cycle_seconds": 5,
+        "page_size": 100,
+        "promotion_batch_size": 100,
+        "promotion_min_batch_size": 20,
+        "promotion_pressure_high_percent": 80,
+        "promotion_pressure_medium_percent": 50,
+        "status_batch_size": 200,
+        "storage_retry_seconds": 10
+      },
+      "shoulder": "200"
+    },
+    "store": {
+      "add_concurrency": 4,
+      "promotion_concurrency": 4,
+      "status_concurrency": 6
+    }
+  },
+  "storage": {
+    "cluster_name": "REPLACE-dark-production",
+    "nodes": [
+      "storage-a",
+      "storage-b"
+    ],
+    "replication": {
+      "publish_after_replicas": 1,
+      "target_replicas": 2
+    }
+  },
+  "version": 3
+}

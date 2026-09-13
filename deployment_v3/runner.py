@@ -257,6 +257,7 @@ def _service_fingerprint(plan, service, bundle: Path, project_root: Path) -> str
         "ipfs-cluster": project_root / "components" / "dark-ipfs" / "scripts" / "cluster-entrypoint.sh",
         "besu-rpc": project_root / "blockchain" / "scripts" / "besu-entrypoint.sh",
         "besu-validator": project_root / "blockchain" / "scripts" / "besu-entrypoint.sh",
+        "besu-observer": project_root / "blockchain" / "scripts" / "besu-entrypoint.sh",
     }
     source = mounted_entrypoints.get(service.type)
     if source and source.is_file():
@@ -315,7 +316,7 @@ def _distribute_chain_artifact(plan, project_root: Path) -> dict[str, dict[str, 
     except ArtifactError as exc:
         raise ApplyError(f"chain artifact validation failed: {exc}") from exc
     delivered: dict[str, dict[str, str]] = {}
-    for service in (item for item in plan.services if item.type in {"besu-rpc", "besu-validator"}):
+    for service in (item for item in plan.services if item.type in {"besu-rpc", "besu-validator", "besu-observer"}):
         machine = plan.machine(service.machine_id)
         node = service.configuration["node_id"]
         destination = Path(machine.secrets_root) / artifact["path"]
@@ -353,7 +354,7 @@ def _apply_service(plan, machine, service, root, bundle, *, verbose=False, force
     )
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id), str(Path(machine.secrets_root)))), f"prepare data for {machine.id}")
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id / "contracts"))), f"prepare contract runtime for {machine.id}")
-    if service.type in {"besu-rpc", "besu-validator"}:
+    if service.type in {"besu-rpc", "besu-validator", "besu-observer"}:
         # Besu's transaction-log Bloom cacher writes below /data/caches. A
         # partially initialized bind mount may have a valid chain database
         # but no cache directory, which otherwise produces a recurring
@@ -365,7 +366,7 @@ def _apply_service(plan, machine, service, root, bundle, *, verbose=False, force
             continue
         secret_path = Path(machine.secrets_root) / definition["path"]
         _require(executor.run(("test", "-r", str(secret_path))), f"required secret {secret_id} is readable for {service.id} on {machine.id}")
-    if service.type in {"besu-rpc", "besu-validator"}:
+    if service.type in {"besu-rpc", "besu-validator", "besu-observer"}:
         artifact = Path(machine.secrets_root) / plan.raw["blockchain"]["artifact"]["path"]
         node_id = service.configuration["node_id"]
         for relative in ("genesis.json", f"nodes/{node_id}/nodekey", f"nodes/{node_id}/static-nodes.json"):

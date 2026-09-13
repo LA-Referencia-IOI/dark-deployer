@@ -5,9 +5,9 @@ directory, replace all placeholder network, SSH, repository, and secret values,
 then validate it before installation:
 
 ```bash
-cp examples/deployment-v3/production-five-host.json deployment-inventory.json
-venv/bin/python deploy.py validate --inventory deployment-inventory.json
-venv/bin/python deploy.py render --inventory deployment-inventory.json --output /tmp/dark-render
+cp examples/deployment-v3/production-five-host.json inventory.json
+venv/bin/python deploy.py validate --inventory inventory.json
+venv/bin/python deploy.py render --inventory inventory.json --output /tmp/dark-render
 ```
 
 The inventory contains no secret values. Each `secrets` entry declares its

@@ -4,11 +4,21 @@ These files are the compact authoring format for Deployment v3. They describe
 operator decisions and resolve into the complete v3 execution contract; they do
 not bypass v3 validation, planning, rendering, secret handling, or verification.
 
-Use `operator-local-simple` for a quick end-to-end test, `operator-local-ha`
+Use `operator-local-simple` for a quick end-to-end test, `operator-local-observer`
+to exercise an observer and a private Resolver binding, `operator-local-ha`
 to exercise two storage peers on one Docker host, and
 `operator-production-five-host` as a five-machine SSH starting point. The last
 template contains documentation network ranges and `REPLACE` values and must
 be adapted before preflight.
+
+Install a maintained example directly; no copy or render step is required:
+
+```bash
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-ha.json --verbose
+```
+
+For offline inspection:
 
 ```bash
 venv/bin/python deploy.py inventory-resolve \

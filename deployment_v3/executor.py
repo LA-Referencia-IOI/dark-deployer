@@ -159,7 +159,7 @@ def run_network_preflight(plan) -> list[dict[str, str | bool]]:
                 "stderr": result.stderr.strip(),
             })
     for policy, types, default_port in (
-        ("besu", {"besu-rpc", "besu-validator"}, 30303),
+        ("besu", {"besu-rpc", "besu-validator", "besu-observer"}, 30303),
         ("ipfs", {"ipfs-kubo"}, int(plan.raw["infrastructure"]["ipfs"]["swarm_port"])),
         ("cluster", {"ipfs-cluster"}, int(plan.raw["infrastructure"]["cluster"]["p2p_port"])),
     ):

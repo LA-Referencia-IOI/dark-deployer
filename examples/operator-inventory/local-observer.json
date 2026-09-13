@@ -1,0 +1,132 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 2,
+  "catalog": "dark-standard-1",
+  "profile": "local",
+  "deployment": {
+    "id": "dark-operator-local-observer",
+    "label": "dARK local observer reference"
+  },
+  "networks": {
+    "lab": {
+      "kind": "lan",
+      "cidr": "10.99.0.0/24"
+    }
+  },
+  "machines": {
+    "local": {
+      "execution": "local"
+    }
+  },
+  "placement": {
+    "apps": "local",
+    "validators": "local",
+    "storage-1": "local",
+    "observers": "local"
+  },
+  "routing": {
+    "blockchain_p2p": "lab",
+    "storage_p2p": "lab",
+    "storage_api": "lab",
+    "application_api": "lab"
+  },
+  "blockchain": {
+    "chain_id": 2025,
+    "validator_groups": {
+      "validators": {
+        "validator_count": 4
+      }
+    },
+    "observer_groups": {
+      "observers": {
+        "observer_count": 1
+      }
+    },
+    "rpc": {
+      "primary": "rpc01",
+      "nodes": {
+        "rpc01": {
+          "group": "apps"
+        }
+      },
+      "bindings": {
+        "resolver-api": "observer01"
+      }
+    }
+  },
+  "storage": {
+    "cluster_name": "dark-local",
+    "peers": {
+      "storage-a": {
+        "group": "storage-1"
+      }
+    },
+    "replication": {
+      "publish_after_replicas": 1,
+      "target_replicas": 1
+    }
+  },
+  "proxies": {
+    "gateway": {
+      "group": "apps",
+      "listener": {
+        "bind": "loopback",
+        "port": 80
+      },
+      "tls": {
+        "mode": "http"
+      },
+      "sites": [
+        {
+          "host": "localhost",
+          "public_origin": "http://localhost",
+          "routes": [
+            {
+              "id": "dashboard",
+              "path": "/admin/",
+              "service": "dashboard",
+              "upstream_path": "/"
+            },
+            {
+              "id": "explorer",
+              "path": "/explorer/",
+              "service": "explorer",
+              "upstream_path": "/"
+            },
+            {
+              "id": "minter-v1",
+              "path": "/api/v1/",
+              "service": "minter-api",
+              "upstream_path": "/api/v1/"
+            },
+            {
+              "id": "minter-docs",
+              "path": "/api/docs",
+              "service": "minter-api",
+              "upstream_path": "/docs"
+            },
+            {
+              "id": "minter-openapi",
+              "path": "/api/openapi.json",
+              "service": "minter-api",
+              "upstream_path": "/openapi.json"
+            },
+            {
+              "id": "resolver",
+              "path": "/",
+              "service": "resolver-api",
+              "upstream_path": "/api/v1/arks/"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "overrides": {
+    "settings": {
+      "minter": {
+        "shoulder": "200"
+      }
+    }
+  }
+}

@@ -14,6 +14,7 @@ _TEMPLATES = {
     "local-ha": "local-ha.json",
     "production-five-host": "production-five-host.json",
     "operator-local-simple": "../operator-inventory/local-simple.json",
+    "operator-local-observer": "../operator-inventory/local-observer.json",
     "operator-local-ha": "../operator-inventory/local-ha.json",
     "operator-production-five-host": "../operator-inventory/production-five-host.json",
     "operator-production-six-host": "../operator-inventory/production-six-host.json",

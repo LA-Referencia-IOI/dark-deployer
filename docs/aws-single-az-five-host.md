@@ -205,9 +205,10 @@ venv/bin/python deploy.py verify --inventory deployment-aws.json
 Aceptar la sede solo cuando `verify` demuestre:
 
 - identidad y avance de la cadena Besu;
-- cuatro validadores y RPC funcional;
-- membresía Kubo y Cluster de ambos storage;
-- Store API y réplica objetivo 2;
+- quorum de todos los validadores declarados y RPC primario funcional;
+- sincronización y exclusión del conjunto validador de cada observer;
+- membresía Kubo y Cluster de todos los peers de storage;
+- Store API y objetivo de réplica declarado;
 - contratos disponibles;
 - workers saludables;
 - dashboard, explorer y edge proxy accesibles por la ruta prevista.

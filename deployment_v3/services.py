@@ -40,7 +40,7 @@ def _p2p_ports(plan: DeploymentPlan, machine: Machine, service: ServiceInstance)
     Every container listens on 30303 internally; host ports are deterministic
     from the generated chain artifact and are never an Internet-facing RPC.
     """
-    if not has_remote_peer(plan, {"besu-rpc", "besu-validator"}):
+    if not has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"}):
         return []
     node_id = service.configuration["node_id"]
     host_port = chain_node_ports(plan)[node_id]
@@ -55,6 +55,8 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
     secret_path = lambda secret_id: f"{machine.secrets_root}/{plan.raw['secrets'][secret_id]['path']}"
     common = {"restart": "unless-stopped", "networks": [network]}
     result: dict = {}
+    besu_count = sum(item.type in {"besu-validator", "besu-rpc", "besu-observer"} for item in plan.services)
+    sync_min_peers = min(3, besu_count - 1) if besu_count > 1 else None
     for service in services:
         # Keep generated service instances immutable from the inventory while
         # giving the low-level port helper the policy it must expose.
@@ -75,12 +77,17 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             env.append(secret_path("dashboard-runtime-env"))
         if service.type == "besu-rpc":
             node = service.configuration["node_id"]
-            result[service.id] = {**common, "image": plan.raw["blockchain"]["besu_image"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{machine.workspace_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{machine.workspace_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=true", "--rpc-http-host=0.0.0.0", "--p2p-port=30303"]}
-            if not has_remote_peer(plan, {"besu-rpc", "besu-validator"}): result[service.id]["networks"] = {network: {"ipv4_address": chain_node_addresses(plan)[node]}}
-        elif service.type == "besu-validator":
+            command = ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=true", "--rpc-http-host=0.0.0.0", "--p2p-port=30303"]
+            if sync_min_peers is not None: command.append(f"--sync-min-peers={sync_min_peers}")
+            result[service.id] = {**common, "image": plan.raw["blockchain"]["besu_image"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{machine.workspace_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{machine.workspace_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": command}
+            if not has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"}): result[service.id]["networks"] = {network: {"ipv4_address": chain_node_addresses(plan)[node]}}
+        elif service.type in {"besu-validator", "besu-observer"}:
             node = service.configuration["node_id"]
-            result[service.id] = {**common, "image": plan.raw["blockchain"]["besu_image"], "env_file": env, "ports": _p2p_ports(plan, machine, service), "volumes": [f"{service_data}:/data", f"{machine.workspace_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{machine.workspace_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=false", "--p2p-port=30303"]}
-            if not has_remote_peer(plan, {"besu-rpc", "besu-validator"}): result[service.id]["networks"] = {network: {"ipv4_address": chain_node_addresses(plan)[node]}}
+            command = ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=" + ("true" if service.type == "besu-observer" else "false"), "--p2p-port=30303"]
+            if service.type == "besu-observer": command.append("--rpc-http-host=0.0.0.0")
+            if sync_min_peers is not None: command.append(f"--sync-min-peers={sync_min_peers}")
+            result[service.id] = {**common, "image": plan.raw["blockchain"]["besu_image"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{machine.workspace_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{machine.workspace_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": command}
+            if not has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"}): result[service.id]["networks"] = {network: {"ipv4_address": chain_node_addresses(plan)[node]}}
         elif service.type == "minter-postgres":
             result[service.id] = {**common, "image": "postgres:15-alpine", "env_file": env, "volumes": [f"{service_data}:/var/lib/postgresql/data"]}
         elif service.type in {"minter-api", "minter-worker", "minter-migrate"}:

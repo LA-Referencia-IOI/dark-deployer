@@ -14,6 +14,7 @@ from .network import allocate_docker_subnets, derive_endpoints
 PHASES = (
     ("validators", {"besu-validator"}),
     ("rpc", {"besu-rpc"}),
+    ("observers", {"besu-observer"}),
     ("contracts", {"contracts-deploy", "rpc-probe"}),
     ("storage", {"ipfs-kubo", "ipfs-cluster"}),
     ("data", {"minter-postgres", "dashboard-mysql", "dashboard-redis", "store-api", "minter-migrate"}),

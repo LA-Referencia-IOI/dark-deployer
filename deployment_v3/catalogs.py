@@ -1,9 +1,4 @@
-"""Installed, versioned recipes used by operator inventories.
-
-The first catalogue deliberately derives its recipe from the maintained HA
-fixture.  This makes the compact format an authoring layer, not a second,
-independent definition of dARK services.
-"""
+"""Installed, versioned recipes used by operator inventories."""
 
 from __future__ import annotations
 
@@ -18,11 +13,20 @@ class Catalog:
     id: str
     document: dict
     digest: str
+    service_templates: dict[str, dict]
 
 
 def get_catalog(catalog_id: str) -> Catalog:
     if catalog_id != "dark-standard-1":
         raise ValueError(f"unknown operator inventory catalog {catalog_id!r}; choose dark-standard-1")
-    path = Path(__file__).resolve().parents[1] / "examples" / "deployment-v3" / "production-five-host.json"
+    path = Path(__file__).with_name("catalog_data") / f"{catalog_id}.json"
     content = path.read_bytes()
-    return Catalog(catalog_id, json.loads(content), sha256(content).hexdigest())
+    payload = json.loads(content)
+    if payload.get("id") != catalog_id or payload.get("version") != 1:
+        raise ValueError(f"invalid installed catalogue {catalog_id!r}")
+    document = payload.get("base")
+    templates = payload.get("service_templates")
+    required = {"besu-validator", "besu-rpc", "besu-observer", "ipfs-kubo", "ipfs-cluster"}
+    if not isinstance(document, dict) or not isinstance(templates, dict) or set(templates) != required:
+        raise ValueError(f"invalid installed catalogue {catalog_id!r}")
+    return Catalog(catalog_id, document, sha256(content).hexdigest(), templates)

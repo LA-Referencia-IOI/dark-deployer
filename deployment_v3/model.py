@@ -55,7 +55,7 @@ class Group:
     """Logical server/deployment unit, independent of its transport."""
 
     id: str
-    kind: Literal["apps", "validators", "storage", "server"]
+    kind: Literal["apps", "validators", "observers", "storage", "server"]
     machine_id: str
     members: tuple[str, ...]
     service_ids: tuple[str, ...]
@@ -115,6 +115,10 @@ class DeploymentPlan:
 
     def service(self, service_id: str) -> ServiceInstance:
         return next(service for service in self.services if service.id == service_id)
+
+    def primary_rpc(self) -> ServiceInstance:
+        """Return the explicitly selected application RPC node."""
+        return self.service(self.raw["blockchain"]["primary_rpc"])
 
     def group(self, group_id: str) -> Group:
         return next(group for group in self.groups if group.id == group_id)

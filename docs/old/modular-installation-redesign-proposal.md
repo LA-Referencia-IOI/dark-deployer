@@ -103,7 +103,7 @@ eliminar:
 ### Capas de configuración
 
 ```text
-deployment-inventory.json       hechos de infraestructura y política
+inventory.json       hechos de infraestructura y política
           |
           | render
           v
@@ -139,7 +139,7 @@ en cada host. El renderizador es el único programa autorizado a transformar
 este documento en `.env.public`, Compose runtime y bundles por host.
 
 ```text
-deployment-inventory.json
+inventory.json
   ├─ release: qué código se instala
   ├─ deployment: cómo llegar y aplicar en cada host
   ├─ network: cómo se comunican los roles entre hosts
@@ -212,11 +212,11 @@ Semántica propuesta:
 El comando de orquestación futuro podría ser:
 
 ```text
-deployment connect-check --inventory deployment-inventory.json
-deployment render --inventory deployment-inventory.json --output dist/<id>
-deployment push --inventory deployment-inventory.json --bundle dist/<id>
-deployment apply --inventory deployment-inventory.json --hosts site-a-storage-01
-deployment verify --inventory deployment-inventory.json
+deployment connect-check --inventory inventory.json
+deployment render --inventory inventory.json --output dist/<id>
+deployment push --inventory inventory.json --bundle dist/<id>
+deployment apply --inventory inventory.json --hosts site-a-storage-01
+deployment verify --inventory inventory.json
 ```
 
 `push` no instala nada: copia solamente bundles públicos y valida la identidad
@@ -498,8 +498,8 @@ El rediseño sustituye la secuencia global fija por operaciones explícitas.
 Los nombres siguientes son propuestas de CLI, no comandos existentes.
 
 ```text
-1. inventory validate --file deployment-inventory.json
-2. inventory render --file deployment-inventory.json --output dist/<id>
+1. inventory validate --file inventory.json
+2. inventory render --file inventory.json --output dist/<id>
 3. host validate --bundle dist/<id>/hosts/<host-id>
 4. host apply --bundle dist/<id>/hosts/<host-id>
 5. deployment verify --bundle dist/<id>

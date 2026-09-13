@@ -9,7 +9,7 @@ from pathlib import Path
 from .executor import resolve_executor
 from .runner import _compose_directory, _compose_project, _effective_plan, _machine_directory
 from .state import record, run_root, write_status
-from .readiness import _host_url, _curl, store_health_probe, ReadinessError
+from .readiness import _host_url, _curl, store_health_probe, observer_status, ReadinessError
 from .network import internal_port
 
 
@@ -79,7 +79,7 @@ def verify(plan, project_root: Path) -> dict:
                 report["services"][service.id] = {"machine": machine.id, "group": group.id if group else None, "state": states.get(service.id, "missing"), "ok": ok}
                 report["ok"] = bool(report["ok"] and ok and result.returncode == 0)
 
-    rpc = next(item for item in effective.services if item.type == "besu-rpc")
+    rpc = effective.primary_rpc()
     rpc_machine = effective.machine(rpc.machine_id)
     chain_id = effective.raw["blockchain"]["chain_id"]
     rpc_url = _host_url(rpc, rpc_machine)
@@ -90,6 +90,12 @@ def verify(plan, project_root: Path) -> dict:
         report["services"][rpc.id]["chain_id"]["error"] = f"unexpected chain ID; expected {chain_id}"
         report["ok"] = False
     _append(report, rpc, "validator_peers", _curl(effective, rpc_machine, rpc_url, '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'))
+    for observer in (item for item in effective.services if item.type == "besu-observer"):
+        ok, message, details = observer_status(effective, root, observer)
+        entry = report["services"].setdefault(observer.id, {"machine": observer.machine_id, "ok": True})
+        entry["synchronization"] = {"ok": ok, "output": message, **details}
+        entry["ok"] = bool(entry["ok"] and ok)
+        report["ok"] = bool(report["ok"] and ok)
     kubo_peers = [item for item in effective.services if item.type == "ipfs-kubo"]
     for service in kubo_peers:
         result = _probe(effective, effective.machine(service.machine_id), root, service.id, "ipfs --api /ip4/127.0.0.1/tcp/5001 swarm peers")

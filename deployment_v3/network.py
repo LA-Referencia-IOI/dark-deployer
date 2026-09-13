@@ -8,7 +8,7 @@ from .inventory import InventoryError
 from .model import Endpoint, Machine, ServiceInstance
 
 DEFAULT_PORTS = {
-    "besu-rpc": 8545, "admin-api": 8000, "minter-api": 8001,
+    "besu-rpc": 8545, "besu-observer": 8545, "admin-api": 8000, "minter-api": 8001,
     "resolver-api": 8002, "store-api": 8003, "dashboard": 8080,
     "explorer": 80, "edge-proxy": 80, "ipfs-kubo": 5001, "ipfs-cluster": 9094,
     "minter-postgres": 5432, "dashboard-mysql": 3306,
@@ -96,8 +96,8 @@ def has_remote_peer(plan, service_types: set[str]) -> bool:
 def chain_node_addresses(plan) -> dict[str, str]:
     """Use Docker addresses only when every Besu node shares one host."""
     result = {}
-    remote = has_remote_peer(plan, {"besu-rpc", "besu-validator"})
-    for index, service in enumerate((item for item in plan.services if item.type in {"besu-rpc", "besu-validator"}), start=10):
+    remote = has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"})
+    for index, service in enumerate((item for item in plan.services if item.type in {"besu-rpc", "besu-validator", "besu-observer"}), start=10):
         machine = plan.machine(service.machine_id)
         node_id = service.configuration["node_id"]
         if not remote:
@@ -113,12 +113,16 @@ def chain_node_addresses(plan) -> dict[str, str]:
 def chain_node_ports(plan) -> dict[str, int]:
     """Return the host P2P port each Besu node announces to remote peers."""
     start = int(plan.raw["infrastructure"]["besu"]["p2p_port_start"])
-    nodes = ("validator01", "validator02", "validator03", "validator04", "rpc01")
-    remote = has_remote_peer(plan, {"besu-rpc", "besu-validator"})
+    def node_role(node_id: str) -> str:
+        definition = plan.raw["blockchain"]["nodes"][node_id]
+        return definition["role"]
+    rank = {"validator": 0, "rpc": 1, "observer": 2}
+    nodes = tuple(sorted(plan.raw["blockchain"]["nodes"], key=lambda node: (rank[node_role(node)], node)))
+    remote = has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"})
     by_node = {
         service.configuration["node_id"]: service
         for service in plan.services
-        if service.type in {"besu-rpc", "besu-validator"}
+        if service.type in {"besu-rpc", "besu-validator", "besu-observer"}
     }
     return {
         node: int(by_node[node].configuration.get("p2p_advertise_port", start + index if remote else 30303))

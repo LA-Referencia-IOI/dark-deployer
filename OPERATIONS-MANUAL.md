@@ -13,15 +13,24 @@ An **inventory** is the source of truth for an installation: machines, placement
 
 The compact format records operator choices. The resolver derives services, typed dependencies, secret consumers, groups, and private exposures, then validates the resulting v3 inventory. The v3 format is already the complete execution contract. Both formats contain secret *references*, never values.
 
-Use a compact template for a new deployment:
+Use a maintained compact inventory directly for a new deployment:
 
 ```bash
-venv/bin/python deploy.py inventory-create \
-  --template operator-local-simple \
-  --output deployment-inventory.json
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-ha.json \
+  --verbose
 ```
 
-Available templates are `operator-local-simple`, `operator-local-ha`, `operator-production-five-host`, and `operator-production-six-host`. `local-simple` has one storage peer. `local-ha` has two peers on one Docker host and tests replication, not host-loss tolerance. Production templates are documentation-only until every `REPLACE` value is replaced with real infrastructure values.
+The installer expands the compact file into the complete v3 execution
+contract internally. `inventory-create` is optional and only makes an editable
+copy of a template; `inventory-resolve`, `plan` and `render` are optional
+review commands, not prerequisites.
+
+To adapt a compact inventory without editing unrelated JSON fields, install
+`requirements-tui.txt` and use `inventory-wizard --inventory FILE`. The wizard
+only saves a reviewed inventory; run `preflight` and `install` explicitly afterward.
+
+Available templates are `operator-local-simple`, `operator-local-observer`, `operator-local-ha`, `operator-production-five-host`, and `operator-production-six-host`. `local-simple` has one storage peer. `local-observer` adds a Besu observer with Resolver bound to its private RPC. `local-ha` has two peers on one Docker host and tests replication, not host-loss tolerance. Production templates are documentation-only until every `REPLACE` value is replaced with real infrastructure values.
 
 ## 2. Prepare the controller
 
@@ -42,22 +51,22 @@ The compact inspection commands are offline: they do not use Docker, SSH, Git, o
 ```bash
 # Expand compact decisions into the effective v3 contract.
 venv/bin/python deploy.py inventory-resolve \
-  --inventory deployment-inventory.json \
+  --inventory inventory.json \
   --output resolved-inventory.json
 
 # Explain whether a field is explicit, inherited, or catalogue-derived.
 venv/bin/python deploy.py inventory-explain \
-  --inventory deployment-inventory.json \
+  --inventory inventory.json \
   --path /services/store-api
 
 # Compare two inventory decisions semantically.
 venv/bin/python deploy.py inventory-diff \
   --before previous-inventory.json \
-  --after deployment-inventory.json
+  --after inventory.json
 
 # Validate and construct an execution plan without applying it.
-venv/bin/python deploy.py validate --inventory deployment-inventory.json
-venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
+venv/bin/python deploy.py validate --inventory inventory.json
+venv/bin/python deploy.py plan --inventory inventory.json --json
 ```
 
 `inventory-resolve` refuses to overwrite an existing output. `plan` is the last safe review point: examine group placement, cross-host routes, exposure, and the phases (`validators`, `rpc`, `contracts`, `storage`, `data`, `applications`, `verify`) before installing.
@@ -66,11 +75,18 @@ venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
 
 ### Local functional test
 
+The shortest supported local path is:
+
+```bash
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-ha.json --verbose
+```
+
 Keep `operator-local-simple` unchanged for the smallest functional installation. If a new local chain is needed, provide a master wallet file (the installer derives its public address and contract signer) or use the guarded wallet-generation option documented by `deploy.py --help`.
 
 ```bash
 venv/bin/python deploy.py install \
-  --inventory deployment-inventory.json \
+  --inventory inventory.json \
   --master-wallet-file /secure/dark/master-wallet.key
 ```
 
@@ -126,8 +142,8 @@ Declare each logical peer once. The resolver creates its Kubo/Cluster pair and u
 {
   "storage": {
     "peers": {
-      "storage-a": {"group": "storage-1"},
-      "storage-b": {"group": "storage-2"}
+      "storage-east": {"group": "storage-east"},
+      "storage-west": {"group": "storage-west"}
     },
     "replication": {
       "publish_after_replicas": 1,
@@ -157,7 +173,7 @@ For reviewable output without applying it:
 
 ```bash
 venv/bin/python deploy.py render \
-  --inventory deployment-inventory.json \
+  --inventory inventory.json \
   --output /tmp/dark-render
 ```
 
@@ -166,15 +182,15 @@ The output includes plan evidence, one public bundle per machine, a firewall sug
 For remote machines, check prerequisites before mutation:
 
 ```bash
-venv/bin/python deploy.py preflight --inventory deployment-inventory.json
-venv/bin/python deploy.py push --inventory deployment-inventory.json
-venv/bin/python deploy.py apply --inventory deployment-inventory.json
+venv/bin/python deploy.py preflight --inventory inventory.json
+venv/bin/python deploy.py push --inventory inventory.json
+venv/bin/python deploy.py apply --inventory inventory.json
 ```
 
 `install` coordinates validation, acquisition, runtime secret preparation, chain-artifact handling, preflight, rendering, application, and verification. It acquires components with `fetch` and `merge --ff-only`; a divergent or dirty checkout stops rather than being overwritten. Use `--skip-acquire` only for checkouts you intentionally prepared.
 
 ```bash
-venv/bin/python deploy.py install --inventory deployment-inventory.json
+venv/bin/python deploy.py install --inventory inventory.json
 ```
 
 For a new chain, use `chain-init` only as an explicit initialization action. Do not regenerate genesis, validator identities, or static nodes for an existing network. See [blockchain/README.md](blockchain/README.md) for the role-artifact workflow.
@@ -182,8 +198,8 @@ For a new chain, use `chain-init` only as an explicit initialization action. Do 
 ## 6. Verify and operate
 
 ```bash
-venv/bin/python deploy.py status --inventory deployment-inventory.json
-venv/bin/python deploy.py verify --inventory deployment-inventory.json
+venv/bin/python deploy.py status --inventory inventory.json
+venv/bin/python deploy.py verify --inventory inventory.json
 ```
 
 Confirm block production, the expected Besu nodes, storage peers, API health, and the three Minter workers. `status` is a short summary; `verify` performs bounded diagnostic checks. The functional acceptance path is `notebooks/dark_platform_deposit_lifecycle.ipynb`: reserve an ARK, repeat the request with the same client item ID, complete metadata, wait for `PUBLISHED`, inspect both CIDs, and resolve the ARK.
@@ -194,7 +210,7 @@ To rebuild one service without restarting the rest of its machine:
 
 ```bash
 venv/bin/python deploy.py recreate \
-  --inventory deployment-inventory.json \
+  --inventory inventory.json \
   --service dashboard --build
 ```
 
@@ -203,7 +219,7 @@ venv/bin/python deploy.py recreate \
 Inspect the affected group logs before restarting anything. Use `resume` only after correcting the cause of an interrupted remote transfer or apply:
 
 ```bash
-venv/bin/python deploy.py resume --inventory deployment-inventory.json
+venv/bin/python deploy.py resume --inventory inventory.json
 ```
 
 If Docker reports an overlapping subnet, the deployer lists the conflicting
@@ -213,7 +229,7 @@ are empty, opt in explicitly:
 
 ```bash
 venv/bin/python deploy.py install \
-  --inventory deployment-inventory.json \
+  --inventory inventory.json \
   --clean-empty-network-conflicts
 ```
 

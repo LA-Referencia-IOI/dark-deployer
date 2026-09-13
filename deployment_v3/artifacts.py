@@ -19,8 +19,20 @@ class ArtifactError(ValueError):
 
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}$")
 _PUBKEY = re.compile(r"[0-9a-fA-F]{128}$")
-_VALIDATORS = ("validator01", "validator02", "validator03", "validator04")
-_NODES = (*_VALIDATORS, "rpc01")
+def _node_roles(plan: DeploymentPlan) -> dict[str, str]:
+    return {
+        node: definition["role"]
+        for node, definition in plan.raw["blockchain"]["nodes"].items()
+    }
+
+
+def _node_groups(plan: DeploymentPlan) -> dict[str, str]:
+    return {
+        service.configuration["node_id"]: group.id
+        for group in plan.groups for service_id in group.service_ids
+        for service in (plan.service(service_id),)
+        if service.type in {"besu-validator", "besu-rpc", "besu-observer"}
+    }
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -91,8 +103,9 @@ def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
         raise ArtifactError("master wallet address must be a 20-byte hexadecimal address")
     advertised = chain_node_addresses(plan)
     ports = chain_node_ports(plan)
+    roles = _node_roles(plan); groups = _node_groups(plan)
     return {
-        "version": 1,
+        "version": 2,
         "deployment_id": plan.deployment_id,
         "chain_id": plan.raw["blockchain"]["chain_id"],
         "besu_image": plan.raw["blockchain"]["besu_image"],
@@ -100,11 +113,12 @@ def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
         "master_wallet_address": master_wallet_address.lower(),
         "nodes": {
             node: {
-                "validator": node in _VALIDATORS,
+                "role": roles[node],
+                "group": groups[node],
                 "private_address": advertised[node],
                 "p2p_port": ports[node],
             }
-            for node in _NODES
+            for node in roles
         },
     }
 
@@ -131,7 +145,7 @@ def write_chain_bootstrap(plan: DeploymentPlan, output: Path, master_wallet_addr
             "coinbase": "0x0000000000000000000000000000000000000000",
             "alloc": {context["master_wallet_address"]: {"balance": "0xd3c21bcecceda1000000"}},
         },
-        "blockchain": {"nodes": {"generate": True, "count": 4}},
+        "blockchain": {"nodes": {"generate": True, "count": sum(node["role"] == "validator" for node in context["nodes"].values())}},
     }
     _write_json(output / "chain-context.json", context)
     _write_json(output / "qbft-config.json", qbft)
@@ -140,20 +154,21 @@ def write_chain_bootstrap(plan: DeploymentPlan, output: Path, master_wallet_addr
 
 def static_nodes(context: dict, public_keys: dict[str, str]) -> dict[str, list[str]]:
     """Build each node's peer list after keys have been generated externally."""
-    if set(public_keys) != set(_NODES):
-        raise ArtifactError("public keys must contain validator01..validator04 and rpc01")
+    expected_nodes = set(context.get("nodes", {}))
+    if set(public_keys) != expected_nodes:
+        raise ArtifactError("public keys must exactly match chain context nodes")
     cleaned = {node: key.lower().removeprefix("0x") for node, key in public_keys.items()}
     if not all(_PUBKEY.fullmatch(key) for key in cleaned.values()):
         raise ArtifactError("each node public key must be 128 hexadecimal characters")
     nodes = context.get("nodes")
-    if not isinstance(nodes, dict) or set(nodes) != set(_NODES):
+    if not isinstance(nodes, dict) or set(nodes) != expected_nodes:
         raise ArtifactError("chain context does not contain the expected nodes")
     return {
         node: [
             f"enode://{cleaned[peer]}@{nodes[peer]['private_address']}:{nodes[peer]['p2p_port']}"
-            for peer in _NODES if peer != node
+            for peer in nodes if peer != node
         ]
-        for node in _NODES
+        for node in nodes
     }
 
 
@@ -188,13 +203,16 @@ def initialize_chain(plan: DeploymentPlan, output: Path, master_wallet_address: 
     if completed.returncode:
         raise ArtifactError(completed.stderr.strip() or "Besu failed to generate QBFT artifacts")
     key_dirs = sorted((generated / "keys").glob("0x*"))
-    if len(key_dirs) != 4:
-        raise ArtifactError(f"Besu generated {len(key_dirs)} validator keys; expected 4")
+    context = json.loads((output / "chain-context.json").read_text())
+    validators = tuple(node for node, definition in context["nodes"].items() if definition["role"] == "validator")
+    non_validators = tuple(node for node, definition in context["nodes"].items() if definition["role"] != "validator")
+    if len(key_dirs) != len(validators):
+        raise ArtifactError(f"Besu generated {len(key_dirs)} validator keys; expected {len(validators)}")
     genesis = generated / "genesis.json"
     if not genesis.exists():
         raise ArtifactError("Besu did not produce genesis.json")
     public_keys: dict[str, str] = {}
-    for node, key_dir in zip(_VALIDATORS, key_dirs, strict=True):
+    for node, key_dir in zip(validators, key_dirs, strict=True):
         destination = output / "nodes" / node
         destination.mkdir(parents=True, exist_ok=True)
         for name, mode in (("nodekey", 0o600), ("key.pub", 0o644)):
@@ -203,22 +221,15 @@ def initialize_chain(plan: DeploymentPlan, output: Path, master_wallet_address: 
             target.write_text(value)
             target.chmod(mode)
         public_keys[node] = (destination / "key.pub").read_text().strip().removeprefix("0x")
-    # Generate the non-validator peer with the same pinned Besu utility.
-    rpc = output / "nodes" / "rpc01"
-    rpc.mkdir(parents=True, exist_ok=True)
-    rpc_key = rpc / "nodekey"
-    rpc_key.write_text(__import__("secrets").token_hex(32) + "\n")
-    rpc_key.chmod(0o600)
-    exported = subprocess.run(
-        ("docker", "run", "--rm", "-v", f"{rpc}:/data", plan.raw["blockchain"]["besu_image"], "public-key", "export", "--node-private-key-file=/data/nodekey", "--to=/data/key.pub"),
-        capture_output=True, text=True,
-    )
-    if exported.returncode:
-        raise ArtifactError(exported.stderr.strip() or "Besu failed to export the RPC public key")
-    public_keys["rpc01"] = (rpc / "key.pub").read_text().strip().removeprefix("0x")
+    for node in non_validators:
+        destination = output / "nodes" / node; destination.mkdir(parents=True, exist_ok=True)
+        key = destination / "nodekey"; key.write_text(__import__("secrets").token_hex(32) + "\n"); key.chmod(0o600)
+        exported = subprocess.run(("docker", "run", "--rm", "-v", f"{destination}:/data", plan.raw["blockchain"]["besu_image"], "public-key", "export", "--node-private-key-file=/data/nodekey", "--to=/data/key.pub"), capture_output=True, text=True)
+        if exported.returncode: raise ArtifactError(exported.stderr.strip() or f"Besu failed to export the {node} public key")
+        public_keys[node] = (destination / "key.pub").read_text().strip().removeprefix("0x")
     (output / "genesis.json").write_bytes(genesis.read_bytes())
     static_root = write_static_nodes(output, public_keys)
-    for node in _NODES:
+    for node in context["nodes"]:
         destination = output / "nodes" / node / "static-nodes.json"
         destination.write_bytes((static_root / f"{node}.json").read_bytes())
         destination.chmod(0o644)
@@ -226,11 +237,13 @@ def initialize_chain(plan: DeploymentPlan, output: Path, master_wallet_address: 
     return output
 
 
-def export_chain_role(artifact_root: Path, role: str, destination: Path) -> Path:
-    """Export only the private node material needed by one runtime role."""
-    assignments = {"rpc": ("rpc01",), "validators-a": ("validator01", "validator02"), "validators-b": ("validator03", "validator04")}
-    if role not in assignments:
-        raise ArtifactError("role must be rpc, validators-a or validators-b")
+def export_chain_group(artifact_root: Path, group: str, destination: Path) -> Path:
+    """Export only the private node material assigned to one logical group."""
+    verify_artifact_manifest(artifact_root)
+    context = json.loads((artifact_root / "chain-context.json").read_text())
+    assignments = tuple(node for node, definition in context.get("nodes", {}).items() if definition.get("group") == group)
+    if not assignments:
+        raise ArtifactError(f"chain artifact contains no nodes for group {group}")
     if destination.exists() and any(destination.iterdir()):
         raise ArtifactError(f"role artifact output must be empty: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
@@ -238,7 +251,7 @@ def export_chain_role(artifact_root: Path, role: str, destination: Path) -> Path
     if not genesis.exists():
         raise ArtifactError("chain artifact genesis.json is missing")
     (destination / "genesis.json").write_bytes(genesis.read_bytes())
-    for node in assignments[role]:
+    for node in assignments:
         source = artifact_root / "nodes" / node
         static = artifact_root / "static-nodes" / f"{node}.json"
         if not source.exists() or not static.exists():

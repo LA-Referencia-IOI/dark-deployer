@@ -6,9 +6,10 @@
   "additionalProperties": false,
   "properties": {
     "format": {"const": "dark-operator-inventory"},
-    "format_version": {"const": 1},
+    "format_version": {"const": 2},
     "catalog": {"const": "dark-standard-1"},
     "deployment": {"type": "object"},
+    "profile": {"enum": ["local", "lab", "production"]},
     "defaults": {"type": "object"},
     "networks": {"type": "object"},
     "routes": {"type": "array"},
@@ -21,6 +22,24 @@
     "proxies": {"type": "object"},
     "access": {"type": "object"},
     "secrets": {"type": "object"},
-    "overrides": {"type": "object"}
+    "overrides": {"type": "object"},
+    "availability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objectives"],
+      "properties": {
+        "objectives": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["tolerate_validator_individual", "tolerate_validator_group", "tolerate_machine", "observer_copy", "rpc_redundant", "storage_durable"]}
+        },
+        "acknowledgements": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["tolerate_validator_individual", "tolerate_validator_group", "tolerate_machine", "observer_copy", "rpc_redundant", "storage_durable"]}
+        }
+      }
+    }
   }
 }

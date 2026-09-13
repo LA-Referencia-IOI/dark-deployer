@@ -51,7 +51,7 @@ resolver version alongside each rendered bundle.
 ## Compact contract
 
 The document uses `format: "dark-operator-inventory"`,
-`format_version: 1`, and an exact catalogue ID such as `dark-standard-1`.
+`format_version: 2`, and an exact catalogue ID such as `dark-standard-1`.
 Important sections are:
 
 | Section | Operator owns | Resolver derives |
@@ -74,9 +74,9 @@ It does not move persistent data.
 
 ## Catalogue boundary
 
-`dark-standard-1` supports four validators, one non-validator RPC, the Minter
-stack, Admin, Resolver, Store, dashboard, explorer, and one or two storage
-peers named `storage-a` and `storage-b`. Its recipes encode known connections:
+`dark-standard-1` supports dynamic validator and observer groups, multiple RPC nodes, the Minter
+stack, Admin, Resolver, Store, dashboard, explorer, and any positive number of
+storage peers. Its recipes encode known connections:
 for example, Minter API and its three workers use the same PostgreSQL, Store,
 RPC, contracts, and local metadata filesystem.
 
@@ -128,13 +128,13 @@ time.
 
 ```bash
 venv/bin/python deploy.py inventory-resolve \
-  --inventory deployment-inventory.json \
+  --inventory inventory.json \
   --output resolved-inventory.json
 venv/bin/python deploy.py inventory-explain \
-  --inventory deployment-inventory.json --path /services/store-api
+  --inventory inventory.json --path /services/store-api
 venv/bin/python deploy.py inventory-diff \
-  --before previous-inventory.json --after deployment-inventory.json
-venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
+  --before previous-inventory.json --after inventory.json
+venv/bin/python deploy.py plan --inventory inventory.json --json
 ```
 
 The editor can create and edit either format. It validates a compact section

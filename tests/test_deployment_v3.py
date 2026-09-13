@@ -268,6 +268,16 @@ class DeploymentV3Tests(unittest.TestCase):
         service_steps = [step for step in plan.steps if step.action == "service_apply"]
         self.assertEqual({step.group_id for step in service_steps}, set(groups))
 
+    def test_validator_groups_reject_application_services(self):
+        source = ROOT / "examples" / "deployment-v3" / "local-ha.json"
+        document = json.loads(source.read_text())
+        document["groups"]["blockchain-a"]["services"].append("explorer")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "invalid.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(InventoryError, "validators may contain only besu-validator"):
+                build_plan(path)
+
     def test_all_examples_validate_and_render(self):
         for name in ("local-simple", "local-ha", "production-five-host"):
             plan = build_plan(ROOT / "examples" / "deployment-v3" / f"{name}.json")
@@ -285,7 +295,7 @@ class DeploymentV3Tests(unittest.TestCase):
                     self.assertIn("name: dark-local-ha-local-apps", (machine / "groups" / "apps" / "compose.yaml").read_text())
 
     def test_operator_examples_resolve_to_valid_v3_and_render_resolved_contract(self):
-        for name, services in (("local-simple", 23), ("local-ha", 25), ("production-five-host", 25)):
+        for name, services in (("local-simple", 23), ("local-observer", 24), ("local-ha", 25), ("production-five-host", 25)):
             source = ROOT / "examples" / "operator-inventory" / f"{name}.json"
             resolution = resolve_inventory_path(source)
             self.assertEqual(len(resolution.document["services"]), services)
@@ -415,6 +425,32 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertEqual(evidence, "RPC peers=4; expected at least 4")
         self.assertEqual(calls[0][0], "http://127.0.0.1:8545")
         self.assertIn('"method":"net_peerCount"', calls[0][1])
+
+    def test_observer_readiness_checks_sync_and_validator_exclusion(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
+        document["blockchain"]["validator_groups"] = {"blockchain-a": {"validator_count": 1}}
+        document["blockchain"]["observer_groups"] = {"observers": {"observer_count": 1}}
+        document["placement"]["observers"] = "local"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(document))
+            plan = build_plan(path)
+        observer = plan.service("observer01")
+        responses = iter(("0x2", "0xa", "0x2222222222222222222222222222222222222222", ["0x1111111111111111111111111111111111111111"]))
+        result = lambda value: type("Result", (), {"returncode": 0, "stdout": json.dumps({"result": value}), "stderr": ""})()
+        with patch.object(readiness, "_observer_rpc", side_effect=lambda *_args, **_kwargs: result(next(responses))), patch.object(readiness, "_curl", return_value=result("0xb")):
+            ok, evidence, details = readiness.observer_status(plan, ROOT, observer)
+        self.assertTrue(ok, evidence)
+        self.assertEqual(details["lag"], 1)
+
+    def test_local_observer_template_renders_private_rpc_without_host_publish(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-observer.json")
+        observer = plan.service("observer01")
+        self.assertEqual(plan.service("resolver-api").connections["rpc"]["service"], observer.id)
+        spec = compose_document(plan, plan.machine("local"), tuple(plan.services))
+        command = spec["services"][observer.id]["command"]
+        self.assertIn("--rpc-http-enabled=true", command)
+        self.assertEqual(spec["services"][observer.id]["ports"], [])
 
     def test_data_readiness_probes_unexposed_store_from_its_container(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")

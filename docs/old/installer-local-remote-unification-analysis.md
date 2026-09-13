@@ -14,7 +14,7 @@ unificar en el futuro la instalación local y la instalación en servidores
 Linux remotos. No cambia código ni propone todavía una migración ejecutable.
 
 **Convención de nombres actualizada:** “inventario de despliegue” nombra el
-artefacto. Los ejemplos usan `deployment-inventory.json`; no se mantienen
+artefacto. Los ejemplos usan `inventory.json`; no se mantienen
 inventarios auxiliares. Los bundles heredados pueden conservar el nombre
 interno `deployment-topology.json` por compatibilidad.
 

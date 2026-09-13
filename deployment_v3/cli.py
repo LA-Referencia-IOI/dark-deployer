@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 import hashlib
 import json
 import re
@@ -19,14 +19,16 @@ from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
 from .runner import ApplyError, _effective_plan, apply, existing_chain_data, persistent_data_inventory, push, recreate_service
-from .artifacts import ArtifactError, export_chain_role, initialize_chain, verify_artifact_compatibility, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
+from .artifacts import ArtifactError, export_chain_group, initialize_chain, verify_artifact_compatibility, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
 from .sources import SourceError
 from .acquire import AcquisitionError, acquire_components
-from .inventory_editor import InventoryDocument, InventoryDocumentError, create_from_template, template_names
+from .inventory_editor import InventoryDocument, InventoryDocumentError, WizardSession, create_from_template, resolved_inventory_diff, template_names
 from .inventory_editor.textual_app import run_textual_editor
+from .inventory_editor.wizard_textual import run_wizard
 from .inventory_resolver import resolve_inventory_path
+from .availability import analyze as analyze_availability
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -81,7 +83,7 @@ def _parser() -> argparse.ArgumentParser:
         if name == "chain-static-nodes":
             command.add_argument("--artifact-root", required=True, type=Path)
             command.add_argument("--public-keys", required=True, type=Path,
-                                 help="JSON object mapping validator01..validator04 and rpc01 to public keys")
+                                 help="JSON object mapping every resolved Besu node to its public key")
         if name == "secrets-init":
             command.add_argument("--output", required=True, type=Path,
                                  help="empty secure directory to provision on the destination host")
@@ -91,7 +93,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--master-wallet-address", required=True)
         if name == "chain-export":
             command.add_argument("--artifact-root", required=True, type=Path)
-            command.add_argument("--role", required=True, choices=("rpc", "validators-a", "validators-b"))
+            command.add_argument("--group", required=True)
             command.add_argument("--output", required=True, type=Path)
         if name == "chain-verify":
             command.add_argument("--artifact-root", required=True, type=Path)
@@ -100,6 +102,11 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--output", required=True, type=Path)
     create.add_argument("--overwrite", action="store_true")
     create.add_argument("--edit", action="store_true", help="open the new inventory in the interactive editor")
+    wizard = actions.add_parser("inventory-wizard", help="adapt a compact operator inventory interactively")
+    source = wizard.add_mutually_exclusive_group(required=True)
+    source.add_argument("--inventory", type=Path)
+    source.add_argument("--template", choices=tuple(name for name in template_names() if name.startswith("operator-")))
+    wizard.add_argument("--output", type=Path, help="required destination when starting from --template")
     diff = actions.add_parser("inventory-diff", help="compare resolved inventories without operational effects")
     diff.add_argument("--before", required=True, type=Path)
     diff.add_argument("--after", required=True, type=Path)
@@ -312,6 +319,8 @@ def _install(args: argparse.Namespace, plan) -> None:
             initialize_greenfield_secrets(plan, secret_root)
             print(f"[OK] Generated managed secrets under {secret_root}")
         supplied_artifact = args.chain_artifact.resolve() if args.chain_artifact else None
+        if supplied_artifact and args.new_chain:
+            raise ApplyError("--new-chain cannot be combined with --chain-artifact; choose a supplied artifact or generate a new one")
         inventory_artifact = plan.raw.get("blockchain", {}).get("artifact", {}).get("source")
         if not supplied_artifact and inventory_artifact:
             candidate = Path(inventory_artifact)
@@ -320,7 +329,7 @@ def _install(args: argparse.Namespace, plan) -> None:
                 supplied_artifact = None
         if supplied_artifact:
             artifact_root = supplied_artifact
-        elif not (artifact_root / "genesis.json").is_file():
+        elif args.new_chain or not (artifact_root / "genesis.json").is_file():
             create_chain = args.new_chain
             if not create_chain and not args.non_interactive:
                 create_chain = _yes_no("No blockchain artifact exists. Initialize a new private chain?")
@@ -330,6 +339,11 @@ def _install(args: argparse.Namespace, plan) -> None:
             address = args.master_wallet_address or wallet_address
             if not address:
                 raise ApplyError("the selected wallet has no public address; use --master-wallet-address")
+            if args.new_chain and artifact_root.exists():
+                # This path is private state owned by this install. It is not
+                # an operator-supplied artifact and contains only generated
+                # chain material; persistent node data is handled separately.
+                shutil.rmtree(artifact_root)
             initialize_chain(plan, artifact_root, address)
             print(f"[OK] Initialized managed chain artifact under {artifact_root}")
     verify_artifact_manifest(artifact_root)
@@ -430,6 +444,26 @@ def _run_inventory_editor(path: Path) -> None:
         print("[INFO] Inventory editor closed without saving.")
 
 
+def _run_inventory_wizard(*, inventory: Path | None, template: str | None, output: Path | None) -> None:
+    """Run the operator-only authoring wizard without deployment effects."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise InventoryDocumentError("inventory-wizard requires an interactive terminal")
+    if template:
+        if output is None:
+            raise InventoryDocumentError("inventory-wizard --template requires --output")
+        if output.exists():
+            raise InventoryDocumentError(f"refusing to overwrite existing inventory: {output}")
+        source = Path(__file__).resolve().parents[1] / "examples" / "operator-inventory" / (template.removeprefix("operator-") + ".json")
+        document = InventoryDocument.load(source)
+        document.path = output
+    else:
+        if output is not None:
+            raise InventoryDocumentError("--output is only valid with inventory-wizard --template")
+        document = InventoryDocument.load(inventory)
+    session = WizardSession(document, force_save=template is not None)
+    run_wizard(session)
+
+
 def _resolved_document(path: Path) -> dict:
     """Return v3 for either input format, for read-only CLI inspection."""
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -441,18 +475,7 @@ def _resolved_document(path: Path) -> dict:
 
 def _inventory_changes(before: dict, after: dict) -> dict:
     """Compact semantic diff intended for operator review, not a JSON patch."""
-    def ids(document: dict, key: str) -> set[str]:
-        return set(document.get(key, {}))
-    result = {}
-    for key in ("machines", "services", "groups"):
-        old, new = ids(before, key), ids(after, key)
-        common = old & new
-        changed = sorted(item for item in common if before[key][item] != after[key][item])
-        result[key] = {"added": sorted(new - old), "removed": sorted(old - new), "changed": changed}
-    for key in ("deployment", "blockchain", "storage", "infrastructure", "settings", "components", "secrets"):
-        if before.get(key) != after.get(key):
-            result.setdefault("changed_sections", []).append(key)
-    return result
+    return resolved_inventory_diff(before, after)
 
 
 def main() -> None:
@@ -466,6 +489,9 @@ def main() -> None:
             return
         if args.action == "inventory-edit":
             _run_inventory_editor(args.inventory)
+            return
+        if args.action == "inventory-wizard":
+            _run_inventory_wizard(inventory=args.inventory, template=args.template, output=args.output)
             return
         if args.action == "inventory-resolve":
             resolution = resolve_inventory_path(args.inventory)
@@ -494,6 +520,13 @@ def main() -> None:
         if args.action == "validate":
             raw, machines, services, _ = load_inventory(args.inventory)
             print(f"[OK] {raw['deployment']['id']}: {len(machines)} machine(s), {len(services)} service(s).")
+            source = json.loads(args.inventory.read_text(encoding="utf-8"))
+            if source.get("format") == "dark-operator-inventory":
+                for warning in resolve_inventory_path(args.inventory).warnings:
+                    print(f"[WARN] {warning}")
+            availability = analyze_availability(build_plan(args.inventory))
+            for warning in availability.warnings:
+                print(f"[WARN] {warning}")
             return
         plan = build_plan(args.inventory)
         if args.action == "preflight":
@@ -503,13 +536,17 @@ def main() -> None:
                 raise SystemExit(2)
             return
         if args.action == "plan":
-            value = {"deployment_id": plan.deployment_id, "docker_subnets": plan.docker_subnets, "groups": [group.__dict__ for group in plan.groups], "endpoints": [endpoint.__dict__ | {"url": endpoint.url} for endpoint in plan.endpoints], "steps": [step.__dict__ for step in plan.steps]}
+            availability = analyze_availability(plan)
+            value = {"deployment_id": plan.deployment_id, "docker_subnets": plan.docker_subnets, "groups": [group.__dict__ for group in plan.groups], "endpoints": [endpoint.__dict__ | {"url": endpoint.url} for endpoint in plan.endpoints], "steps": [step.__dict__ for step in plan.steps], "availability": asdict(availability)}
             if args.json:
                 print(json.dumps(value, indent=2, sort_keys=True))
             else:
                 print(f"Deployment: {plan.deployment_id}")
                 for group in plan.groups:
                     print(f"group:{group.id}: {group.kind} on {group.machine_id} ({', '.join(group.service_ids)})")
+                print(f"availability: validators={availability.validators}, quorum={availability.quorum}, tolerated-validator-losses={availability.validator_failures_tolerated}, primary-rpc={availability.primary_rpc}, chain-copies={availability.blockchain_full_copies}")
+                for warning in availability.warnings:
+                    print(f"warning: {warning}")
                 for step in plan.steps:
                     print(f"{step.id}: {step.description}")
             return
@@ -574,8 +611,8 @@ def main() -> None:
             print(f"[OK] Created private QBFT artifact at {artifact_root}")
             return
         if args.action == "chain-export":
-            exported = export_chain_role(args.artifact_root, args.role, args.output)
-            print(f"[OK] Exported {args.role} chain artifact to {exported}")
+            exported = export_chain_group(args.artifact_root, args.group, args.output)
+            print(f"[OK] Exported {args.group} chain artifact to {exported}")
             return
         if args.action == "chain-verify":
             files = verify_artifact_manifest(args.artifact_root)

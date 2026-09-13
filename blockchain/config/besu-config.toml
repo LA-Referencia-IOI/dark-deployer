@@ -35,6 +35,4 @@ metrics-port=9545
 
 # Sync mode
 sync-mode="FULL"
-# Four local nodes provide at most three remote peers to each node. Keep this
-# compatible with the developer topology so a restarted node can resynchronize.
-sync-min-peers=3
+# The deployer derives sync-min-peers from the resolved number of Besu nodes.

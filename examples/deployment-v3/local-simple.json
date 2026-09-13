@@ -356,6 +356,7 @@
     }
   },
   "blockchain": {
+    "primary_rpc": "rpc01",
     "chain_id": 2025,
     "besu_image": "hyperledger/besu:26.6.1",
     "qbft": {
@@ -368,19 +369,19 @@
     },
     "nodes": {
       "rpc01": {
-        "validator": false
+        "role": "rpc"
       },
       "validator01": {
-        "validator": true
+        "role": "validator"
       },
       "validator02": {
-        "validator": true
+        "role": "validator"
       },
       "validator03": {
-        "validator": true
+        "role": "validator"
       },
       "validator04": {
-        "validator": true
+        "role": "validator"
       }
     }
   },

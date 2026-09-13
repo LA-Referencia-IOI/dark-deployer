@@ -11,24 +11,27 @@ Choose the inventory that matches the deployment you are building:
 | Goal | Recommended template | What it proves |
 | --- | --- | --- |
 | Fast local functional test | `operator-local-simple` | One storage peer and the end-to-end service path |
+| Local observer reference | `operator-local-observer` | Observer with private Resolver RPC binding |
 | Local replication simulation | `operator-local-ha` | Two peers and five logical groups on one Docker host |
 | Standard production shape | `operator-production-five-host` | Five SSH hosts with explicit LAN/VPN routing |
 | Dedicated public Resolver | `operator-production-six-host` | Six SSH hosts with separate Resolver and apps gateways |
 | Non-standard service layout | `examples/deployment-v3/` | Direct control of the full v3 execution inventory |
 
-Create, inspect, validate, plan, and install a compact inventory:
+Install a maintained compact operator inventory directly:
 
 ```bash
-venv/bin/python deploy.py inventory-create \
-  --template operator-local-simple \
-  --output deployment-inventory.json
-venv/bin/python deploy.py inventory-resolve \
-  --inventory deployment-inventory.json \
-  --output resolved-inventory.json
-venv/bin/python deploy.py validate --inventory deployment-inventory.json
-venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
-venv/bin/python deploy.py install --inventory deployment-inventory.json
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-ha.json \
+  --verbose
 ```
+
+`install` resolves compact inventories internally. Use `inventory-create` only
+when you need an editable copy; `inventory-resolve`, `plan` and `render` are
+optional inspection steps.
+
+For guided adaptation of a compact inventory, install the optional terminal UI
+and run `venv/bin/python deploy.py inventory-wizard --inventory inventory.json`.
+It validates and previews the resolved plan before saving; it never deploys.
 
 The complete, scenario-based procedure is in
 [OPERATIONS-MANUAL.md](OPERATIONS-MANUAL.md). Read it before applying an SSH
@@ -50,7 +53,7 @@ production layout is:
 
 Developer templates simulate these machines on one Docker host. Maintained
 templates are in [`examples/deployment-v3/`](examples/deployment-v3/):
-`local-simple.json`, `local-ha.json`, `production-five-host.json`, and
+`local-simple.json`, `local-observer.json`, `local-ha.json`, `production-five-host.json`, and
 `production-six-host.json`.
 
 Compact operator templates are in
@@ -73,11 +76,8 @@ Never commit private keys or generated runtime files.
 ```bash
 python3.12 -m venv venv
 venv/bin/python -m pip install -r requirements.txt
-venv/bin/python deploy.py inventory-create --template local-ha \
-  --output deployment-inventory.json
-venv/bin/python deploy.py validate --inventory deployment-inventory.json
-venv/bin/python deploy.py plan --inventory deployment-inventory.json
-venv/bin/python deploy.py install --inventory deployment-inventory.json
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-ha.json --verbose
 ```
 
 `install` acquires component repositories, records the resolved commits,
@@ -108,7 +108,7 @@ contents:
 
 ```bash
 venv/bin/python -m pip install -r requirements-tui.txt
-venv/bin/python deploy.py inventory-edit --inventory deployment-inventory.json
+venv/bin/python deploy.py inventory-edit --inventory inventory.json
 ```
 
 See [explicit service placement](docs/deployment-v3-service-placement.md) for
@@ -132,12 +132,12 @@ constraint.
 The lifecycle commands are:
 
 ```bash
-venv/bin/python deploy.py validate --inventory deployment-inventory.json
-venv/bin/python deploy.py render --inventory deployment-inventory.json
-venv/bin/python deploy.py preflight --inventory deployment-inventory.json
-venv/bin/python deploy.py apply --inventory deployment-inventory.json
-venv/bin/python deploy.py status --inventory deployment-inventory.json
-venv/bin/python deploy.py verify --inventory deployment-inventory.json
+venv/bin/python deploy.py validate --inventory inventory.json
+venv/bin/python deploy.py render --inventory inventory.json
+venv/bin/python deploy.py preflight --inventory inventory.json
+venv/bin/python deploy.py apply --inventory inventory.json
+venv/bin/python deploy.py status --inventory inventory.json
+venv/bin/python deploy.py verify --inventory inventory.json
 ```
 
 For remote inventories, `push` transfers public bundles and `apply` executes
@@ -146,7 +146,7 @@ continuing. Rebuild
 one service without restarting other services on its machine with:
 
 ```bash
-venv/bin/python deploy.py recreate --inventory deployment-inventory.json \
+venv/bin/python deploy.py recreate --inventory inventory.json \
   --service dashboard --build
 ```
 

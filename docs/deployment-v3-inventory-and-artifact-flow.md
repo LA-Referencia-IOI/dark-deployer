@@ -148,12 +148,12 @@ bundle after a corrected interruption; it does not silently re-resolve with new
 catalogue defaults.
 
 ```bash
-venv/bin/python deploy.py validate --inventory deployment-inventory.json
-venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
-venv/bin/python deploy.py render --inventory deployment-inventory.json --output /tmp/dark-render
-venv/bin/python deploy.py preflight --inventory deployment-inventory.json
-venv/bin/python deploy.py install --inventory deployment-inventory.json
-venv/bin/python deploy.py verify --inventory deployment-inventory.json
+venv/bin/python deploy.py validate --inventory inventory.json
+venv/bin/python deploy.py plan --inventory inventory.json --json
+venv/bin/python deploy.py render --inventory inventory.json --output /tmp/dark-render
+venv/bin/python deploy.py preflight --inventory inventory.json
+venv/bin/python deploy.py install --inventory inventory.json
+venv/bin/python deploy.py verify --inventory inventory.json
 ```
 
 ## Verification expectations

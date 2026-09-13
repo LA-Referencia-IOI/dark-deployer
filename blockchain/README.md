@@ -9,24 +9,39 @@ silently to the historical `nodes/<node>/data` layout.
 This directory is the versioned Besu runtime used by the deployer. It replaces
 the former external blockchain runtime repository.
 
-## Roles
+## Dynamic nodes and groups
 
-- `rpc`: non-validator `rpc01`, installed with apps.
-- `validators-a`: `validator01` and `validator02`.
-- `validators-b`: `validator03` and `validator04`.
-- `all`: developer-only local simulation of the three roles.
+The operator inventory is the only source of truth for validator, RPC and
+observer nodes. Validator and observer identifiers are generated from their
+declared groups; RPC identifiers are explicit. There are no built-in
+`validators-a`, `validators-b`, four-validator, single-RPC or two-storage-peer
+roles.
 
-`setup.sh` creates a chain only for `all` or imports the role artefact supplied
-by a production deployment. `scripts/start-role.sh` starts exactly one Compose
-profile. The artifacts and node keys are deliberately ignored by Git.
+The old fixed Compose file has been removed. `setup.sh`, `reset.sh`, and the
+old role scripts return an explicit migration error; none is a supported
+deployment interface.
 
 ## Greenfield chain and artifacts
 
-On a protected initialization workstation, set `BLOCKCHAIN_RUNTIME_ROLE=all`,
-run `./setup.sh`, then export the role artifacts with
-`scripts/export-role-artifact.sh`. A production host imports only its matching
-artifact through `BLOCKCHAIN_RUNTIME_CHAIN_ARTIFACT_DIR`. The deployer refuses
-to initialize a role host without that directory.
+Create and export artifacts through the resolved inventory:
+
+```bash
+venv/bin/python deploy.py chain-init --inventory inventory.json
+venv/bin/python deploy.py chain-export \
+  --inventory inventory.json \
+  --artifact-root PATH \
+  --group GROUP \
+  --output PATH
+venv/bin/python deploy.py chain-verify \
+  --inventory inventory.json \
+  --artifact-root PATH
+```
+
+`install` distributes each group's private node material to its declared
+machine. A group may contain any positive number of validators or observers.
+Observers receive their own key and persistent database, participate in P2P,
+do not validate, and keep JSON-RPC reachable only where the resolved connection
+graph requires it.
 
 Artifacts must share the same genesis, chain ID and static nodes. Verify this
 before a rollout; never copy node private keys to another host. Production P2P

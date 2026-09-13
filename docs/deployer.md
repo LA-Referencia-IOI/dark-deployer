@@ -17,29 +17,45 @@ compatibility and is not the name of the inventory model.
 ## CLI
 
 ```bash
-venv/bin/python deploy.py inventory-create --template local-ha --output deployment-inventory.json
-venv/bin/python deploy.py validate --inventory deployment-inventory.json
-venv/bin/python deploy.py plan --inventory deployment-inventory.json
-venv/bin/python deploy.py render --inventory deployment-inventory.json
-venv/bin/python deploy.py preflight --inventory deployment-inventory.json
-venv/bin/python deploy.py install --inventory deployment-inventory.json
-venv/bin/python deploy.py status --inventory deployment-inventory.json
-venv/bin/python deploy.py verify --inventory deployment-inventory.json
+venv/bin/python deploy.py inventory-create --template local-ha --output inventory.json
+venv/bin/python deploy.py validate --inventory inventory.json
+venv/bin/python deploy.py plan --inventory inventory.json
+venv/bin/python deploy.py render --inventory inventory.json
+venv/bin/python deploy.py preflight --inventory inventory.json
+venv/bin/python deploy.py install --inventory inventory.json
+venv/bin/python deploy.py status --inventory inventory.json
+venv/bin/python deploy.py verify --inventory inventory.json
 ```
 
-For a compact operator inventory:
+For a compact operator inventory, install the maintained file directly:
 
 ```bash
-venv/bin/python deploy.py inventory-create \
-  --template operator-local-ha --output deployment-inventory.json
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-ha.json --verbose
+```
+
+`inventory-create` is optional when an editable copy is needed. The resolver
+also runs implicitly for `validate`, `plan`, `render`, `push`, `apply` and
+`install`; use `inventory-resolve` or `inventory-explain` only to inspect the
+effective v3 contract before execution.
+
+`inventory-wizard` is the optional guided authoring interface for this compact
+format. It accepts either `--inventory FILE` or `--template operator-local-ha
+--output FILE`, validates each stage against the resolver, and requires a
+review before atomic save. It never executes deployment operations. Complete
+v3 inventories continue to use `inventory-edit`.
+
+For offline inspection of a copied inventory:
+
+```bash
 venv/bin/python deploy.py inventory-resolve \
-  --inventory deployment-inventory.json --output resolved-inventory.json
+  --inventory inventory.json --output resolved-inventory.json
 venv/bin/python deploy.py inventory-explain \
-  --inventory deployment-inventory.json --path /services/store-api
+  --inventory inventory.json --path /services/store-api
 venv/bin/python deploy.py inventory-diff \
-  --before previous-inventory.json --after deployment-inventory.json
-venv/bin/python deploy.py validate --inventory deployment-inventory.json
-venv/bin/python deploy.py plan --inventory deployment-inventory.json --json
+  --before previous-inventory.json --after inventory.json
+venv/bin/python deploy.py validate --inventory inventory.json
+venv/bin/python deploy.py plan --inventory inventory.json --json
 ```
 
 These inspection commands are offline. They do not access Docker, SSH, Git or
@@ -106,7 +122,7 @@ machines. The group boundary is retained in the rendered plan.
 ## Compact operator inventory
 
 The compact format uses `format: "dark-operator-inventory"` and
-`format_version: 1`. It selects the immutable `dark-standard-1` catalogue and
+`format_version: 2`. It selects the parameterized `dark-standard-1` catalogue and
 records the decisions that normally change between installations:
 
 - `deployment`: stable ID and label;
@@ -145,10 +161,10 @@ The value must use the current `2MM` format. The resolver validates the whole
 expanded document before a plan is built. Invalid shoulders, missing groups,
 unsupported peers, ambiguous routes and invalid replica counts fail early.
 
-The current catalogue supports the fixed dARK deployment shape: four validators, one
-RPC, the Minter stack, dashboard, Store, and one or two storage peers named
-`storage-a` and `storage-b`. Use the complete v3 format for a deployment shape outside
-that catalogue.
+The current catalogue supports dynamic validator groups, observer groups,
+multiple RPC nodes with an explicit primary, the Minter stack, dashboard,
+Store, and any positive number of storage peers. Node, group and peer names
+come from the operator inventory rather than a fixed catalogue topology.
 
 Same-machine dependencies use Docker DNS. A remote dependency receives the
 network selected by `routing`, TCP, and a matching private provider exposure.
@@ -171,7 +187,7 @@ sections for placement, storage, routing, proxies, legacy access and overrides. 
 the expansion when changing a section or saving, and keeps atomic saves and
 timestamped backups.
 
-Available compact templates are `operator-local-simple`, `operator-local-ha`,
+Available compact templates are `operator-local-simple`, `operator-local-observer`, `operator-local-ha`,
 `operator-production-five-host` and `operator-production-six-host`. Production
 templates use documentation network ranges and `REPLACE` paths; replace them
 before preflight.
@@ -212,7 +228,7 @@ declared API/web exposures and the policy-derived P2P ports.
 `requirements-tui.txt` enables the Textual editor:
 
 ```bash
-venv/bin/python deploy.py inventory-edit --inventory deployment-inventory.json
+venv/bin/python deploy.py inventory-edit --inventory inventory.json
 ```
 
 The editor validates the complete document and saves atomically with a backup.

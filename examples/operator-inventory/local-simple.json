@@ -1,7 +1,8 @@
 {
   "format": "dark-operator-inventory",
-  "format_version": 1,
+  "format_version": 2,
   "catalog": "dark-standard-1",
+  "profile": "local",
   "deployment": {"id": "dark-operator-local-simple", "label": "dARK local functional test"},
   "networks": {"lab": {"kind": "lan", "cidr": "10.99.0.0/24"}},
   "machines": {"local": {"execution": "local"}},
@@ -9,11 +10,9 @@
   "routing": {"blockchain_p2p": "lab", "storage_p2p": "lab", "storage_api": "lab", "application_api": "lab"},
   "blockchain": {
     "chain_id": 2025,
-    "rpc": {"id": "rpc01", "group": "apps"},
-    "validators": {
-      "validator01": {"group": "validators"}, "validator02": {"group": "validators"},
-      "validator03": {"group": "validators"}, "validator04": {"group": "validators"}
-    }
+    "validator_groups": {"validators": {"validator_count": 4}},
+    "observer_groups": {},
+    "rpc": {"primary": "rpc01", "nodes": {"rpc01": {"group": "apps"}}}
   },
   "storage": {
     "cluster_name": "dark-local",
