@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -40,6 +41,22 @@ def _nginx_proxy_config(plan: DeploymentPlan, proxy: ServiceInstance) -> str:
             upstream = _url(plan, proxy, proxy.connections[route["connection"]]["service"], proxy.connections[route["connection"]]) + route["upstream_path"]
             location = f"location = {route['path']}" if not route["path"].endswith("/") else f"location {route['path']}"
             forwarded_prefix = route["path"].rstrip("/") or "/"
+            redirect_rules = ["    proxy_redirect off;"]
+            cookie_rules: list[str] = []
+            if forwarded_prefix != "/":
+                # Applications run at their internal root and can therefore
+                # send Location: /login (or an absolute internal URL). Keep
+                # those redirects within the public route without requiring
+                # every backend framework to understand the gateway layout.
+                prefix_pattern = re.escape(forwarded_prefix.lstrip("/"))
+                redirect_rules = [
+                    f"    proxy_redirect ~^https?://[^/]+/(?!{prefix_pattern}(?:/|$))(.*)$ {forwarded_prefix}/$1;",
+                    f"    proxy_redirect ~^/(?!{prefix_pattern}(?:/|$))(.*)$ {forwarded_prefix}/$1;",
+                ]
+                # Cookie isolation belongs to the mount contract, not to a
+                # particular framework. Backends receive their requests at
+                # /, so their default cookie Path must be made public here.
+                cookie_rules = [f"    proxy_cookie_path / {forwarded_prefix}/;"]
             lines.extend((
                 f"  {location} {{",
                 f"    proxy_pass {upstream};",
@@ -51,7 +68,8 @@ def _nginx_proxy_config(plan: DeploymentPlan, proxy: ServiceInstance) -> str:
                 "    proxy_set_header X-Forwarded-Port $server_port;",
                 "    proxy_set_header X-Forwarded-Proto $scheme;",
                 f"    proxy_set_header X-Forwarded-Prefix {forwarded_prefix};",
-                "    proxy_redirect off;",
+                *redirect_rules,
+                *cookie_rules,
                 "  }",
             ))
         lines.append("}")
@@ -84,6 +102,20 @@ def _dashboard_public_url(plan: DeploymentPlan, dashboard: ServiceInstance) -> s
     # An empty-host Lima listener intentionally follows the browser Host
     # header.  Relative links still work through X-Forwarded-Prefix.
     return "http://localhost:8081"
+
+
+def _dashboard_public_path(plan: DeploymentPlan, dashboard: ServiceInstance) -> str:
+    """Return the declared public mount used for dashboard cookies."""
+    dashboard_id = dashboard.id
+    if dashboard.type == "dashboard-migrate":
+        dashboard_id = next(item.id for item in plan.services if item.type == "dashboard")
+    for proxy in (item for item in plan.services if item.type == "edge-proxy"):
+        for site in proxy.configuration.get("sites", []):
+            for route in site.get("routes", []):
+                connection = proxy.connections.get(route.get("connection", ""), {})
+                if connection.get("service") == dashboard_id:
+                    return route["path"].rstrip("/") or "/"
+    return "/"
 
 
 def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
@@ -126,7 +158,8 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
         cluster = next(item for item in plan.services if item.type == "ipfs-cluster")
         rpc_url = _url(plan, service, rpc.id)
         values |= {
-            "APP_ENV": "production", "APP_DEBUG": "false", "APP_URL": _dashboard_public_url(plan, service), "FORCE_HTTPS": "false",
+            "APP_ENV": "production", "APP_DEBUG": "false", "APP_URL": _dashboard_public_url(plan, service),
+            "ASSET_URL": _dashboard_public_url(plan, service), "SESSION_PATH": _dashboard_public_path(plan, service), "FORCE_HTTPS": "false",
             "DB_CONNECTION": "mysql", "DB_HOST": host("database"), "DB_DATABASE": "dark", "DB_USERNAME": "dark", "REDIS_HOST": host("redis"),
             "ADMIN_API_BASE_URL": connection("admin_api"), "MINTER_BASE_URL": connection("minter_api"), "RESOLVER_BASE_URL": connection("resolver_api"), "STORE_API_BASE_URL": connection("store_api"),
             "WORKER_STATUS_URL": connection("minter_api") + "/api/v1/worker/status",

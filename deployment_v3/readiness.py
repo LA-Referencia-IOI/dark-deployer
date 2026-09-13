@@ -66,8 +66,8 @@ def store_health_probe(plan, machine, root, service, *, refresh: bool = False):
 def _rpc(plan, root):
     rpc = next(item for item in plan.services if item.type == "besu-rpc")
     machine = plan.machine(rpc.machine_id)
-    url = _host_url(rpc, machine)
-    result = _curl(plan, machine, url, '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}')
+    payload = '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'
+    result = _curl(plan, machine, _host_url(rpc, machine), payload)
     if result.returncode:
         return False, result.stderr.strip() or result.stdout.strip()
     try:

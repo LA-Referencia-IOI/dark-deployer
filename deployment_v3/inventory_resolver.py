@@ -372,6 +372,12 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
             # Catalogued private endpoints are examples, not a request to
             # publish a port when no resolved remote dependency needs it.
             service.pop("exposure", None)
+    # Besu deliberately ships without curl/wget. For an all-local deployment,
+    # expose RPC only on loopback so controller-side readiness and verification
+    # can perform real JSON-RPC checks without making the endpoint public.
+    rpc_service = result["services"]["rpc01"]
+    if all(machine.get("execution") == "local" for machine in machines.values()) and not rpc_service.get("exposure"):
+        rpc_service["exposure"] = {"mode": "loopback", "port": _PORTS["besu-rpc"], "protocols": ["tcp"]}
     if mode == "local-direct":
         for service_id in ("rpc01", "store-api", "minter-api", "admin-api", "resolver-api", "dashboard", "explorer"):
             service = result["services"].get(service_id)

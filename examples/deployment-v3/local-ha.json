@@ -73,7 +73,8 @@
       "machine": "local",
       "configuration": {
         "node_id": "rpc01"
-      }
+      },
+      "exposure": {"mode": "loopback", "port": 8545, "protocols": ["tcp"]}
     },
     "validator01": {
       "type": "besu-validator",

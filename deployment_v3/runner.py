@@ -341,7 +341,7 @@ def _distribute_chain_artifact(plan, project_root: Path) -> dict[str, dict[str, 
     return delivered
 
 
-def _apply_service(plan, machine, service, root, bundle, *, verbose=False, clean_empty_network_conflicts=False, prompt_cleanup_empty_network_conflicts=False):
+def _apply_service(plan, machine, service, root, bundle, *, verbose=False, force_recreate=False, clean_empty_network_conflicts=False, prompt_cleanup_empty_network_conflicts=False):
     executor = resolve_executor(machine); directory = _compose_directory(plan, machine, root, service.id)
     if not directory.exists() and not isinstance(executor, SshExecutor): directory = _stage(machine, Path.cwd(), root, bundle / "machines" / machine.id)
     _ensure_machine_network(
@@ -447,7 +447,8 @@ def _apply_service(plan, machine, service, root, bundle, *, verbose=False, clean
             raise ApplyError("RPC or contract deployment did not become ready: " + (last.stderr.strip() if last else "no job result"))
         _require(executor.run((*compose, "run", "--rm", service.id), timeout=1800), f"run {service.id}")
     else:
-        _require(executor.run((*compose, "up", "-d", "--build", service.id), timeout=1800), f"start {service.id}")
+        recreate = ("--force-recreate",) if force_recreate else ()
+        _require(executor.run((*compose, "up", "-d", "--build", *recreate, service.id), timeout=1800), f"start {service.id}")
 
 
 def apply(plan, project_root: Path, *, resume=False, defer_verification=False, clean_chain_data=False, clean_empty_network_conflicts=False, prompt_cleanup_empty_network_conflicts=False, verbose=False):
@@ -516,6 +517,7 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                             root,
                             bundle,
                             verbose=verbose,
+                            force_recreate=clean_chain_data,
                             clean_empty_network_conflicts=clean_empty_network_conflicts,
                             prompt_cleanup_empty_network_conflicts=prompt_cleanup_empty_network_conflicts,
                         )

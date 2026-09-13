@@ -402,6 +402,20 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertEqual(calls[0][0], "store-api")
         self.assertIn("http://127.0.0.1:8003/health", calls[0][1])
 
+    def test_rpc_readiness_probes_local_rpc_over_loopback(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        calls = []
+        original_curl = readiness._curl
+        try:
+            readiness._curl = lambda _plan, _machine, url, payload=None: calls.append((url, payload)) or type("Result", (), {"returncode": 0, "stdout": '{"result":"0x4"}', "stderr": ""})()
+            ok, evidence = readiness.check_phase(plan, ROOT, "rpc")
+        finally:
+            readiness._curl = original_curl
+        self.assertTrue(ok)
+        self.assertEqual(evidence, "RPC peers=4; expected at least 4")
+        self.assertEqual(calls[0][0], "http://127.0.0.1:8545")
+        self.assertIn('"method":"net_peerCount"', calls[0][1])
+
     def test_data_readiness_probes_unexposed_store_from_its_container(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
         calls = []
@@ -445,6 +459,31 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertIn("listen 80;", nginx)
         self.assertIn("0.0.0.0:80:80/tcp", compose)
         self.assertIn("APP_URL=https://dark.example.org/admin", dashboard_env)
+        self.assertIn("ASSET_URL=https://dark.example.org/admin", dashboard_env)
+        self.assertIn("SESSION_PATH=/admin", dashboard_env)
+        self.assertIn("proxy_redirect ~^/(?!admin(?:/|$))(.*)$ /admin/$1;", nginx)
+        self.assertIn("proxy_redirect ~^https?://[^/]+/(?!admin(?:/|$))(.*)$ /admin/$1;", nginx)
+        self.assertIn("proxy_cookie_path / /admin/;", nginx)
+        self.assertNotIn("sub_filter", nginx)
+
+    def test_dashboard_mount_is_derived_without_route_specific_proxy_code(self):
+        document = json.loads((ROOT / "examples" / "deployment-v3" / "local-simple.json").read_text())
+        routes = document["services"]["edge-proxy"]["configuration"]["sites"][0]["routes"]
+        next(route for route in routes if route["id"] == "dashboard")["path"] = "/control/"
+        with tempfile.TemporaryDirectory() as temporary:
+            inventory = Path(temporary) / "inventory.json"
+            inventory.write_text(json.dumps(document))
+            plan = build_plan(inventory)
+            output = Path(temporary) / "bundle"
+            render_plan(plan, output)
+            nginx = (output / "machines" / "local" / "groups" / "apps" / "config" / "nginx-edge-proxy.conf").read_text()
+            dashboard_env = (output / "machines" / "local" / "groups" / "apps" / "env" / "dashboard.env").read_text()
+        self.assertIn("APP_URL=http://localhost/control", dashboard_env)
+        self.assertIn("ASSET_URL=http://localhost/control", dashboard_env)
+        self.assertIn("SESSION_PATH=/control", dashboard_env)
+        self.assertIn("proxy_redirect ~^/(?!control(?:/|$))(.*)$ /control/$1;", nginx)
+        self.assertIn("proxy_cookie_path / /control/;", nginx)
+        self.assertNotIn("dashboard/", nginx)
 
     def test_rejects_two_proxies_on_one_machine(self):
         document = json.loads((ROOT / "examples" / "deployment-v3" / "local-ha.json").read_text())
