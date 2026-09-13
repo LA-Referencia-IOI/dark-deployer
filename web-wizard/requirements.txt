@@ -1,0 +1,12 @@
+# web-wizard runtime dependencies.
+#
+# Kept deliberately separate from the deployer's own requirements.txt: this file
+# belongs to the workbench only and is installed into web-wizard/.venv by
+# run.sh. The deployer is never asked to install anything for the workbench.
+
+fastapi>=0.110
+uvicorn>=0.29
+
+# deployment_v3 is imported read-only and needs jsonschema to validate and
+# resolve inventories. Pinned loosely to match the deployer's own version range.
+jsonschema>=4.20

@@ -1,0 +1,9 @@
+{
+  "name": "web-wizard-frontend-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional headless checks for the canvas. Not needed to run the workbench; `npm install` here only if you want `tests/test_frontend.py` to execute instead of skip.",
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  }
+}

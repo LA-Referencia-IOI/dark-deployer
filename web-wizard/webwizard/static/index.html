@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>web-wizard — operator topology</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="wordmark">
+      <span class="wordmark-name">web-wizard</span>
+      <span class="wordmark-role">operator workbench</span>
+    </div>
+    <div class="deployment" id="deployment">
+      <span class="hint">No inventory loaded</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="rail">
+      <section class="panel">
+        <h2>Load an inventory</h2>
+        <ul class="examples" id="examples"></ul>
+        <form class="path-form" id="path-form">
+          <label for="path">Path to an operator inventory</label>
+          <input type="text" id="path" name="path" spellcheck="false"
+                 placeholder="examples/operator-inventory/local-ha.json">
+          <button type="submit">Open</button>
+        </form>
+      </section>
+
+      <section class="panel" id="save-panel" hidden>
+        <h2>Save a copy</h2>
+        <div id="save-body"></div>
+      </section>
+
+      <section class="panel" id="selection-panel" hidden>
+        <h2 id="selection-title">Selection</h2>
+        <div id="selection-body"></div>
+      </section>
+
+      <section class="panel collapsible" id="structure-panel" hidden>
+        <h2>Structure</h2>
+        <div id="structure-body"></div>
+      </section>
+
+      <section class="panel collapsible" id="webedge-panel" hidden>
+        <h2>Web edge</h2>
+        <div id="webedge-body"></div>
+      </section>
+
+      <section class="panel collapsible" id="palette-panel" hidden>
+        <h2>Add component</h2>
+        <div id="palette-body"></div>
+      </section>
+
+      <section class="panel overview-panel">
+        <h2>Availability</h2>
+        <dl class="stats" id="availability">
+          <div class="stat"><dt>validators</dt><dd id="stat-validators">—</dd></div>
+          <div class="stat"><dt>quorum</dt><dd id="stat-quorum">—</dd></div>
+          <div class="stat"><dt>losses tolerated</dt><dd id="stat-tolerated">—</dd></div>
+          <div class="stat"><dt>chain copies</dt><dd id="stat-copies">—</dd></div>
+          <div class="stat"><dt>storage peers</dt><dd id="stat-peers">—</dd></div>
+          <div class="stat"><dt>primary rpc</dt><dd id="stat-primary">—</dd></div>
+        </dl>
+        <ul class="warnings" id="warnings"></ul>
+      </section>
+
+      <section class="panel overview-panel">
+        <h2>Networks</h2>
+        <ul class="networks" id="networks"></ul>
+        <div class="routing" id="routing"></div>
+        <div class="routes" id="routes"></div>
+      </section>
+
+      <section class="panel overview-panel">
+        <h2>Service families</h2>
+        <ul class="legend" id="legend"></ul>
+      </section>
+    </aside>
+
+    <div class="stage-wrap">
+      <div class="stage-toolbar">
+        <div class="layouts" role="group" aria-label="Automatic layout">
+          <button type="button" data-layout="columns">Columns</button>
+          <button type="button" data-layout="grid">Grid</button>
+          <button type="button" data-layout="function">By function</button>
+          <button type="button" data-layout="network">By network</button>
+        </div>
+        <div class="views" role="group" aria-label="What to show">
+          <button type="button" data-view="services">Services</button>
+          <button type="button" data-view="fabric">Fabric</button>
+        </div>
+        <label class="topology-search">
+          <span class="visually-hidden">Filter machines and services</span>
+          <input id="topology-filter" type="search" placeholder="Find machine or service…"
+                 autocomplete="off" spellcheck="false">
+          <output id="filter-count" aria-live="polite"></output>
+        </label>
+        <div class="zoom-controls" role="group" aria-label="Topology zoom">
+          <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+          <output id="zoom-value">100%</output>
+          <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+          <button type="button" id="zoom-fit">Fit</button>
+        </div>
+        <p class="stage-hint" id="layout-hint">Drag a machine by its header to move it; drag a group onto another machine to re-place it.</p>
+      </div>
+
+      <div class="draft-bar" id="draft-bar">
+        <span class="draft-state" id="draft-state">No inventory loaded</span>
+        <span class="draft-error" id="draft-error" role="status" aria-live="polite"></span>
+        <span class="draft-spacer"></span>
+        <button type="button" id="undo" disabled>Undo</button>
+        <button type="button" id="reset" disabled>Reset</button>
+      </div>
+
+      <div class="canvas-scroll" id="canvas-scroll">
+        <svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img"
+             aria-label="Deployment topology"></svg>
+      </div>
+
+      <div class="overlay" id="overlay">
+        <p class="overlay-title">Pick an inventory to draw its topology</p>
+        <p class="overlay-body">Choose one of the examples on the left, or paste a path to an
+          operator inventory. Only connections that cross a host are drawn; links inside a
+          machine share its Docker network.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/canvas.js"></script>
+</body>
+</html>
