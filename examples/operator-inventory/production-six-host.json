@@ -87,6 +87,7 @@
   "placement": {
     "apps": "apps",
     "resolver": "resolver",
+    "resolver-observer": "resolver",
     "blockchain-a": "blockchain-a",
     "blockchain-b": "blockchain-b",
     "storage-1": "storage-1",
@@ -109,13 +110,20 @@
         "validator_count": 2
       }
     },
-    "observer_groups": {},
+    "observer_groups": {
+      "resolver-observer": {
+        "observer_count": 1
+      }
+    },
     "rpc": {
       "primary": "rpc01",
       "nodes": {
         "rpc01": {
           "group": "apps"
         }
+      },
+      "bindings": {
+        "resolver-api": "observer01"
       }
     },
     "artifact": {

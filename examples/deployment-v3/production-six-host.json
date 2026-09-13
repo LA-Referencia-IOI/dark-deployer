@@ -1,6 +1,5 @@
 {
   "blockchain": {
-    "primary_rpc": "rpc01",
     "artifact": {
       "path": "blockchain/role-artifact",
       "source": "REPLACE/secrets/chain-artifact"
@@ -8,22 +7,33 @@
     "besu_image": "hyperledger/besu:26.6.1",
     "chain_id": 2025,
     "nodes": {
+      "observer01": {
+        "p2p_port": 30303,
+        "role": "observer"
+      },
       "rpc01": {
+        "p2p_port": 30303,
         "role": "rpc"
       },
       "validator01": {
+        "p2p_port": 30303,
         "role": "validator"
       },
       "validator02": {
+        "p2p_port": 30303,
         "role": "validator"
       },
       "validator03": {
+        "p2p_port": 30303,
         "role": "validator"
       },
       "validator04": {
+        "p2p_port": 30303,
         "role": "validator"
       }
     },
+    "observer_max_block_lag": 1,
+    "primary_rpc": "rpc01",
     "qbft": {
       "block_period_seconds": 6,
       "epoch_length": 30000,
@@ -85,7 +95,7 @@
     }
   },
   "deployment": {
-    "id": "dark-production-six",
+    "id": "dark-operator-production-six",
     "label": "REPLACE: dARK six-host deployment with dedicated Resolver"
   },
   "groups": {
@@ -96,7 +106,6 @@
         "rpc01"
       ],
       "services": [
-        "rpc01",
         "minter-postgres",
         "minter-migrate",
         "store-api",
@@ -110,6 +119,7 @@
         "dashboard-migrate",
         "dashboard",
         "contracts-deploy",
+        "rpc01",
         "apps-private"
       ]
     },
@@ -137,6 +147,16 @@
         "validator04"
       ]
     },
+    "explorer": {
+      "kind": "apps",
+      "machine": "blockchain-a",
+      "members": [
+        "explorer"
+      ],
+      "services": [
+        "explorer"
+      ]
+    },
     "resolver": {
       "kind": "apps",
       "machine": "resolver",
@@ -146,6 +166,16 @@
       "services": [
         "resolver-api",
         "resolver-public"
+      ]
+    },
+    "resolver-observer": {
+      "kind": "observers",
+      "machine": "resolver",
+      "members": [
+        "observer01"
+      ],
+      "services": [
+        "observer01"
       ]
     },
     "storage-1": {
@@ -168,16 +198,6 @@
       "services": [
         "ipfs-storage-b",
         "cluster-storage-b"
-      ]
-    },
-    "explorer": {
-      "kind": "apps",
-      "machine": "blockchain-a",
-      "members": [
-        "explorer"
-      ],
-      "services": [
-        "explorer"
       ]
     }
   },
@@ -261,6 +281,7 @@
       "kind": "vpn"
     }
   },
+  "routes": [],
   "secrets": {
     "contract-signer": {
       "consumers": [
@@ -655,6 +676,13 @@
       "machine": "apps",
       "type": "minter-postgres"
     },
+    "observer01": {
+      "configuration": {
+        "node_id": "observer01"
+      },
+      "machine": "resolver",
+      "type": "besu-observer"
+    },
     "replication-worker": {
       "configuration": {
         "worker": "replication"
@@ -685,9 +713,7 @@
           "service": "contracts-deploy"
         },
         "rpc": {
-          "network": "lan",
-          "protocol": "tcp",
-          "service": "rpc01"
+          "service": "observer01"
         },
         "store_api": {
           "network": "lan",

@@ -452,6 +452,26 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertIn("--rpc-http-enabled=true", command)
         self.assertEqual(spec["services"][observer.id]["ports"], [])
 
+    def test_production_six_host_places_resolver_on_local_observer_rpc(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-six-host.json")
+        observer = plan.service("observer01")
+        resolver = plan.service("resolver-api")
+        proxy = plan.service("resolver-public")
+
+        self.assertEqual(observer.machine_id, "resolver")
+        self.assertEqual(resolver.machine_id, "resolver")
+        self.assertEqual(resolver.connections["rpc"], {"service": "observer01"})
+        self.assertEqual(proxy.connections["arks"], {"service": "resolver-api"})
+        self.assertEqual(proxy.configuration["sites"][0]["routes"][0]["path"], "/")
+
+        spec = compose_document(plan, plan.machine("resolver"), tuple(plan.services))
+        self.assertIn("--rpc-http-enabled=true", spec["services"][observer.id]["command"])
+        observer_ports = spec["services"][observer.id]["ports"]
+        self.assertEqual(len(observer_ports), 2)
+        self.assertTrue(any(port.endswith("/tcp") for port in observer_ports))
+        self.assertTrue(any(port.endswith("/udp") for port in observer_ports))
+        self.assertFalse(any(":8545:" in port for port in observer_ports))
+
     def test_data_readiness_probes_unexposed_store_from_its_container(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
         calls = []
