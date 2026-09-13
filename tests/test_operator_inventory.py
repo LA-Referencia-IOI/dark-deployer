@@ -1,4 +1,4 @@
-"""Unit coverage for the side-effect-free compact inventory wizard session."""
+"""Unit coverage for dynamic compact operator inventories."""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from deployment_v3.inventory_editor.document import InventoryDocument, InventoryDocumentError
-from deployment_v3.inventory_editor.wizard import WizardSession
 from deployment_v3.inventory_resolver import OperatorInventoryError, resolve_inventory
 from deployment_v3.artifacts import chain_context, export_chain_group, static_nodes, write_artifact_manifest, verify_artifact_manifest
 from deployment_v3.planner import build_plan
@@ -18,91 +16,18 @@ from deployment_v3.catalogs import get_catalog
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class InventoryWizardTests(unittest.TestCase):
-    def _document(self, name: str = "local-ha.json") -> InventoryDocument:
-        return InventoryDocument.load(ROOT / "examples" / "operator-inventory" / name)
-
+class InventoryEvolutionTests(unittest.TestCase):
     def test_catalog_is_a_topology_free_versioned_recipe(self):
         catalog = get_catalog("dark-standard-1")
         self.assertEqual(catalog.document["machines"], {})
         self.assertEqual(catalog.document["groups"], {})
         self.assertEqual(set(catalog.service_templates), {"besu-validator", "besu-rpc", "besu-observer", "ipfs-kubo", "ipfs-cluster"})
 
-    def test_guided_questions_explain_and_apply_a_single_group_validator_count(self):
-        session = WizardSession(self._document("local-simple.json"))
-        question = next(item for item in session.questions("blockchain") if item.id == "validators.group.validators")
-        self.assertIn("QBFT", question.explanation)
-        self.assertTrue(session.answer(question.id, "3"))
-        self.assertEqual(session.document.raw["blockchain"]["validator_groups"]["validators"]["validator_count"], 3)
-
-    def test_guided_questions_edit_each_validator_group_independently(self):
-        session = WizardSession(self._document("local-ha.json"))
-        questions = {item.id: item for item in session.questions("blockchain")}
-        self.assertIn("validators.group.blockchain-a", questions)
-        self.assertIn("validators.group.blockchain-b", questions)
-        self.assertTrue(session.answer("validators.group.blockchain-b", "5"))
-        self.assertEqual(session.document.raw["blockchain"]["validator_groups"]["blockchain-b"]["validator_count"], 5)
-
-    def test_guided_question_rejects_invalid_answer_without_mutating_draft(self):
-        session = WizardSession(self._document("local-simple.json"))
-        original = json.loads(json.dumps(session.document.raw))
-        self.assertFalse(session.answer("validators.total", "not-a-number"))
-        self.assertEqual(session.document.raw, original)
-
-    def test_guided_storage_peer_count_creates_a_peer_and_placement_group(self):
-        session = WizardSession(self._document("local-simple.json"))
-        self.assertTrue(session.answer("storage.peers", "2"))
-        self.assertEqual(set(session.document.raw["storage"]["peers"]), {"storage-a", "storage-b"})
-        self.assertEqual(session.document.raw["placement"]["storage-b"], "local")
-
-    def test_guided_storage_peer_count_rolls_back_when_replication_becomes_invalid(self):
-        session = WizardSession(self._document("local-simple.json"))
-        session.document.raw["storage"]["replication"]["target_replicas"] = 2
-        original = json.loads(json.dumps(session.document.raw))
-        self.assertFalse(session.answer("storage.peers", "1"))
-        self.assertEqual(session.document.raw, original)
-
-    def test_rejects_complete_v3(self):
-        document = InventoryDocument.load(ROOT / "examples" / "deployment-v3" / "local-ha.json")
-        with self.assertRaisesRegex(InventoryDocumentError, "only dark-operator-inventory"):
-            WizardSession(document)
-
     def test_operator_v1_is_rejected(self):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
         document["format_version"] = 1
         with self.assertRaisesRegex(Exception, "2 was expected"):
             resolve_inventory(document, source_path=ROOT / "inventory.json")
-
-    def test_invalid_change_is_rolled_back(self):
-        session = WizardSession(self._document("production-five-host.json"))
-        original = json.loads(json.dumps(session.document.raw))
-        self.assertFalse(session.add_network("bad", {"kind": "lan", "cidr": "not-a-cidr"}))
-        self.assertEqual(session.document.raw, original)
-        self.assertIn("bad", session.last_error)
-
-    def test_review_exposes_urls_connections_and_plan(self):
-        session = WizardSession(self._document("production-five-host.json"))
-        review = session.review()
-        self.assertTrue(any(item["url"].endswith("/admin/") for item in review.public_urls))
-        self.assertTrue(review.private_connections)
-        self.assertIn("applications", review.phases)
-        self.assertIn("apps", review.firewall)
-
-    def test_template_save_writes_destination_without_edit(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            destination = Path(temporary) / "new.json"
-            source = self._document()
-            source.path = destination
-            session = WizardSession(source, force_save=True)
-            self.assertIsNone(session.save())
-            self.assertTrue(destination.exists())
-            self.assertEqual(json.loads(destination.read_text())["format"], "dark-operator-inventory")
-
-    def test_route_reordering_requires_complete_permutation(self):
-        session = WizardSession(self._document())
-        original = json.loads(json.dumps(session.document.raw))
-        self.assertFalse(session.reorder_routes("gateway", 0, [0]))
-        self.assertEqual(session.document.raw, original)
 
     def test_operator_v2_generates_dynamic_chain_and_storage(self):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())

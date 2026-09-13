@@ -29,10 +29,6 @@ venv/bin/python deploy.py install \
 when you need an editable copy; `inventory-resolve`, `plan` and `render` are
 optional inspection steps.
 
-For guided adaptation of a compact inventory, install the optional terminal UI
-and run `venv/bin/python deploy.py inventory-wizard --inventory inventory.json`.
-It validates and previews the resolved plan before saving; it never deploys.
-
 The complete, scenario-based procedure is in
 [OPERATIONS-MANUAL.md](OPERATIONS-MANUAL.md). Read it before applying an SSH
 inventory or creating a new blockchain network.
@@ -123,7 +119,6 @@ constraint.
 | CLI, inventory formats, and safety model | [Deployer reference](docs/deployer.md) |
 | v3 graph, endpoints, bundles, and artifacts | [Inventory and artifact flow](docs/deployment-v3-inventory-and-artifact-flow.md) |
 | Compact-format rationale and catalogue design | [Operator inventory design](docs/deployment-v3-operator-inventory-proposal.md) |
-| Future guided adaptation of an inventory | [Inventory adaptation wizard proposal](docs/inventory-adaptation-wizard-proposal.md) |
 | Runtime architecture and ARK lifecycle | [Architecture](docs/architecture.md) |
 | Lima five-host acceptance environment | [Lima guide](docs/lima-five-host-test.md) |
 | AWS five-host deployment in one Availability Zone | [AWS single-zone guide](docs/aws-single-az-five-host.md) |

@@ -39,12 +39,6 @@ also runs implicitly for `validate`, `plan`, `render`, `push`, `apply` and
 `install`; use `inventory-resolve` or `inventory-explain` only to inspect the
 effective v3 contract before execution.
 
-`inventory-wizard` is the optional guided authoring interface for this compact
-format. It accepts either `--inventory FILE` or `--template operator-local-ha
---output FILE`, validates each stage against the resolver, and requires a
-review before atomic save. It never executes deployment operations. Complete
-v3 inventories continue to use `inventory-edit`.
-
 For offline inspection of a copied inventory:
 
 ```bash

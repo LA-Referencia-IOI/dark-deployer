@@ -26,10 +26,6 @@ contract internally. `inventory-create` is optional and only makes an editable
 copy of a template; `inventory-resolve`, `plan` and `render` are optional
 review commands, not prerequisites.
 
-To adapt a compact inventory without editing unrelated JSON fields, install
-`requirements-tui.txt` and use `inventory-wizard --inventory FILE`. The wizard
-only saves a reviewed inventory; run `preflight` and `install` explicitly afterward.
-
 Available templates are `operator-local-simple`, `operator-local-observer`, `operator-local-ha`, `operator-production-five-host`, and `operator-production-six-host`. `local-simple` has one storage peer. `local-observer` adds a Besu observer with Resolver bound to its private RPC. `local-ha` has two peers on one Docker host and tests replication, not host-loss tolerance. Production templates are documentation-only until every `REPLACE` value is replaced with real infrastructure values.
 
 ## 2. Prepare the controller

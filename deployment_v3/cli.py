@@ -24,9 +24,8 @@ from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
 from .sources import SourceError
 from .acquire import AcquisitionError, acquire_components
-from .inventory_editor import InventoryDocument, InventoryDocumentError, WizardSession, create_from_template, resolved_inventory_diff, template_names
+from .inventory_editor import InventoryDocument, InventoryDocumentError, create_from_template, template_names
 from .inventory_editor.textual_app import run_textual_editor
-from .inventory_editor.wizard_textual import run_wizard
 from .inventory_resolver import resolve_inventory_path
 from .availability import analyze as analyze_availability
 
@@ -102,11 +101,6 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--output", required=True, type=Path)
     create.add_argument("--overwrite", action="store_true")
     create.add_argument("--edit", action="store_true", help="open the new inventory in the interactive editor")
-    wizard = actions.add_parser("inventory-wizard", help="adapt a compact operator inventory interactively")
-    source = wizard.add_mutually_exclusive_group(required=True)
-    source.add_argument("--inventory", type=Path)
-    source.add_argument("--template", choices=tuple(name for name in template_names() if name.startswith("operator-")))
-    wizard.add_argument("--output", type=Path, help="required destination when starting from --template")
     diff = actions.add_parser("inventory-diff", help="compare resolved inventories without operational effects")
     diff.add_argument("--before", required=True, type=Path)
     diff.add_argument("--after", required=True, type=Path)
@@ -444,26 +438,6 @@ def _run_inventory_editor(path: Path) -> None:
         print("[INFO] Inventory editor closed without saving.")
 
 
-def _run_inventory_wizard(*, inventory: Path | None, template: str | None, output: Path | None) -> None:
-    """Run the operator-only authoring wizard without deployment effects."""
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        raise InventoryDocumentError("inventory-wizard requires an interactive terminal")
-    if template:
-        if output is None:
-            raise InventoryDocumentError("inventory-wizard --template requires --output")
-        if output.exists():
-            raise InventoryDocumentError(f"refusing to overwrite existing inventory: {output}")
-        source = Path(__file__).resolve().parents[1] / "examples" / "operator-inventory" / (template.removeprefix("operator-") + ".json")
-        document = InventoryDocument.load(source)
-        document.path = output
-    else:
-        if output is not None:
-            raise InventoryDocumentError("--output is only valid with inventory-wizard --template")
-        document = InventoryDocument.load(inventory)
-    session = WizardSession(document, force_save=template is not None)
-    run_wizard(session)
-
-
 def _resolved_document(path: Path) -> dict:
     """Return v3 for either input format, for read-only CLI inspection."""
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -475,7 +449,16 @@ def _resolved_document(path: Path) -> dict:
 
 def _inventory_changes(before: dict, after: dict) -> dict:
     """Compact semantic diff intended for operator review, not a JSON patch."""
-    return resolved_inventory_diff(before, after)
+    result: dict[str, object] = {}
+    for key in ("machines", "services", "groups"):
+        old, new = set(before.get(key, {})), set(after.get(key, {}))
+        result[key] = {
+            "added": sorted(new - old),
+            "removed": sorted(old - new),
+            "changed": sorted(item for item in old & new if before[key][item] != after[key][item]),
+        }
+    result["changed_sections"] = [key for key in ("deployment", "blockchain", "storage", "infrastructure", "settings", "components", "secrets") if before.get(key) != after.get(key)]
+    return result
 
 
 def main() -> None:
@@ -489,9 +472,6 @@ def main() -> None:
             return
         if args.action == "inventory-edit":
             _run_inventory_editor(args.inventory)
-            return
-        if args.action == "inventory-wizard":
-            _run_inventory_wizard(inventory=args.inventory, template=args.template, output=args.output)
             return
         if args.action == "inventory-resolve":
             resolution = resolve_inventory_path(args.inventory)
