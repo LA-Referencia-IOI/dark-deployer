@@ -4,7 +4,6 @@
       "path": "blockchain/role-artifact",
       "source": "REPLACE/secrets/chain-artifact"
     },
-    "besu_image": "hyperledger/besu:26.6.1",
     "chain_id": 2025,
     "nodes": {
       "observer01": {

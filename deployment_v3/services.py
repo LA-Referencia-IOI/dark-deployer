@@ -54,6 +54,7 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
     chain_artifact = f"{machine.secrets_root}/{plan.raw['blockchain']['artifact']['path']}"
     secret_path = lambda secret_id: f"{machine.secrets_root}/{plan.raw['secrets'][secret_id]['path']}"
     common = {"restart": "unless-stopped", "networks": [network]}
+    images = plan.raw["images"]
     result: dict = {}
     besu_count = sum(item.type in {"besu-validator", "besu-rpc", "besu-observer"} for item in plan.services)
     sync_min_peers = min(3, besu_count - 1) if besu_count > 1 else None
@@ -79,17 +80,17 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             node = service.configuration["node_id"]
             command = ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=true", "--rpc-http-host=0.0.0.0", "--p2p-port=30303"]
             if sync_min_peers is not None: command.append(f"--sync-min-peers={sync_min_peers}")
-            result[service.id] = {**common, "image": plan.raw["blockchain"]["besu_image"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{machine.workspace_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{machine.workspace_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": command}
+            result[service.id] = {**common, "image": images["besu"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{machine.workspace_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{machine.workspace_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": command}
             if not has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"}): result[service.id]["networks"] = {network: {"ipv4_address": chain_node_addresses(plan)[node]}}
         elif service.type in {"besu-validator", "besu-observer"}:
             node = service.configuration["node_id"]
             command = ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=" + ("true" if service.type == "besu-observer" else "false"), "--p2p-port=30303"]
             if service.type == "besu-observer": command.append("--rpc-http-host=0.0.0.0")
             if sync_min_peers is not None: command.append(f"--sync-min-peers={sync_min_peers}")
-            result[service.id] = {**common, "image": plan.raw["blockchain"]["besu_image"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{machine.workspace_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{machine.workspace_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": command}
+            result[service.id] = {**common, "image": images["besu"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{machine.workspace_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{machine.workspace_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": command}
             if not has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"}): result[service.id]["networks"] = {network: {"ipv4_address": chain_node_addresses(plan)[node]}}
         elif service.type == "minter-postgres":
-            result[service.id] = {**common, "image": "postgres:15-alpine", "env_file": env, "volumes": [f"{service_data}:/var/lib/postgresql/data"]}
+            result[service.id] = {**common, "image": images["postgres"], "env_file": env, "volumes": [f"{service_data}:/var/lib/postgresql/data"]}
         elif service.type in {"minter-api", "minter-worker", "minter-migrate"}:
             command = [] if service.type == "minter-api" else ["migrate"] if service.type == "minter-migrate" else [f"{service.configuration['worker']}-worker"]
             result[service.id] = {**common, "build": _build(machine, "dark-core-minter-api/Dockerfile"), "env_file": env, "command": command, "volumes": [f"{data}/minter-metadata:/app/metadata_storage"]}
@@ -102,9 +103,9 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
         elif service.type == "store-api":
             result[service.id] = {**common, "build": _build(machine, "dark-store-api/Dockerfile"), "env_file": env, "ports": _ports(machine, service), "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]}
         elif service.type == "dashboard-mysql":
-            result[service.id] = {**common, "image": "mysql:8.0", "env_file": env, "volumes": [f"{service_data}:/var/lib/mysql"]}
+            result[service.id] = {**common, "image": images["mysql"], "env_file": env, "volumes": [f"{service_data}:/var/lib/mysql"]}
         elif service.type == "dashboard-redis":
-            result[service.id] = {**common, "image": "redis:7-alpine", "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{service_data}:/data"]}
+            result[service.id] = {**common, "image": images["redis"], "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{service_data}:/data"]}
         elif service.type in {"dashboard", "dashboard-migrate"}:
             # Composer runs as the image's unprivileged ``ambientum`` user.
             # Keep its managed dependencies outside the synced component
@@ -113,7 +114,7 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             dashboard_runtime = f"{data}/dashboard"
             item = {
                 **common,
-                "image": "ambientum/php:8.0-nginx",
+                "image": images["dashboard"],
                 "env_file": env,
                 "volumes": [
                     f"{machine.workspace_root}/components/dashboard-web:/var/www/app",
@@ -126,9 +127,9 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             else: item["command"] = ["sh", "-lc", "cd /var/www/app && php composer.phar install --no-interaction --prefer-dist --no-dev && php artisan optimize:clear && php artisan migrate --force --seed"]
             result[service.id] = item
         elif service.type == "ipfs-kubo":
-            result[service.id] = {**common, "image": "ipfs/kubo:v0.42.0", "env_file": env, "ports": [*_ports(machine, service), *_ipfs_network_ports(plan, machine, service)], "volumes": [f"{machine.workspace_root}/components/dark-ipfs/scripts/ipfs-entrypoint.sh:/usr/local/bin/ipfs-entrypoint.sh:ro", f"{service_data}:/data/ipfs", f"{secret_path('ipfs-swarm-key')}:/run/secrets/ipfs-swarm-key:ro"], "entrypoint": ["/usr/local/bin/ipfs-entrypoint.sh"]}
+            result[service.id] = {**common, "image": images["kubo"], "env_file": env, "environment": {"IPFS_TELEMETRY": "off"}, "ports": [*_ports(machine, service), *_ipfs_network_ports(plan, machine, service)], "volumes": [f"{machine.workspace_root}/components/dark-ipfs/scripts/ipfs-entrypoint.sh:/usr/local/bin/ipfs-entrypoint.sh:ro", f"{service_data}:/data/ipfs", f"{secret_path('ipfs-swarm-key')}:/run/secrets/ipfs-swarm-key:ro"], "entrypoint": ["/usr/local/bin/ipfs-entrypoint.sh"]}
         elif service.type == "ipfs-cluster":
-            result[service.id] = {**common, "image": "ipfs/ipfs-cluster:v1.1.6", "env_file": env, "ports": [*_ports(machine, service), *_ipfs_network_ports(plan, machine, service)], "volumes": [f"{machine.workspace_root}/components/dark-ipfs/scripts/cluster-entrypoint.sh:/usr/local/bin/cluster-entrypoint.sh:ro", f"{service_data}:/data/ipfs-cluster", f"{secret_path('ipfs-cluster-secret')}:/run/secrets/ipfs-cluster-secret:ro"], "entrypoint": ["/usr/local/bin/cluster-entrypoint.sh"]}
+            result[service.id] = {**common, "image": images["ipfs_cluster"], "env_file": env, "ports": [*_ports(machine, service), *_ipfs_network_ports(plan, machine, service)], "volumes": [f"{machine.workspace_root}/components/dark-ipfs/scripts/cluster-entrypoint.sh:/usr/local/bin/cluster-entrypoint.sh:ro", f"{service_data}:/data/ipfs-cluster", f"{secret_path('ipfs-cluster-secret')}:/run/secrets/ipfs-cluster-secret:ro"], "entrypoint": ["/usr/local/bin/cluster-entrypoint.sh"]}
         elif service.type == "explorer":
             result[service.id] = {**common, "build": {"context": f"{machine.workspace_root}/components/dark-explorador", "dockerfile": "Dockerfile"}, "env_file": env, "ports": _ports(machine, service)}
         elif service.type == "edge-proxy":
@@ -137,7 +138,7 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             if tls.get("mode") == "direct":
                 for secret_id in (tls["certificate_secret"], tls["key_secret"]):
                     volumes.append(f"{secret_path(secret_id)}:/run/secrets/{secret_id}:ro")
-            result[service.id] = {**common, "image": "nginx:1.27-alpine", "ports": _ports(machine, service), "volumes": volumes}
+            result[service.id] = {**common, "image": images["edge_proxy"], "ports": _ports(machine, service), "volumes": volumes}
         elif service.type in {"contracts-deploy", "rpc-probe"}:
             result[service.id] = {**common, "profiles": ["setup"], "build": {"context": machine.workspace_root, "dockerfile": "deployment_v3/Dockerfile.contracts"}, "env_file": env, "volumes": [f"{secret_path('contract-signer')}:/run/secrets/contract-signer:ro", "./artifacts/contracts:/contracts:ro", f"{data}/contracts:/runtime"]}
     project = f"{plan.deployment_id}-{machine.id}" + (f"-{group_id}" if group_id else "")

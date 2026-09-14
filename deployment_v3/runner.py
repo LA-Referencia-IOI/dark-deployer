@@ -375,7 +375,7 @@ def _apply_service(plan, machine, service, root, bundle, *, verbose=False, force
     if service.type == "minter-postgres":
         data_dir = Path(machine.data_root) / plan.deployment_id / service.id
         _require(executor.run(("mkdir", "-p", str(data_dir))), "prepare PostgreSQL data directory")
-        _require(executor.run(("docker", "run", "--rm", "--user", "0:0", "-v", f"{data_dir}:/var/lib/postgresql/data", "postgres:15-alpine", "chown", "-R", "70:70", "/var/lib/postgresql/data"), timeout=120), "fix PostgreSQL data ownership")
+        _require(executor.run(("docker", "run", "--rm", "--user", "0:0", "-v", f"{data_dir}:/var/lib/postgresql/data", plan.raw["images"]["postgres"], "chown", "-R", "70:70", "/var/lib/postgresql/data"), timeout=120), "fix PostgreSQL data ownership")
     if service.type in {"dashboard", "dashboard-migrate"}:
         # The checkout is staged by the SSH user, while Laravel and Composer
         # inside ambientum/php run as UID/GID 1000. Keep every generated tree
@@ -395,7 +395,7 @@ def _apply_service(plan, machine, service, root, bundle, *, verbose=False, force
         _require(executor.run(("mkdir", "-p", *(str(path) for path in runtime_directories))), "prepare Dashboard runtime directories")
         _require(
             executor.run(
-                ("docker", "run", "--rm", "--user", "0:0", "-v", f"{dashboard_runtime}:/runtime", "--entrypoint", "chown", "ambientum/php:8.0-nginx", "-R", "1000:1000", "/runtime"),
+                ("docker", "run", "--rm", "--user", "0:0", "-v", f"{dashboard_runtime}:/runtime", "--entrypoint", "chown", plan.raw["images"]["dashboard"], "-R", "1000:1000", "/runtime"),
                 timeout=120,
             ),
             "fix Dashboard runtime ownership",

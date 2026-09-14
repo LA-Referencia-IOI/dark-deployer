@@ -24,7 +24,7 @@ venv/bin/python local-infra/generate-lima-inventory.py \
 The command defaults to the compact production operator example as input and
 writes `examples/operator-inventory/lima-five-host.json`. It deliberately does
 not generate the final v3 execution contract; normal deployer commands resolve
-it through `dark-standard-1`. Both paths can be overridden:
+it through `dark-platform-baseline-v1.0`. Both paths can be overridden:
 
 ```bash
 venv/bin/python local-infra/generate-lima-inventory.py \

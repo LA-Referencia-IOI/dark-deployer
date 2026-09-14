@@ -108,7 +108,7 @@ def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
         "version": 2,
         "deployment_id": plan.deployment_id,
         "chain_id": plan.raw["blockchain"]["chain_id"],
-        "besu_image": plan.raw["blockchain"]["besu_image"],
+        "besu_image": plan.raw["images"]["besu"],
         "qbft": plan.raw["blockchain"]["qbft"],
         "master_wallet_address": master_wallet_address.lower(),
         "nodes": {
@@ -196,7 +196,7 @@ def initialize_chain(plan: DeploymentPlan, output: Path, master_wallet_address: 
     generated = output / "generated"
     command = (
         "docker", "run", "--rm", "-v", f"{output}:/work", "--user", f"{os.getuid()}:{os.getgid()}",
-        plan.raw["blockchain"]["besu_image"], "operator", "generate-blockchain-config",
+        plan.raw["images"]["besu"], "operator", "generate-blockchain-config",
         "--config-file=/work/qbft-config.json", "--to=/work/generated", "--private-key-file-name=nodekey",
     )
     completed = subprocess.run(command, capture_output=True, text=True)
@@ -224,7 +224,7 @@ def initialize_chain(plan: DeploymentPlan, output: Path, master_wallet_address: 
     for node in non_validators:
         destination = output / "nodes" / node; destination.mkdir(parents=True, exist_ok=True)
         key = destination / "nodekey"; key.write_text(__import__("secrets").token_hex(32) + "\n"); key.chmod(0o600)
-        exported = subprocess.run(("docker", "run", "--rm", "-v", f"{destination}:/data", plan.raw["blockchain"]["besu_image"], "public-key", "export", "--node-private-key-file=/data/nodekey", "--to=/data/key.pub"), capture_output=True, text=True)
+        exported = subprocess.run(("docker", "run", "--rm", "-v", f"{destination}:/data", plan.raw["images"]["besu"], "public-key", "export", "--node-private-key-file=/data/nodekey", "--to=/data/key.pub"), capture_output=True, text=True)
         if exported.returncode: raise ArtifactError(exported.stderr.strip() or f"Besu failed to export the {node} public key")
         public_keys[node] = (destination / "key.pub").read_text().strip().removeprefix("0x")
     (output / "genesis.json").write_bytes(genesis.read_bytes())

@@ -1,7 +1,7 @@
 {
   "format": "dark-operator-inventory",
   "format_version": 2,
-  "catalog": "dark-standard-1",
+  "catalog": "dark-platform-baseline-v1.0",
   "profile": "local",
   "deployment": {
     "id": "dark-operator-local-observer",

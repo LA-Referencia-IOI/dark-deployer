@@ -51,7 +51,7 @@ resolver version alongside each rendered bundle.
 ## Compact contract
 
 The document uses `format: "dark-operator-inventory"`,
-`format_version: 2`, and an exact catalogue ID such as `dark-standard-1`.
+`format_version: 2`, and an exact catalogue ID such as `dark-platform-baseline-v1.0`.
 Important sections are:
 
 | Section | Operator owns | Resolver derives |
@@ -74,7 +74,7 @@ It does not move persistent data.
 
 ## Catalogue boundary
 
-`dark-standard-1` supports dynamic validator and observer groups, multiple RPC nodes, the Minter
+`dark-platform-baseline-v1.0` supports dynamic validator and observer groups, multiple RPC nodes, the Minter
 stack, Admin, Resolver, Store, dashboard, explorer, and any positive number of
 storage peers. Its recipes encode known connections:
 for example, Minter API and its three workers use the same PostgreSQL, Store,

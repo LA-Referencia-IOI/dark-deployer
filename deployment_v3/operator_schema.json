@@ -7,7 +7,7 @@
   "properties": {
     "format": {"const": "dark-operator-inventory"},
     "format_version": {"const": 2},
-    "catalog": {"const": "dark-standard-1"},
+    "catalog": {"const": "dark-platform-baseline-v1.0"},
     "deployment": {"type": "object"},
     "profile": {"enum": ["local", "lab", "production"]},
     "defaults": {"type": "object"},

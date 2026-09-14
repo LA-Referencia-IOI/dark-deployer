@@ -299,7 +299,7 @@ class DeploymentV3Tests(unittest.TestCase):
             source = ROOT / "examples" / "operator-inventory" / f"{name}.json"
             resolution = resolve_inventory_path(source)
             self.assertEqual(len(resolution.document["services"]), services)
-            self.assertEqual(resolution.metadata["catalog"], "dark-standard-1")
+            self.assertEqual(resolution.metadata["catalog"], "dark-platform-baseline-v1.0")
             plan = build_plan(source)
             with tempfile.TemporaryDirectory() as temporary:
                 output = Path(temporary) / "bundle"

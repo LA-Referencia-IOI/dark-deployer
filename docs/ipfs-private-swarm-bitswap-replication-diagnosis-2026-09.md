@@ -214,3 +214,114 @@ puede repetir varias veces esta secuencia sin intervención manual:
 
 La mera presencia de dos peers en `/peers`, una asignación de Cluster o un
 estado `pinning` transitorio no son criterios suficientes.
+
+## Resultados de las pruebas ejecutadas el 2026-09-14
+
+### Estado del entorno generado
+
+El despliegue `dark-operator-local-ha` estaba activo con todos sus contenedores
+`Up`. Los dos Kubo ejecutaban `ipfs/kubo:v0.42.0` y los dos peers de Cluster
+ejecutaban `ipfs/ipfs-cluster:v1.1.6`.
+
+Los Kubo estaban conectados en la red Docker
+`dark-operator-local-ha-local`:
+
+- Kubo A: `172.30.0.2`, peer ID
+  `12D3KooWM8jaL5sF8e3fwiBgQQePBFxRav4D1JiH9zQ7PUpsJEJR`.
+- Kubo B: `172.30.0.3`, peer ID
+  `12D3KooWJNUTpZoS5u6eoF6s9pofU5PW7vL8JXCKK8pUi2yJqZhN`.
+
+Ambos compartían la misma huella de swarm key, anunciaban los protocolos
+Bitswap `/ipfs/bitswap`, `1.0.0`, `1.1.0` y `1.2.0`, y veían al otro peer por
+DHT LAN. Cluster A y Cluster B también se veían entre sí.
+
+Se observó además que Cluster B intentó acceder a su API local de Kubo antes
+de que el puerto 5001 estuviera escuchando, produciendo temporalmente
+`connection refused`. Este evento es una carrera de arranque independiente
+que debe conservarse como observación operativa, pero no explica por sí solo
+el fallo de Bitswap reproducido posteriormente.
+
+### Reproducción en el entorno generado
+
+Se creó en Kubo A un bloque raw de diagnóstico:
+
+```text
+bafkreibxbhej46mmvotmsw5bljpvobydrdwqmulvt7oq33q34gqvgt6hym
+```
+
+La secuencia fue:
+
+1. `routing provide` desde A: correcto.
+2. `routing findprovs` desde B: devolvió el peer ID de A.
+3. `block stat` desde B con timeout de 15 segundos: terminó con
+   `Error: context canceled`.
+4. `swarm connect` explícito B → A: correcto.
+5. Un segundo `block get` desde B: volvió a terminar con
+   `Error: context canceled`.
+
+Antes y después de la prueba, ambos nodos mostraron:
+
+```text
+blocks received: 0
+blocks sent: 0
+data received: 0 B
+data sent: 0 B
+partners [0]
+```
+
+### Reproducción mínima fuera de Cluster
+
+Se levantó una red Docker efímera con dos Kubo `v0.42.0`, sin IPFS Cluster ni
+Store API. Se reutilizó únicamente la swarm key del entorno y se ejecutó el
+entrypoint fuente `components/dark-ipfs/scripts/ipfs-entrypoint.sh`, con
+`autoconf-off`, DHT LAN, `AppendAnnounce`, `Swarm.AddrFilters=[]` y bootstrap
+DNS hacia el peer A.
+
+El resultado fue el mismo: B encontró el proveedor mediante `findprovs`, pero
+la lectura del bloque expiró con `context canceled`. Con Bitswap en debug, la
+traza mostró:
+
+```text
+No peers - broadcasting
+Found peer for CID
+change: availability ... -> true
+Bitswap: Added peer to session
+```
+
+Después no apareció una cola de mensajes ni un stream Bitswap, A no registró
+un WANT y los contadores de ambos nodos permanecieron en cero. Tampoco se
+observó un rechazo del resource manager.
+
+### Control sin swarm privado
+
+Se repitió la reproducción con dos Kubo aislados sin swarm key, conservando
+la configuración necesaria para permitir direcciones privadas Docker
+(`Swarm.AddrFilters=[]`). La conexión se estableció, pero la transferencia
+Bitswap volvió a fallar con `context canceled` y cero bytes.
+
+Esto descarta la swarm key privada/PNET como causa suficiente. Un control
+totalmente virgen, sin `Swarm.AddrFilters=[]`, no fue válido: el gater de Kubo
+rechazó correctamente el dial hacia la dirección privada `172.x`.
+
+Todos los contenedores y redes Docker efímeros usados en estas pruebas fueron
+eliminados al finalizar. El despliegue `dark-operator-local-ha` no fue
+reiniciado ni modificado.
+
+### Conclusiones actualizadas
+
+- El fallo se reproduce sin Cluster, Store API ni la cola de replicación.
+- El descubrimiento DHT del proveedor funciona.
+- La conexión libp2p base funciona.
+- El fallo ocurre después de que la sesión Bitswap marque disponible al peer y
+  antes de que se materialice la cola o el stream Bitswap.
+- No hay evidencia de que `context canceled` sea la causa; es el resultado del
+  timeout de la prueba.
+- No hay evidencia de que PNET, la PSK o la versión `v0.42.0` sean la causa
+  suficiente. El problema ya estaba observado anteriormente con Kubo
+  `v0.41.0`, por lo que cambiar de versión no es la siguiente línea de trabajo.
+- La configuración de Bitswap permanece por defecto (`Bitswap: {}`) y no está
+  deshabilitada.
+- El control sin PNET indica que la investigación debe centrarse en la
+  interacción entre Kubo/libp2p, las direcciones privadas Docker y la
+  configuración manual de red, aislando individualmente `AppendAnnounce`,
+  `autoconf-off`, `Routing.Type=dht`, el perfil `server` y `AddrFilters`.

@@ -17,8 +17,8 @@ class Catalog:
 
 
 def get_catalog(catalog_id: str) -> Catalog:
-    if catalog_id != "dark-standard-1":
-        raise ValueError(f"unknown operator inventory catalog {catalog_id!r}; choose dark-standard-1")
+    if catalog_id != "dark-platform-baseline-v1.0":
+        raise ValueError(f"unknown operator inventory catalog {catalog_id!r}; choose dark-platform-baseline-v1.0")
     path = Path(__file__).with_name("catalog_data") / f"{catalog_id}.json"
     content = path.read_bytes()
     payload = json.loads(content)

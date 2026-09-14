@@ -18,10 +18,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class InventoryEvolutionTests(unittest.TestCase):
     def test_catalog_is_a_topology_free_versioned_recipe(self):
-        catalog = get_catalog("dark-standard-1")
+        catalog = get_catalog("dark-platform-baseline-v1.0")
         self.assertEqual(catalog.document["machines"], {})
         self.assertEqual(catalog.document["groups"], {})
         self.assertEqual(set(catalog.service_templates), {"besu-validator", "besu-rpc", "besu-observer", "ipfs-kubo", "ipfs-cluster"})
+        self.assertEqual(
+            set(catalog.document["images"]),
+            {"besu", "postgres", "mysql", "redis", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"},
+        )
+
+    def test_runtime_images_are_inherited_from_the_catalog(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
+        resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
+        self.assertEqual(resolution.document["images"], get_catalog("dark-platform-baseline-v1.0").document["images"])
+        self.assertNotIn("besu_image", resolution.document["blockchain"])
 
     def test_operator_v1_is_rejected(self):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())

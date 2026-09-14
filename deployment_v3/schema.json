@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "dARK deployment topology v3",
   "type": "object",
-  "required": ["version", "deployment", "defaults", "networks", "machines", "services", "infrastructure", "blockchain", "storage", "components", "settings", "secrets"],
+  "required": ["version", "deployment", "defaults", "networks", "machines", "services", "infrastructure", "blockchain", "storage", "images", "components", "settings", "secrets"],
   "additionalProperties": false,
   "properties": {
     "version": {"const": 3},
@@ -16,6 +16,7 @@
     "infrastructure": {"type": "object"},
     "blockchain": {"type": "object"},
     "storage": {"type": "object"},
+    "images": {"type": "object"},
     "components": {"type": "object"},
     "settings": {"type": "object"},
     "secrets": {"type": "object"}

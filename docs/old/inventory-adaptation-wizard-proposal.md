@@ -9,7 +9,7 @@ infrastructure.
 
 - Introduce `dark-operator-inventory` format version 2. Reject v1 explicitly;
   do not reinterpret it or add implicit compatibility.
-- Keep `dark-standard-1`, but turn it into a parameterized recipe.
+- Keep the versioned platform-baseline catalogue, but turn it into a parameterized recipe.
 - A blockchain group contains a configurable `validator_count >= 1`. Groups
   are placement/failure-domain units and may have different counts.
 - Support one or more validator groups, observer groups, RPC nodes, and storage peers. Each

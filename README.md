@@ -58,7 +58,7 @@ venv/bin/python -m pip install -r requirements-tui.txt
 ### Operator inventory v2
 
 This is the recommended format for new installations that follow the
-`dark-standard-1` catalogue. It describes the decisions that usually differ
+`dark-platform-baseline-v1.0` catalogue. It describes the decisions that usually differ
 between installations:
 
 - identity and profile;

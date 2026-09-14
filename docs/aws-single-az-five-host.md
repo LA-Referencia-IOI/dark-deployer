@@ -2,7 +2,7 @@
 
 Esta guía describe una sede dARK estándar sobre cinco instancias EC2 privadas
 en la misma zona de disponibilidad. Usa el inventario operator soportado
-`dark-standard-1` y conserva la misma distribución probada por Lima:
+`dark-platform-baseline-v1.0` y conserva la misma distribución probada por Lima:
 
 | Host | Servicios principales |
 | --- | --- |

@@ -150,7 +150,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     peers = _object(storage.get("peers"), "storage.peers")
     if not peers:
         raise _fail("storage.peers must contain at least one peer")
-    if set(blockchain) - {"chain_id", "rpc", "validator_groups", "observer_groups", "artifact", "besu_image", "qbft", "observer_max_block_lag"}:
+    if set(blockchain) - {"chain_id", "rpc", "validator_groups", "observer_groups", "artifact", "qbft", "observer_max_block_lag"}:
         raise _fail("blockchain contains unsupported fields")
     rpc = _object(blockchain.get("rpc"), "blockchain.rpc")
     validator_groups = _object(blockchain.get("validator_groups"), "blockchain.validator_groups")
@@ -341,7 +341,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
 
     # Translate compact chain choices into the original v3 block.
     result["blockchain"]["chain_id"] = blockchain.get("chain_id")
-    for field in ("besu_image", "qbft"):
+    for field in ("qbft",):
         if field in blockchain:
             result["blockchain"][field] = deepcopy(blockchain[field])
     if "artifact" in blockchain:
@@ -540,7 +540,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         validate_inventory(result)
     except InventoryError as exc:
         raise _fail(str(exc).removeprefix("deployment topology v3: ")) from exc
-    provenance = {"/components": "catalog:dark-standard-1", "/settings": "catalog:dark-standard-1", "/services": "catalog recipe + placement/routing", "/groups": "placement", "/storage": "storage", "/blockchain": "blockchain"}
+    provenance = {"/components": "catalog:dark-platform-baseline-v1.0", "/images": "catalog:dark-platform-baseline-v1.0", "/settings": "catalog:dark-platform-baseline-v1.0", "/services": "catalog recipe + placement/routing", "/groups": "placement", "/storage": "storage", "/blockchain": "blockchain"}
     for node_id, definition in result["blockchain"]["nodes"].items():
         role = definition["role"]
         if role == "validator":

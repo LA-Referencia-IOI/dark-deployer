@@ -165,6 +165,20 @@ Use the complete v3 inventory when the desired service layout is outside the cat
 
 ## 5. Render, preflight, install
 
+### Runtime image versions
+
+All managed runtime image versions have one source of truth: the `base.images`
+block in `deployment_v3/catalog_data/dark-platform-baseline-v1.0.json`. It defines Besu,
+Kubo, IPFS Cluster, PostgreSQL, MySQL, Redis, the Dashboard runtime and the edge
+proxy. Neither the Compose renderer nor its auxiliary ownership/artifact tasks
+contain fallback image versions; a missing catalogue key fails inventory
+validation. Compact operator inventories inherit this block automatically, and
+legacy full inventories are normalized to the same installed catalogue release.
+
+To upgrade a runtime image, change the catalogue entry, run the focused tests,
+render the target inventory and review every resulting `image:` field before
+applying. Use an immutable digest for development/canary images when available.
+
 For reviewable output without applying it:
 
 ```bash

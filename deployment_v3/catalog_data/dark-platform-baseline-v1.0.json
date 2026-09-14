@@ -1,5 +1,5 @@
 {
-  "id": "dark-standard-1",
+  "id": "dark-platform-baseline-v1.0",
   "version": 1,
   "base": {
     "version": 3,
@@ -340,7 +340,6 @@
     "blockchain": {
       "primary_rpc": "",
       "chain_id": 2025,
-      "besu_image": "hyperledger/besu:26.6.1",
       "qbft": {
         "block_period_seconds": 6,
         "epoch_length": 30000,
@@ -351,6 +350,16 @@
         "source": "REPLACE/secrets/chain-artifact"
       },
       "nodes": {}
+    },
+    "images": {
+      "besu": "hyperledger/besu:26.6.1",
+      "postgres": "postgres:15-alpine",
+      "mysql": "mysql:8.0",
+      "redis": "redis:7-alpine",
+      "dashboard": "ambientum/php:8.0-nginx",
+      "kubo": "ipfs/kubo:master-2026-08-17-a73e8c0@sha256:c11759f51eca6af1b2e45d93125af9058b63925704821bd37477449e3f3d9411",
+      "ipfs_cluster": "ipfs/ipfs-cluster:v1.1.6",
+      "edge_proxy": "nginx:1.27-alpine"
     },
     "storage": {
       "cluster_name": "REPLACE-dark-production",

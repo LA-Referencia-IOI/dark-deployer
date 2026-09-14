@@ -153,6 +153,13 @@ def load_inventory(path: Path) -> tuple[dict[str, Any], tuple[Machine, ...], tup
     if raw.get("format") == "dark-operator-inventory":
         from .inventory_resolver import resolve_inventory
         raw = resolve_inventory(raw, source_path=path).document
+    else:
+        # Runtime image versions are an installed release property, not an
+        # operator choice. Keep legacy full inventories on the same central
+        # image set as compact inventories and discard the former Besu pin.
+        from .catalogs import get_catalog
+        raw["images"] = dict(get_catalog("dark-platform-baseline-v1.0").document["images"])
+        raw.get("blockchain", {}).pop("besu_image", None)
     return validate_inventory(raw)
 
 
@@ -161,6 +168,14 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
     if not isinstance(raw, dict):
         raise _error("root must be an object")
     _validate_schema(raw)
+
+    images = _object(raw["images"], "images")
+    required_images = {"besu", "postgres", "mysql", "redis", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"}
+    _only_keys(images, "images", required_images)
+    if set(images) != required_images:
+        raise _error("images must declare every managed runtime image")
+    for image_id, image in images.items():
+        _string(image, f"images.{image_id}")
 
     infrastructure = _object(raw["infrastructure"], "infrastructure")
     _only_keys(infrastructure, "infrastructure", {"besu", "ipfs", "cluster", "web"})
@@ -723,7 +738,7 @@ def _validate_domain(
                 if network not in machine_by_id[peer.machine_id].addresses:
                     raise _error(f"services.{peer.id} requires {network} for cross-host {policy} P2P")
     blockchain = _object(raw["blockchain"], "blockchain")
-    _only_keys(blockchain, "blockchain", {"chain_id", "besu_image", "nodes", "qbft", "artifact", "primary_rpc", "observer_max_block_lag"})
+    _only_keys(blockchain, "blockchain", {"chain_id", "nodes", "qbft", "artifact", "primary_rpc", "observer_max_block_lag"})
     observer_max_block_lag = blockchain.get("observer_max_block_lag", 1)
     if not isinstance(observer_max_block_lag, int) or isinstance(observer_max_block_lag, bool) or observer_max_block_lag < 0:
         raise _error("blockchain.observer_max_block_lag must be a non-negative integer")

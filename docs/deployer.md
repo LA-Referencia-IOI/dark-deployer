@@ -116,7 +116,7 @@ machines. The group boundary is retained in the rendered plan.
 ## Compact operator inventory
 
 The compact format uses `format: "dark-operator-inventory"` and
-`format_version: 2`. It selects the parameterized `dark-standard-1` catalogue and
+`format_version: 2`. It selects the parameterized `dark-platform-baseline-v1.0` catalogue and
 records the decisions that normally change between installations:
 
 - `deployment`: stable ID and label;
