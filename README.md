@@ -147,6 +147,11 @@ venv/bin/python deploy.py install \
 The generator never silently replaces `blockchain/master-wallet.txt`. If it
 already exists, the installer asks whether it should be reused.
 
+After `verify`, run the [local-ha acceptance notebook](notebooks/scenarios/local-ha-deposit-lifecycle.ipynb)
+to exercise a complete deposit through the gateway and inspect the resulting
+private storage replication. The [notebook index](notebooks/README.md) explains
+the distinction between scenario acceptance and the generic API notebooks.
+
 ## Create and inspect an inventory
 
 Creating an editable template copy is optional:
