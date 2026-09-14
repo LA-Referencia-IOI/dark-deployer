@@ -152,6 +152,8 @@ to exercise a complete deposit through the gateway and inspect the resulting
 private storage replication. The [notebook index](notebooks/README.md) explains
 the distinction between scenario acceptance and the generic API notebooks.
 
+For the distributed Lima lab, use the [Lima five-host acceptance notebook](notebooks/scenarios/lima-five-host-deposit-lifecycle.ipynb) after its own `verify`.
+
 ## Create and inspect an inventory
 
 Creating an editable template copy is optional:
