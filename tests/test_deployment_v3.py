@@ -17,7 +17,7 @@ from deployment_v3.planner import build_plan
 from deployment_v3.render import render_plan
 from deployment_v3.inventory_editor.textual_app import SECTIONS, SECTION_HELP
 from deployment_v3.inventory_resolver import OperatorInventoryError, resolve_inventory_path
-from deployment_v3.executor import CommandResult
+from deployment_v3.executor import CommandResult, LocalExecutor
 from deployment_v3 import runner as runner_module
 from deployment_v3 import cli as cli_module
 from deployment_v3.secrets import initialize_greenfield_secrets
@@ -28,6 +28,38 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentV3Tests(unittest.TestCase):
+    def _prepare_lifecycle_bundle(self, plan, project_root: Path, service_id: str) -> Path:
+        root = project_root / ".generated" / "deployment-v3" / plan.deployment_id
+        render_plan(plan, root / "bundle")
+        effective = runner_module._effective_plan(plan, project_root, root)
+        service = effective.service(service_id)
+        machine = effective.machine(service.machine_id)
+        compose = runner_module._compose_directory(effective, machine, root, service_id) / "compose.yaml"
+        if machine.execution == "local":
+            compose.parent.mkdir(parents=True, exist_ok=True)
+            compose.write_text("services: {}\n")
+        return root
+
+    class _RecordingLocalExecutor(LocalExecutor):
+        def __init__(self):
+            self.calls = []
+
+        def run(self, argv, *, timeout=30.0):
+            command = tuple(argv)
+            self.calls.append((command, timeout))
+            stdout = "container-id\n" if command[:3] == ("docker", "ps", "-aq") else ""
+            return CommandResult(command, 0, stdout, "")
+
+    class _RecordingRemoteExecutor:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, argv, *, timeout=30.0):
+            command = tuple(argv)
+            self.calls.append((command, timeout))
+            stdout = "container-id\n" if command[:3] == ("docker", "ps", "-aq") else ""
+            return CommandResult(command, 0, stdout, "")
+
     def test_contract_artifacts_are_mounted_from_the_rendered_apps_group(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
         service = next(item for item in plan.services if item.type == "contracts-deploy")
@@ -641,6 +673,130 @@ class DeploymentV3Tests(unittest.TestCase):
             path.write_text(json.dumps(document))
             with self.assertRaisesRegex(InventoryError, "neither shared nor routed"):
                 build_plan(path)
+
+    def test_service_recreate_build_uses_exact_labels_and_compose_project(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        executor = self._RecordingLocalExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            root = self._prepare_lifecycle_bundle(plan, project_root, "store-api")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                result = runner_module.manage_service(plan, project_root, "recreate", "service:store-api", build=True)
+            status = json.loads((root / "status.json").read_text())
+        self.assertEqual(result["project"], "dark-operator-local-ha-local-apps")
+        labels = next(command for command, _ in executor.calls if command[:3] == ("docker", "ps", "-aq"))
+        self.assertIn("label=com.docker.compose.project=dark-operator-local-ha-local-apps", labels)
+        self.assertIn("label=com.docker.compose.service=store-api", labels)
+        recreate = executor.calls[-1][0]
+        self.assertIn("up", recreate)
+        self.assertIn("--force-recreate", recreate)
+        self.assertIn("--build", recreate)
+        self.assertEqual(status["services"]["store-api"], "applied")
+
+    def test_service_lifecycle_targets_the_resolved_remote_owner(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-six-host.json")
+        executor = self._RecordingRemoteExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "store-api-resolver")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                result = runner_module.manage_service(plan, project_root, "restart", "service:store-api-resolver")
+        self.assertEqual(result["machine"], "resolver")
+        self.assertEqual(result["group"], "resolver")
+        self.assertEqual(result["project"], "dark-operator-production-six-resolver-resolver")
+        self.assertTrue(any(command[-2:] == ("restart", "store-api-resolver") for command, _ in executor.calls))
+
+    def test_service_lifecycle_rejects_ambiguous_or_one_shot_targets(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "contracts-deploy")
+            with self.assertRaisesRegex(runner_module.ApplyError, "target must use the exact form"):
+                runner_module.manage_service(plan, project_root, "stop", "store-api")
+            with self.assertRaisesRegex(runner_module.ApplyError, "one-shot"):
+                runner_module.manage_service(plan, project_root, "stop", "service:contracts-deploy")
+
+    def test_service_lifecycle_dry_run_does_not_touch_docker(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        executor = self._RecordingLocalExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            root = self._prepare_lifecycle_bundle(plan, project_root, "store-api")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                result = runner_module.manage_service(plan, project_root, "stop", "service:store-api", dry_run=True)
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(executor.calls, [])
+        self.assertFalse((root / "status.json").exists())
+
+    def test_service_lifecycle_uses_deployed_snapshot_when_working_plan_changes(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        changed = json.loads(json.dumps(plan.raw))
+        changed["settings"]["minter"]["shoulder"] = "201"
+        changed_plan = runner_module.build_plan_document(changed, ROOT / "changed.json")
+        executor = self._RecordingLocalExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "store-api")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                result = runner_module.manage_service(changed_plan, project_root, "stop", "service:store-api")
+        self.assertEqual(result["deployment_id"], plan.deployment_id)
+        self.assertTrue(any(command[-2:] == ("stop", "store-api") for command, _ in executor.calls))
+
+    def test_service_listing_reads_runtime_labels_and_exposes_exact_actions(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-six-host.json")
+
+        class RuntimeExecutor(self._RecordingRemoteExecutor):
+            def run(self, argv, *, timeout=30.0):
+                command = tuple(argv)
+                self.calls.append((command, timeout))
+                project = command[4] if len(command) > 4 and command[:3] == ("docker", "ps", "-a") else ""
+                if project.endswith("-resolver-resolver"):
+                    return CommandResult(command, 0, "store-api-resolver\trunning\tUp 10 seconds\nresolver-api\texited\tExited (1)\n", "")
+                return CommandResult(command, 0, "", "")
+
+        executor = RuntimeExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "store-api-resolver")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                rows = runner_module.list_managed_services(plan, project_root)
+        by_service = {row["service"]: row for row in rows}
+        store = by_service["store-api-resolver"]
+        resolver = by_service["resolver-api"]
+        self.assertEqual(store["state"], "running")
+        self.assertEqual(store["description"], "Store API local para resolver-api")
+        self.assertEqual(store["actions"], ["stop", "start", "restart", "recreate", "remove"])
+        self.assertEqual(resolver["state"], "exited")
+        self.assertEqual(by_service["minter-api"]["state"], "missing")
+        self.assertEqual(by_service["contracts-deploy"]["actions"], [])
+        self.assertEqual(store["deployment_id"], plan.deployment_id)
+
+    def test_managed_deployment_listing_summarizes_runtime_state(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        class RuntimeExecutor(self._RecordingLocalExecutor):
+            def run(self, argv, *, timeout=30.0):
+                command = tuple(argv)
+                self.calls.append((command, timeout))
+                if command[:3] == ("docker", "ps", "-a"):
+                    return CommandResult(command, 0, "store-api\trunning\tUp 10 seconds\n", "")
+                return super().run(argv, timeout=timeout)
+
+        executor = RuntimeExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "store-api")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                deployments = runner_module.list_managed_deployments(project_root)
+        self.assertEqual(deployments[0]["deployment_id"], plan.deployment_id)
+        self.assertEqual(deployments[0]["state"], "degraded")
+
+    def test_compose_labels_identify_managed_deployment_and_service(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        spec = compose_document(plan, plan.machine("local"), tuple(plan.services))
+        self.assertEqual(spec["services"]["store-api"]["labels"], {
+            "org.dark.deployment.id": plan.deployment_id,
+            "org.dark.service.id": "store-api",
+        })
 
 
 if __name__ == "__main__": unittest.main()

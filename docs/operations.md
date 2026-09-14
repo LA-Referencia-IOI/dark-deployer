@@ -64,6 +64,59 @@ volumes and bind-mounted data. Never delete production data automatically;
 cleanup of a local experiment must explicitly target only the inventory's
 projects and volumes.
 
+### Exact service lifecycle
+
+Use `deploy.py deployments` to list the locally known managed deployments, then
+call `stop`, `start`, `restart`, `recreate`, or `remove` with `--deployment ID`
+and `--target service:ID`. The deployer resolves the service's machine, group
+and Compose project from the reviewed deployment bundle, verifies the matching
+Docker Compose labels, and then executes locally or through SSH. `recreate
+--build` rebuilds from the current deployed Compose build context; it is the
+appropriate operation after a source-code change. `remove` preserves all
+bind-mounted data, volumes and networks. These commands intentionally do not
+provide automatic data deletion.
+
+Use `deploy.py services --deployment ID` first to query Docker on every managed
+local or SSH host. It lists the deployment ID, each exact `service:ID` selector,
+its runtime state, type, owner machine, group, functional description and the
+lifecycle operations currently valid for it. `--json` is intended for scripts.
+The legacy `--inventory FILE` form only locates the deployment ID; the deployed
+topology snapshot remains the authority for both listing and mutations.
+
+### Recreate versus apply
+
+Use `recreate` when the deployed topology remains correct and only one
+container must be replaced. Run it without `--build` to recreate from the
+existing image and deployed Compose configuration:
+
+```bash
+venv/bin/python deploy.py recreate \
+  --deployment dark-operator-local-ha \
+  --target service:explorer
+```
+
+Add `--build` after changing source code for a service that has a `build:`
+definition. The build context is the checkout path embedded in the deployed
+Compose file, so this rebuilds code while preserving the deployed environment,
+ports, volumes, secrets and service placement:
+
+```bash
+venv/bin/python deploy.py recreate \
+  --deployment dark-operator-local-ha \
+  --target service:explorer \
+  --build
+```
+
+Use `--dry-run` before either command to show the resolved deployment, machine,
+group, Compose project and file without contacting Docker for a mutation.
+
+Do not use `recreate` to apply a changed inventory. Changes to generated
+environment, ports, image declarations, service connections, secret consumers,
+placement or networking require inventory review followed by `apply` (or the
+full `install` workflow). In short, `recreate` replaces one runtime container;
+`recreate --build` also rebuilds its code image; `apply` creates a new deployed
+configuration revision.
+
 ## Production layout
 
 The normal five-host deployment has apps, blockchain-a, blockchain-b and two

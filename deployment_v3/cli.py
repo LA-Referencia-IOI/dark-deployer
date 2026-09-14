@@ -18,7 +18,7 @@ from .inventory import InventoryError, load_inventory
 from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
-from .runner import ApplyError, _effective_plan, apply, existing_chain_data, persistent_data_inventory, push, recreate_service
+from .runner import ApplyError, _effective_plan, apply, existing_chain_data, list_managed_deployments, list_managed_services, manage_service, managed_plan, persistent_data_inventory, push
 from .artifacts import ArtifactError, export_chain_group, initialize_chain, verify_artifact_compatibility, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
@@ -33,11 +33,19 @@ from .availability import analyze as analyze_availability
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "recreate", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain"):
+    operational = {"services", "stop", "start", "restart", "recreate", "remove"}
+    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "services", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain"):
         command = actions.add_parser(name)
-        command.add_argument("--inventory", required=True, type=Path)
+        if name in operational:
+            source = command.add_mutually_exclusive_group(required=True)
+            source.add_argument("--inventory", type=Path, help="inventory used to locate the managed deployment")
+            source.add_argument("--deployment", help="managed deployment ID")
+        else:
+            command.add_argument("--inventory", required=True, type=Path)
         if name == "plan":
             command.add_argument("--json", action="store_true")
+        if name == "services":
+            command.add_argument("--json", action="store_true", help="emit the runtime service list as JSON")
         if name == "render":
             command.add_argument("--output", required=True, type=Path)
         if name == "inventory-resolve":
@@ -73,8 +81,11 @@ def _parser() -> argparse.ArgumentParser:
         if name in {"apply", "resume"}:
             command.add_argument("--clean-empty-network-conflicts", action="store_true",
                                  help="remove only empty Docker bridge networks that overlap the requested deployment subnet")
+        if name in {"stop", "start", "restart", "recreate", "remove"}:
+            command.add_argument("--target", help="exact managed service selector: service:ID")
+            command.add_argument("--dry-run", action="store_true", help="show the resolved target without changing Docker")
         if name == "recreate":
-            command.add_argument("--service", required=True)
+            command.add_argument("--service", help="deprecated alias for --target service:ID")
             command.add_argument("--build", action="store_true")
         if name == "chain-bootstrap":
             command.add_argument("--output", required=True, type=Path)
@@ -96,6 +107,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--output", required=True, type=Path)
         if name == "chain-verify":
             command.add_argument("--artifact-root", required=True, type=Path)
+    deployments = actions.add_parser("deployments", help="list locally known managed deployments and live summaries")
+    deployments.add_argument("--json", action="store_true", help="emit deployment summaries as JSON")
     create = actions.add_parser("inventory-create", help="create an inventory from a maintained template")
     create.add_argument("--template", required=True, choices=template_names())
     create.add_argument("--output", required=True, type=Path)
@@ -461,6 +474,21 @@ def _inventory_changes(before: dict, after: dict) -> dict:
     return result
 
 
+def _operational_plan(args, project_root: Path):
+    if args.deployment:
+        return managed_plan(project_root, args.deployment)
+    return build_plan(args.inventory)
+
+
+def _print_table(headers, rows) -> None:
+    values = [headers, *rows]
+    widths = [max(len(str(row[index])) for row in values) for index in range(len(headers))]
+    for index, row in enumerate(values):
+        print("  ".join(str(value).ljust(widths[column]) for column, value in enumerate(row)))
+        if index == 0:
+            print("  ".join("-" * width for width in widths))
+
+
 def main() -> None:
     args = _parser().parse_args()
     try:
@@ -497,6 +525,17 @@ def main() -> None:
             changes = _inventory_changes(before, after)
             print(json.dumps(changes, indent=2, sort_keys=True))
             return
+        project_root = Path(__file__).resolve().parents[1]
+        if args.action == "deployments":
+            deployments = list_managed_deployments(project_root)
+            if args.json:
+                print(json.dumps(deployments, indent=2, sort_keys=True))
+            else:
+                _print_table(("DEPLOYMENT", "STATE", "SERVICES", "RUNNING", "DETAIL"), [
+                    (item["deployment_id"], item["state"], item["services"], item["running"], item["detail"] or "-")
+                    for item in deployments
+                ])
+            return
         if args.action == "validate":
             raw, machines, services, _ = load_inventory(args.inventory)
             print(f"[OK] {raw['deployment']['id']}: {len(machines)} machine(s), {len(services)} service(s).")
@@ -508,7 +547,7 @@ def main() -> None:
             for warning in availability.warnings:
                 print(f"[WARN] {warning}")
             return
-        plan = build_plan(args.inventory)
+        plan = _operational_plan(args, project_root) if args.action in {"services", "stop", "start", "restart", "recreate", "remove"} else build_plan(args.inventory)
         if args.action == "preflight":
             result = {machine.id: run_preflight(machine) for machine in plan.machines}
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -530,13 +569,29 @@ def main() -> None:
                 for step in plan.steps:
                     print(f"{step.id}: {step.description}")
             return
+        if args.action == "services":
+            services = list_managed_services(plan, project_root)
+            if args.json:
+                print(json.dumps(services, indent=2, sort_keys=True))
+            else:
+                headers = ("DEPLOYMENT", "TARGET", "TYPE", "MACHINE", "GROUP", "STATE", "ACTIONS", "DESCRIPTION", "DETAIL")
+                values = [
+                    (item["deployment_id"], item["target"], item["type"], item["machine"], item["group"] or "-", item["state"], ",".join(item["actions"]) or "-", item["description"], item["detail"])
+                    for item in services
+                ]
+                _print_table(headers, values)
+            return
         if args.action == "install":
             _install(args, plan)
             return
-        if args.action == "recreate":
-            project_root = Path(__file__).resolve().parents[1]
-            recreate_service(plan, project_root, args.service, build=args.build)
-            print(f"[OK] Recreated service {args.service}")
+        if args.action in {"stop", "start", "restart", "recreate", "remove"}:
+            if args.action == "recreate" and args.service and args.target:
+                raise ValueError("use either --service or --target, not both")
+            target = args.target or (f"service:{args.service}" if args.action == "recreate" and args.service else None)
+            if not target:
+                raise ValueError("--target service:ID is required")
+            result = manage_service(plan, project_root, args.action, target, build=getattr(args, "build", False), dry_run=args.dry_run)
+            print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.action == "push":
             project_root = Path(__file__).resolve().parents[1]

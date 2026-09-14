@@ -109,6 +109,14 @@ bundles; it contains a resolved v3 **inventory**, not a deployment-topology
 contract. The manifest hashes public artifacts. Secret values and private
 artifact fragments are absent.
 
+The deployed bundle is also the authority for runtime service operations.
+`deploy.py deployments` lists locally known deployment IDs, and the read-only
+`deploy.py services --deployment ID` command uses the selected topology snapshot
+to list exact `service:ID` selectors and valid actions on each managed host.
+Mutating commands (`stop`, `start`, `restart`, `recreate`, `remove`) resolve from
+that snapshot; an inventory can locate the deployment but does not redefine an
+active revision.
+
 The renderer translates the graph into only the variables each image needs.
 For example, Minter receives database, Store, RPC, chain, and worker settings;
 Kubo and Cluster receive their derived peers and bootstrap addresses; Store

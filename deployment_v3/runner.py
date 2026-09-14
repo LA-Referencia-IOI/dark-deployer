@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_executor, run_network_preflight, run_preflight
 from .model import DeploymentPlan
+from .planner import build_plan_document
 from .render import render_plan
 from .secrets import SecretError, distribute_secrets
 from .state import StateLockError, deployment_lock, record, run_root, write_status
@@ -553,4 +554,247 @@ def push(plan, project_root: Path):
 
 
 def recreate_service(plan, project_root: Path, service: str, *, build=False):
-    root=run_root(project_root,plan.deployment_id); effective=_effective_plan(plan,project_root,root); instance=effective.service(service); machine=effective.machine(instance.machine_id); executor=resolve_executor(machine); directory=_compose_directory(effective,machine,root,service); compose=("docker","compose","--project-name",_compose_project(effective,machine,service),"-f",str(directory / "compose.yaml")); _require(executor.run((*compose,"up","-d","--force-recreate",*(('--build',) if build else ()),service),timeout=1800),f"recreate {service}")
+    manage_service(plan, project_root, "recreate", f"service:{service}", build=build)
+
+
+_ONE_SHOT_SERVICE_TYPES = frozenset({"contracts-deploy", "minter-migrate", "dashboard-migrate"})
+_SERVICE_OPERATIONS = frozenset({"stop", "start", "restart", "recreate", "remove"})
+_SERVICE_TYPE_DESCRIPTIONS = {
+    "admin-api": "Administración de autoridades y configuración de cadena",
+    "besu-observer": "Nodo Besu observador sin voto QBFT",
+    "besu-rpc": "Nodo Besu que ofrece JSON-RPC",
+    "besu-validator": "Nodo Besu validador QBFT",
+    "contracts-deploy": "Job de despliegue de contratos",
+    "dashboard": "Panel de administración web",
+    "dashboard-migrate": "Job de migración del Dashboard",
+    "dashboard-mysql": "Base de datos MySQL del Dashboard",
+    "dashboard-redis": "Redis del Dashboard",
+    "edge-proxy": "Proxy HTTP/Nginx de entrada",
+    "explorer": "Explorador de blockchain",
+    "ipfs-cluster": "Controlador de replicación IPFS Cluster",
+    "ipfs-kubo": "Nodo de almacenamiento IPFS/Kubo",
+    "minter-api": "API de reserva y actualización de ARKs",
+    "minter-migrate": "Job de migración de Minter",
+    "minter-postgres": "Base de datos PostgreSQL de Minter",
+    "minter-worker": "Worker de procesamiento de Minter",
+    "resolver-api": "API de resolución de ARKs",
+    "store-api": "API de acceso al almacenamiento IPFS",
+}
+
+
+def _service_id_from_target(target: str) -> str:
+    """Accept only an exact, inventory-owned service selector."""
+    prefix = "service:"
+    if not isinstance(target, str) or not target.startswith(prefix) or not target[len(prefix):]:
+        raise ApplyError("target must use the exact form service:ID")
+    return target[len(prefix):]
+
+
+def _service_description(plan, service) -> str:
+    """Describe a typed service without repeating prose in every inventory."""
+    if service.type == "minter-worker":
+        worker = service.configuration.get("worker")
+        return f"Worker Minter de {worker}" if worker else _SERVICE_TYPE_DESCRIPTIONS[service.type]
+    if service.type == "store-api" and service.id != "store-api":
+        consumers = sorted(
+            candidate.id
+            for candidate in plan.services
+            if candidate.connections.get("store_api", {}).get("service") == service.id
+        )
+        if consumers:
+            return "Store API local para " + ", ".join(consumers)
+    return _SERVICE_TYPE_DESCRIPTIONS.get(service.type, service.type)
+
+
+def _lifecycle_actions(service, state: str) -> tuple[str, ...]:
+    if service.type in _ONE_SHOT_SERVICE_TYPES:
+        return ()
+    if state in {"missing", "unreachable", "ambiguous"}:
+        return ("recreate",) if state == "missing" else ()
+    return ("stop", "start", "restart", "recreate", "remove")
+
+
+def list_managed_services(plan, project_root: Path) -> list[dict[str, object]]:
+    """Read current Docker state for every inventory service on its owner host."""
+    root = run_root(project_root, plan.deployment_id)
+    deployed_plan = managed_plan(project_root, plan.deployment_id)
+    effective = _effective_plan(deployed_plan, project_root, root)
+    observed: dict[str, dict[str, str]] = {}
+    for group in effective.groups:
+        machine = effective.machine(group.machine_id)
+        project = _compose_project(effective, machine, group.service_ids[0] if group.service_ids else None)
+        command = (
+            "docker", "ps", "-a",
+            "--filter", f"label=com.docker.compose.project={project}",
+            "--format", '{{.Label "com.docker.compose.service"}}\\t{{.State}}\\t{{.Status}}',
+        )
+        result = resolve_executor(machine).run(command, timeout=30)
+        assigned = set(group.service_ids)
+        if result.returncode:
+            error = result.stderr.strip() or result.stdout.strip() or "Docker query failed"
+            for service_id in assigned:
+                observed[service_id] = {"state": "unreachable", "detail": error}
+            continue
+        for line in result.stdout.splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) != 3 or parts[0] not in assigned:
+                continue
+            service_id, state, detail = parts
+            if service_id in observed:
+                observed[service_id] = {"state": "ambiguous", "detail": "multiple containers match the managed labels"}
+            else:
+                observed[service_id] = {"state": state or "unknown", "detail": detail}
+    rows: list[dict[str, object]] = []
+    for service in sorted(effective.services, key=lambda item: item.id):
+        group = _group_for_service(effective, service.id)
+        runtime = observed.get(service.id, {"state": "missing", "detail": "no managed container found"})
+        rows.append({
+            "deployment_id": effective.deployment_id,
+            "target": f"service:{service.id}",
+            "service": service.id,
+            "type": service.type,
+            "description": _service_description(effective, service),
+            "machine": service.machine_id,
+            "group": group.id if group else None,
+            "state": runtime["state"],
+            "detail": runtime["detail"],
+            "actions": list(_lifecycle_actions(service, runtime["state"])),
+        })
+    return rows
+
+
+def _managed_snapshot(plan, root: Path) -> dict:
+    """Return the rendered topology that was actually prepared for this run."""
+    snapshot = root / "bundle" / "shared" / "deployment-topology.json"
+    if not snapshot.is_file():
+        raise ApplyError(f"no managed deployment bundle found for {plan.deployment_id}: {snapshot}")
+    try:
+        deployed = json.loads(snapshot.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ApplyError(f"managed deployment snapshot is invalid: {snapshot}") from exc
+    return deployed
+
+
+def managed_plan(project_root: Path, deployment_id: str):
+    """Load the authoritative plan for an existing managed deployment."""
+    root = run_root(project_root, deployment_id)
+    snapshot = root / "bundle" / "shared" / "deployment-topology.json"
+    if not snapshot.is_file():
+        raise ApplyError(f"no managed deployment bundle found for {deployment_id}: {snapshot}")
+    try:
+        deployed = json.loads(snapshot.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ApplyError(f"managed deployment snapshot is invalid: {snapshot}") from exc
+    return build_plan_document(deployed, snapshot)
+
+
+def list_managed_deployments(project_root: Path) -> list[dict[str, object]]:
+    """List locally known deployments and summarize their live managed services."""
+    root = project_root / ".generated" / "deployment-v3"
+    if not root.is_dir():
+        return []
+    rows: list[dict[str, object]] = []
+    for candidate in sorted(root.iterdir(), key=lambda item: item.name):
+        if not candidate.is_dir():
+            continue
+        try:
+            plan = managed_plan(project_root, candidate.name)
+            services = list_managed_services(plan, project_root)
+        except ApplyError as exc:
+            rows.append({"deployment_id": candidate.name, "state": "invalid", "services": 0, "running": 0, "detail": str(exc)})
+            continue
+        states = [str(item["state"]) for item in services]
+        running = sum(state == "running" for state in states)
+        if any(state == "unreachable" for state in states):
+            state = "unreachable"
+        elif running:
+            state = "active" if running == len([item for item in services if item["actions"]]) else "degraded"
+        else:
+            state = "inactive"
+        rows.append({"deployment_id": plan.deployment_id, "state": state, "services": len(services), "running": running, "detail": ""})
+    return rows
+
+
+def _lifecycle_target(plan, project_root: Path, target: str):
+    """Resolve a service to its one Compose project and execution host."""
+    service_id = _service_id_from_target(target)
+    root = run_root(project_root, plan.deployment_id)
+    deployed_plan = managed_plan(project_root, plan.deployment_id)
+    effective = _effective_plan(deployed_plan, project_root, root)
+    try:
+        service = effective.service(service_id)
+    except KeyError as exc:
+        raise ApplyError(f"target service is not declared by deployment {plan.deployment_id}: {service_id}") from exc
+    if service.type in _ONE_SHOT_SERVICE_TYPES:
+        raise ApplyError(f"{service_id} is a one-shot {service.type} job and has no lifecycle operation")
+    machine = effective.machine(service.machine_id)
+    group = _group_for_service(effective, service.id)
+    if group is None:
+        raise ApplyError(f"service {service.id} is not assigned to a deployment group")
+    directory = _compose_directory(effective, machine, root, service.id)
+    project = _compose_project(effective, machine, service.id)
+    return root, effective, service, machine, group, directory, project
+
+
+def _write_lifecycle_state(root: Path, deployment_id: str, service_id: str, action: str, machine_id: str, project: str, *, dry_run: bool) -> None:
+    status_path = root / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.is_file() else {"deployment_id": deployment_id, "services": {}}
+    status.setdefault("services", {})[service_id] = "removed" if action == "remove" else "stopped" if action == "stop" else "applied"
+    operation = {"action": action, "service": service_id, "machine": machine_id, "project": project, "dry_run": dry_run}
+    status["last_service_operation"] = operation
+    write_status(root, status)
+    record(root, {"state": "planned" if dry_run else "succeeded", **operation})
+
+
+def manage_service(plan, project_root: Path, action: str, target: str, *, build: bool = False, dry_run: bool = False) -> dict[str, str | bool]:
+    """Run one exact lifecycle action through its resolved local or SSH executor.
+
+    Data bind mounts and Docker networks are deliberately outside this API.  A
+    target is always an inventory service ID, never a container name or host.
+    """
+    if action not in _SERVICE_OPERATIONS:
+        raise ApplyError(f"unsupported service operation: {action}")
+    if build and action != "recreate":
+        raise ApplyError("--build is valid only with recreate")
+    lock_root = run_root(project_root, plan.deployment_id)
+    with deployment_lock(lock_root):
+        root, effective, service, machine, group, directory, project = _lifecycle_target(plan, project_root, target)
+        executor = resolve_executor(machine)
+        compose = ("docker", "compose", "--project-name", project, "-f", str(directory / "compose.yaml"))
+        labels = (
+            "docker", "ps", "-aq",
+            "--filter", f"label=com.docker.compose.project={project}",
+            "--filter", f"label=com.docker.compose.service={service.id}",
+        )
+        resolved = {
+            "deployment_id": effective.deployment_id,
+            "service": service.id,
+            "machine": machine.id,
+            "group": group.id,
+            "project": project,
+            "compose_file": str(directory / "compose.yaml"),
+            "action": action,
+            "build": build,
+            "dry_run": dry_run,
+        }
+        if dry_run:
+            return resolved
+        _require(executor.run(("test", "-f", str(directory / "compose.yaml"))), f"locate managed Compose file for {service.id}")
+        containers = executor.run(labels)
+        _require(containers, f"inspect managed Docker labels for {service.id}")
+        matches = [item for item in containers.stdout.splitlines() if item.strip()]
+        if len(matches) > 1:
+            raise ApplyError(f"multiple managed containers match {service.id} in Compose project {project}")
+        if action in {"stop", "start", "restart", "remove"} and not matches:
+            raise ApplyError(f"no managed container found for {service.id} in Compose project {project}")
+        commands = {
+            "stop": (*compose, "stop", service.id),
+            "start": (*compose, "start", service.id),
+            "restart": (*compose, "restart", service.id),
+            "recreate": (*compose, "up", "-d", "--force-recreate", *(('--build',) if build else ()), service.id),
+            "remove": (*compose, "rm", "--stop", "--force", service.id),
+        }
+        timeout = 1800 if action == "recreate" and build else 120
+        _require(executor.run(commands[action], timeout=timeout), f"{action} {service.id}")
+        _write_lifecycle_state(root, effective.deployment_id, service.id, action, machine.id, project, dry_run=False)
+        return resolved

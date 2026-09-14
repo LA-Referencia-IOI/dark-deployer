@@ -56,9 +56,18 @@ These inspection commands are offline. They do not access Docker, SSH, Git or
 secret contents. `inventory-resolve` refuses to overwrite its output.
 
 Remote deployments use `push`, then `apply`; `resume` continues an interrupted
-run. `recreate --service <service> --build` rebuilds one service without
+run. `deployments` lists locally known managed deployments and `services` lists
+runtime state and valid actions for one `--deployment ID`. Lifecycle commands
+use `--target service:ID`: `stop`, `start`, `restart`, `recreate` and `remove`.
+`recreate --build` rebuilds one service from its current Compose context without
 restarting other services on its machine. `--skip-acquire` reuses prepared
 checkouts.
+
+`recreate` reads the deployed bundle rather than re-rendering an inventory.
+Without `--build` it replaces one container using the existing image; with
+`--build` it builds from the checkout path in the deployed Compose file. It does
+not propagate changed environment files, ports, routes, placement, dependencies
+or secrets. Those changes require a reviewed `apply` or `install`.
 
 ## Acquisition and safety
 
@@ -107,6 +116,12 @@ never removed automatically.
 The default order is validators, RPC quorum, contracts, storage peers, data
 services, applications, and the edge proxy. `recreate` targets one service
 while preserving persistent data; `resume` revalidates uncertain phase gates.
+
+The read-only `services` command uses the deployed topology snapshot and reports
+the deployment ID, exact selector, description, owner machine, group, runtime
+state and valid actions. Mutable lifecycle operations use that same snapshot;
+the working inventory is an optional compatible locator, not the authority over
+an active deployment.
 
 The recommended HA shape is five logical server groups: `apps`,
 `blockchain-a`, `blockchain-b`, `storage-1` and `storage-2`. Local Docker may

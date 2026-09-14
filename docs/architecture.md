@@ -61,6 +61,12 @@ status reads heartbeats only and always reports metadata, replication and chain.
 Full diagnostics are explicit and bounded: they include queues, infrastructure,
 wait reasons, batch metrics and error summaries without unbounded ARK scans.
 
+Deployment operations are service-scoped: `deploy.py deployments` lists managed
+deployment IDs, and `deploy.py services --deployment ID` lists exact managed
+`service:ID` selectors and valid actions. `stop`, `start`, `restart`,
+`recreate` and `remove` operate from the deployed bundle on one resolved Compose
+service at a time. `remove` does not remove persistent data, volumes or networks.
+
 ## Chain
 
 Besu uses QBFT with chain ID 2025 by default. The operator inventory declares

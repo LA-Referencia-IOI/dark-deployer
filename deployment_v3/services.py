@@ -141,5 +141,9 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             result[service.id] = {**common, "image": images["edge_proxy"], "ports": _ports(machine, service), "volumes": volumes}
         elif service.type in {"contracts-deploy", "rpc-probe"}:
             result[service.id] = {**common, "profiles": ["setup"], "build": {"context": machine.workspace_root, "dockerfile": "deployment_v3/Dockerfile.contracts"}, "env_file": env, "volumes": [f"{secret_path('contract-signer')}:/run/secrets/contract-signer:ro", "./artifacts/contracts:/contracts:ro", f"{data}/contracts:/runtime"]}
+        result[service.id]["labels"] = {
+            "org.dark.deployment.id": plan.deployment_id,
+            "org.dark.service.id": service.id,
+        }
     project = f"{plan.deployment_id}-{machine.id}" + (f"-{group_id}" if group_id else "")
     return {"name": project, "services": result, "networks": {network: {"name": network, "external": True}}}

@@ -264,9 +264,15 @@ To rebuild one service without restarting all services on its machine:
 ```bash
 venv/bin/python deploy.py recreate \
   --inventory inventory.json \
-  --service dashboard \
+  --target service:dashboard \
   --build
 ```
+
+Use `deploy.py deployments` to list known managed deployments. Then use
+`deploy.py services --deployment DEPLOYMENT_ID` to see exact managed selectors,
+runtime state, descriptions and valid lifecycle actions. The
+operations `stop`, `start`, `restart`, `recreate` and `remove` act on one
+`service:ID`; `remove` never deletes volumes, persistent data or networks.
 
 ## Networking and exposure
 
@@ -360,8 +366,11 @@ payload cleanup are later worker activity, not part of a client HTTP request.
 | `install` | Coordinate acquisition, preparation, application, and verification |
 | `resume` | Continue an interrupted execution |
 | `status` | Show a concise operational status |
+| `deployments` | List locally known managed deployments and their live summaries |
+| `services` | List current managed service states, descriptions, and valid lifecycle actions |
 | `verify` | Run functional and infrastructure verification |
 | `recreate` | Rebuild/recreate one specific service |
+| `stop`, `start`, `restart`, `remove` | Operate on one exact managed service, locally or through its configured SSH host |
 | `inventory-create` | Create a copy from a maintained template |
 | `inventory-edit` | Edit an inventory with Textual |
 | `inventory-resolve` | Expand operator v2 to v3 |
@@ -376,6 +385,43 @@ Check command-specific help before using operational options:
 venv/bin/python deploy.py install --help
 venv/bin/python deploy.py apply --help
 venv/bin/python deploy.py chain-init --help
+```
+
+Service lifecycle commands take a selector from the deployed bundle, never a
+Docker container name. List managed deployments first, then inspect services:
+
+```bash
+venv/bin/python deploy.py deployments
+venv/bin/python deploy.py services --deployment dark-operator-local-ha
+```
+
+The historical `--inventory inventory.json` form remains available to locate a
+deployment ID. For example, rebuild a changed service from its current source
+and deployed Compose context with:
+
+```bash
+venv/bin/python deploy.py recreate --inventory inventory.json \
+  --target service:store-api-resolver --build
+```
+
+`recreate` without `--build` replaces one container using the existing image and
+deployed configuration. `recreate --build` rebuilds a service with a `build:`
+context from the checkout referenced by that deployed Compose file. Neither
+command applies inventory changes: altered ports, generated environment,
+connections, placement, images or secrets require a reviewed `apply`. Always
+start with `--dry-run` when selecting a service in an active deployment.
+
+`stop`, `start`, and `restart` preserve containers and data. `remove` removes
+only the managed container; it never removes persistent bind-mounted data,
+Docker volumes, or networks. Every operation requires the reviewed deployment
+bundle, validates the exact Compose labels, and supports `--dry-run`.
+
+List the runtime state and exact selectors available for lifecycle operations:
+
+```bash
+venv/bin/python deploy.py services --inventory inventory.json
+venv/bin/python deploy.py services --inventory inventory.json --json
+venv/bin/python deploy.py services --deployment dark-operator-local-ha --json
 ```
 
 ## Essential documentation

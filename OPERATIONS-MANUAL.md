@@ -216,13 +216,76 @@ Confirm block production, the expected Besu nodes, storage peers, API health, an
 
 The depositing application must not wait for IPFS or blockchain inside its web request. It stores the ARK and checks later through its own background task.
 
-To rebuild one service without restarting the rest of its machine:
+First list known managed deployments, then the services and exact selectors on
+the deployed hosts:
+
+```bash
+venv/bin/python deploy.py deployments
+venv/bin/python deploy.py services --deployment dark-operator-local-ha
+venv/bin/python deploy.py services --inventory inventory.json
+venv/bin/python deploy.py services --inventory inventory.json --json
+```
+
+To operate one service without touching the rest of its machine, use its exact
+`service:ID` selector:
 
 ```bash
 venv/bin/python deploy.py recreate \
   --inventory inventory.json \
-  --service dashboard --build
+  --target service:dashboard --build
 ```
+
+The supported operations are `stop`, `start`, `restart`, `recreate` and `remove`.
+`recreate --build` rebuilds from the current deployed Compose context. `remove`
+removes only the managed container and never deletes volumes, bind-mounted data
+or networks. Operations resolve services from the deployed snapshot and exact
+Compose labels, and accept `--dry-run`; a changed working inventory does not
+block operations on the already deployed revision.
+
+### Recreate a deployed service
+
+`recreate` is for replacing one container while retaining the deployed service
+definition. It reads the target machine, Compose project, Compose file, service
+identifier and declared runtime configuration from the active bundle; it does
+not render an inventory again and it does not change other services, volumes,
+bind-mounted data or Docker networks.
+
+First inspect the target and perform a dry run:
+
+```bash
+venv/bin/python deploy.py deployments
+venv/bin/python deploy.py services --deployment dark-operator-local-ha
+venv/bin/python deploy.py recreate \
+  --deployment dark-operator-local-ha \
+  --target service:explorer \
+  --dry-run
+```
+
+To recreate the existing image and configuration, omit `--build`:
+
+```bash
+venv/bin/python deploy.py recreate \
+  --deployment dark-operator-local-ha \
+  --target service:explorer
+```
+
+Use `--build` only after changing source code for a service whose deployed
+Compose definition has a `build:` context. Docker rebuilds that image from the
+current checkout referenced by the deployed Compose file, then recreates that
+single service:
+
+```bash
+venv/bin/python deploy.py recreate \
+  --deployment dark-operator-local-ha \
+  --target service:explorer \
+  --build
+```
+
+This does **not** import a changed inventory, regenerate environment files,
+change ports, move a service to another machine, alter dependency wiring or
+distribute new secrets. For any such declarative change, review the inventory
+and run `apply` (or `install`) with it. `recreate --build` is a code rebuild;
+`apply` is a configuration revision.
 
 ## 7. Recovery, evidence, and safety
 

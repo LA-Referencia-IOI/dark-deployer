@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .executor import LocalExecutor, resolve_executor
-from .inventory import groups_for_inventory, load_inventory
+from .inventory import groups_for_inventory, load_inventory, validate_inventory
 from .model import DeploymentPlan, PlanStep
 from .network import allocate_docker_subnets, derive_endpoints
 
@@ -42,8 +42,7 @@ def _layers(services, phase_order):
     return layers
 
 
-def build_plan(inventory_path: Path) -> DeploymentPlan:
-    raw, machines, services, networks = load_inventory(inventory_path)
+def _build_plan(raw, machines, services, networks, inventory_path: Path) -> DeploymentPlan:
     groups = groups_for_inventory(raw, machines, services)
     machines = tuple(replace(machine, execution="local" if isinstance(resolve_executor(machine), LocalExecutor) else "ssh") if machine.execution == "auto" else machine for machine in machines)
     steps = [PlanStep(f"preflight:{machine.id}", machine.id, "", "preflight", (), f"Validate {machine.id}") for machine in machines]
@@ -74,3 +73,14 @@ def build_plan(inventory_path: Path) -> DeploymentPlan:
             completed_phases.add(phase)
     steps.append(PlanStep("verify:deployment", machines[0].id, "", "verify", previous, "Verify deployment"))
     return DeploymentPlan(raw["deployment"]["id"], inventory_path.resolve(), machines, services, networks, derive_endpoints(machines, services, raw), allocate_docker_subnets(machines, raw), tuple(steps), raw, groups)
+
+
+def build_plan(inventory_path: Path) -> DeploymentPlan:
+    raw, machines, services, networks = load_inventory(inventory_path)
+    return _build_plan(raw, machines, services, networks, inventory_path)
+
+
+def build_plan_document(raw: dict, inventory_path: Path) -> DeploymentPlan:
+    """Build a plan from an already-resolved v3 deployment snapshot."""
+    canonical, machines, services, networks = validate_inventory(raw)
+    return _build_plan(canonical, machines, services, networks, inventory_path)
