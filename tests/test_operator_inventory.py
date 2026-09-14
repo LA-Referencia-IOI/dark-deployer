@@ -80,6 +80,15 @@ class InventoryEvolutionTests(unittest.TestCase):
         self.assertEqual(resolution.document["services"]["resolver-api"]["connections"]["rpc"]["service"], "observer01")
         self.assertNotIn("exposure", resolution.document["services"]["observer01"])
 
+    def test_store_api_replica_is_colocated_with_its_resolver_consumer(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "production-six-host.json").read_text())
+        resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
+        services = resolution.document["services"]
+        self.assertEqual(services["store-api-resolver"]["type"], "store-api")
+        self.assertEqual(services["store-api-resolver"]["machine"], "resolver")
+        self.assertEqual(services["resolver-api"]["connections"]["store_api"], {"service": "store-api-resolver"})
+        self.assertEqual(services["minter-api"]["connections"]["store_api"], {"service": "store-api"})
+
     def test_production_rejects_an_unmet_unacknowledged_objective(self):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "production-five-host.json").read_text())
         document["availability"]["objectives"] = ["rpc_redundant"]

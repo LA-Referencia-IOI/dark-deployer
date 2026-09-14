@@ -113,11 +113,10 @@ def verify(plan, project_root: Path) -> dict:
             report["services"][service.id]["cluster"]["ok"] = False
             report["services"][service.id]["cluster"]["error"] = "IPFS Cluster did not report any peers in a multi-peer topology"
             report["ok"] = False
-    store = next(item for item in effective.services if item.type == "store-api")
-    store_machine = effective.machine(store.machine_id)
     # The Store root deliberately returns 404; verify its write-readiness
     # aggregate and refresh the Cluster peer observation, as v2 did.
-    _append(report, store, "health", store_health_probe(effective, store_machine, root, store, refresh=True))
+    for store in (item for item in effective.services if item.type == "store-api"):
+        _append(report, store, "health", store_health_probe(effective, effective.machine(store.machine_id), root, store, refresh=True))
     worker_kind_cmd = {
         "metadata": "tr '\\0' ' ' < /proc/1/cmdline | grep -q metadata",
         "replication": "tr '\\0' ' ' < /proc/1/cmdline | grep -q replication",

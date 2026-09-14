@@ -112,7 +112,7 @@ additional synchronized chain copy, but they do not count towards quorum.
 | `local-ha.json` | `lab` | 1 | Logical HA groups and two storage copies on one Docker host |
 | `lima-five-host.json` | `lab` | 5 | Reproducible SSH distribution across Lima machines |
 | `production-five-host.json` | `production` | 5 | Apps, two blockchain domains, and two storage domains |
-| `production-six-host.json` | `production` | 6 | Dedicated public Resolver with a local observer and RPC |
+| `production-six-host.json` | `production` | 6 | Dedicated public Resolver with local observer, RPC and Store API |
 
 Production examples use documentation-reserved ranges and `REPLACE` values.
 Never run them until addresses, routes, SSH keys, public origins, artifacts, and
@@ -282,7 +282,9 @@ Kubo, and Cluster P2P ports.
 An `edge-proxy` is the normal public entry point. Proxy routes—not the mere
 existence of a backend—decide which services are published. The six-machine
 example exposes Resolver API at `/`, while `resolver-api` consumes the local
-`observer01` RPC inside Docker.
+`observer01` RPC and `store-api-resolver` inside Docker. The latter still
+queries the shared IPFS Cluster peers over the VPN, but does not depend on the
+`apps` host for Store API availability.
 
 When an empty Docker bridge network overlaps the requested subnet, `install`,
 `apply`, and `resume` can remove it only with

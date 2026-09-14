@@ -254,12 +254,15 @@ def check_phase(plan, project_root: Path, phase: str) -> tuple[bool, str]:
                     return False, f"{consumer.id} cannot reach {provider.id} Cluster API at {endpoint.url}"
         return _cluster_topology(effective, root, cluster)
     if phase == "data":
-        store = next(item for item in effective.services if item.type == "store-api")
+        stores = [item for item in effective.services if item.type == "store-api"]
         # Store's root is intentionally not a health endpoint (it returns
         # 404).  Probe the compatibility health aggregate, as the v2 runner
         # did, so a live Store is not misclassified during data readiness.
-        result = store_health_probe(effective, effective.machine(store.machine_id), root, store)
-        return result.returncode == 0, "Store API health is ready" if result.returncode == 0 else "Store API health did not respond"
+        for store in stores:
+            result = store_health_probe(effective, effective.machine(store.machine_id), root, store)
+            if result.returncode:
+                return False, f"{store.id} health did not respond"
+        return True, "Store API health is ready" if len(stores) == 1 else "Store API health is ready for all instances"
     if phase == "applications":
         return True, "application containers started; final verify performs HTTP and worker probes"
     return True, "no readiness gate"

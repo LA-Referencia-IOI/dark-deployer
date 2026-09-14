@@ -144,6 +144,12 @@
     "replication": {
       "publish_after_replicas": 1,
       "target_replicas": 2
+    },
+    "api_replicas": {
+      "store-api-resolver": {
+        "group": "resolver",
+        "consumers": ["resolver-api"]
+      }
     }
   },
   "proxies": {

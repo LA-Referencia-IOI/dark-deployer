@@ -71,10 +71,10 @@ class DeploymentV3Tests(unittest.TestCase):
             render_plan(plan, output)
             kubo = (output / "machines" / "storage-2" / "groups" / "storage-2" / "env" / "ipfs-storage-b.env").read_text()
             cluster = (output / "machines" / "storage-2" / "groups" / "storage-2" / "env" / "cluster-storage-b.env").read_text()
-        self.assertIn("IPFS_BOOTSTRAP_ENDPOINTS=/ip4/192.168.105.6/tcp/5001@4001", kubo)
-        self.assertIn("IPFS_ANNOUNCE_MULTIADDRESS=/ip4/192.168.105.7/tcp/4001", kubo)
-        self.assertIn("CLUSTER_BOOTSTRAP_ENDPOINTS=/ip4/192.168.105.6/tcp/9094@9096", cluster)
-        self.assertIn("CLUSTER_ANNOUNCE_MULTIADDRESS=/ip4/192.168.105.7/tcp/9096", cluster)
+        self.assertIn("IPFS_BOOTSTRAP_ENDPOINTS=/ip4/192.168.105.12/tcp/5001@4001", kubo)
+        self.assertIn("IPFS_ANNOUNCE_MULTIADDRESS=/ip4/192.168.105.13/tcp/4001", kubo)
+        self.assertIn("CLUSTER_BOOTSTRAP_ENDPOINTS=/ip4/192.168.105.12/tcp/9094@9096", cluster)
+        self.assertIn("CLUSTER_ANNOUNCE_MULTIADDRESS=/ip4/192.168.105.13/tcp/9096", cluster)
 
     def test_private_endpoint_can_advertise_a_nat_address_and_port(self):
         source = ROOT / "examples" / "deployment-v3" / "production-five-host.json"
@@ -471,6 +471,20 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertTrue(any(port.endswith("/tcp") for port in observer_ports))
         self.assertTrue(any(port.endswith("/udp") for port in observer_ports))
         self.assertFalse(any(":8545:" in port for port in observer_ports))
+
+    def test_production_six_host_places_resolver_on_local_store_api(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-six-host.json")
+        resolver = plan.service("resolver-api")
+        store = plan.service("store-api-resolver")
+        self.assertEqual(store.machine_id, resolver.machine_id)
+        self.assertEqual(resolver.connections["store_api"], {"service": store.id})
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "bundle"
+            render_plan(plan, output)
+            env = (output / "machines" / "resolver" / "groups" / "resolver" / "env" / "resolver-api.env").read_text()
+            storage = json.loads((output / "machines" / "resolver" / "groups" / "resolver" / "config" / "storage-endpoints.json").read_text())
+        self.assertIn("METADATA_STORE_API_URL=http://store-api-resolver:8003\n", env)
+        self.assertEqual({node["id"] for node in storage["nodes"]}, {"storage-a", "storage-b"})
 
     def test_data_readiness_probes_unexposed_store_from_its_container(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")

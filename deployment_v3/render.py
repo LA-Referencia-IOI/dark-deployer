@@ -238,14 +238,6 @@ def render_plan(plan: DeploymentPlan, output: Path) -> Path:
     for machine in plan.machines:
         assigned = tuple(service for service in plan.services if service.machine_id == machine.id)
         target = root / machine.id; target.mkdir(); (target / "env").mkdir(); (target / "config").mkdir()
-        nodes = []
-        store = next(item for item in plan.services if item.type == "store-api")
-        for cluster_connection in store.connections.values():
-            cluster = plan.service(cluster_connection["service"])
-            kubo = plan.service(cluster.connections["kubo"]["service"])
-            nodes.append({"id": cluster.configuration["peer_name"], "ipfs_api_url": _url(plan, store, kubo.id, cluster_connection), "cluster_api_url": _url(plan, store, cluster.id, cluster_connection)})
-        storage_payload = _json({"version": 1, "nodes": nodes})
-
         # Keep the aggregate machine bundle for compatibility, and also emit
         # one self-contained Compose project per logical server group. Group
         # projects share the machine bridge, so local Docker can simulate the
@@ -260,6 +252,13 @@ def render_plan(plan: DeploymentPlan, output: Path) -> Path:
             config_path = target_dir / "machine.json"; config_path.write_text(_json(config)); manifest[str(config_path.relative_to(output))] = _sha256(config_path)
             group_id = target_dir.name if target_dir.parent.name == "groups" else None
             compose_path = target_dir / "compose.yaml"; compose_path.write_text(_yaml(compose_document(plan, machine, target_services, group_id))); manifest[str(compose_path.relative_to(output))] = _sha256(compose_path)
+            store = next((service for service in target_services if service.type == "store-api"), next(service for service in plan.services if service.type == "store-api"))
+            nodes = []
+            for cluster_connection in store.connections.values():
+                cluster = plan.service(cluster_connection["service"])
+                kubo = plan.service(cluster.connections["kubo"]["service"])
+                nodes.append({"id": cluster.configuration["peer_name"], "ipfs_api_url": _url(plan, store, kubo.id, cluster_connection), "cluster_api_url": _url(plan, store, cluster.id, cluster_connection)})
+            storage_payload = _json({"version": 1, "nodes": nodes})
             (target_dir / "config" / "storage-endpoints.json").write_text(storage_payload)
             storage_path = target_dir / "config" / "storage-endpoints.json"; manifest[str(storage_path.relative_to(output))] = _sha256(storage_path)
             for service in target_services:

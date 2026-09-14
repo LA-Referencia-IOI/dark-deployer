@@ -123,7 +123,7 @@ records the decisions that normally change between installations:
 - `machines`: local or SSH hosts and their network addresses;
 - `placement`: the authoritative group-to-machine mapping;
 - `blockchain`: chain ID, RPC identity and validator group placement;
-- `storage`: peer IDs, peer groups and replica thresholds;
+- `storage`: peer IDs, peer groups, replica thresholds and optional local Store API replicas;
 - `networks`, `routes` and `routing`: networks, existing directional routes,
   and traffic choices used by remote traffic;
 - `networking`: optional NAT addresses and translated P2P ports;
@@ -159,6 +159,14 @@ The current catalogue supports dynamic validator groups, observer groups,
 multiple RPC nodes with an explicit primary, the Minter stack, dashboard,
 Store, and any positive number of storage peers. Node, group and peer names
 come from the operator inventory rather than a fixed catalogue topology.
+
+When a consumer must keep querying storage while the `apps` host is unavailable,
+`storage.api_replicas` can place another stateless Store API next to that
+consumer. Each replica declares its target group and the services whose
+`store_api` connection it replaces. Every Store API receives the same Cluster
+peer set; this improves application-path availability but does not create an
+additional IPFS data copy. `production-six-host.json` places
+`store-api-resolver` with `resolver-api` for that reason.
 
 Same-machine dependencies use Docker DNS. A remote dependency receives the
 network selected by `routing`, TCP, and a matching private provider exposure.

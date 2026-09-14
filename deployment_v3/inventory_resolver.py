@@ -147,6 +147,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     placement = _object(raw.get("placement"), "placement")
     blockchain = _object(raw.get("blockchain"), "blockchain")
     storage = _object(raw.get("storage"), "storage")
+    _only_keys(storage, "storage", {"cluster_name", "peers", "replication", "api_replicas"})
     peers = _object(storage.get("peers"), "storage.peers")
     if not peers:
         raise _fail("storage.peers must contain at least one peer")
@@ -288,7 +289,32 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
 
     result["groups"] = {}
     app_machine = group_machine("apps")
-    dynamic_ids = set(validators) | set(observers) | set(rpc_nodes) | {sid for sid, service in result["services"].items() if service["type"] in {"ipfs-kubo", "ipfs-cluster"}}
+    api_replicas = _object(storage.get("api_replicas", {}), "storage.api_replicas")
+    replica_groups: dict[str, str] = {}
+    for service_id, definition in api_replicas.items():
+        _identifier(service_id, f"storage.api_replicas.{service_id}")
+        if service_id in result["services"]:
+            raise _fail(f"storage.api_replicas.{service_id} duplicates a catalogue service")
+        definition = _object(definition, f"storage.api_replicas.{service_id}")
+        _only_keys(definition, f"storage.api_replicas.{service_id}", {"group", "consumers"})
+        group_id = definition.get("group")
+        if not isinstance(group_id, str):
+            raise _fail(f"storage.api_replicas.{service_id}.group is required")
+        group_machine(group_id)
+        consumers = definition.get("consumers")
+        if not isinstance(consumers, list) or not consumers or len(set(consumers)) != len(consumers):
+            raise _fail(f"storage.api_replicas.{service_id}.consumers must be a non-empty list of unique service IDs")
+        replica = deepcopy(result["services"]["store-api"])
+        for consumer_id in consumers:
+            if not isinstance(consumer_id, str) or consumer_id not in result["services"]:
+                raise _fail(f"storage.api_replicas.{service_id}.consumers references an unknown service")
+            connection = result["services"][consumer_id].get("connections", {}).get("store_api")
+            if connection is None:
+                raise _fail(f"storage.api_replicas.{service_id}.consumers may name only services with a store_api connection")
+            connection["service"] = service_id
+        result["services"][service_id] = replica
+        replica_groups[service_id] = group_id
+    dynamic_ids = set(validators) | set(observers) | set(rpc_nodes) | set(replica_groups) | {sid for sid, service in result["services"].items() if service["type"] in {"ipfs-kubo", "ipfs-cluster"}}
     group_services = {"apps": [sid for sid in result["services"] if sid not in dynamic_ids]}
     group_members = {"apps": []}
     for rpc_id, definition in rpc_nodes.items():
@@ -312,6 +338,9 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         suffix = peer_id.removeprefix("storage-")
         group_services.setdefault(group_id, []).extend([f"ipfs-storage-{suffix}", f"cluster-storage-{suffix}"])
         group_members.setdefault(group_id, []).append(peer_id)
+    for service_id, group_id in replica_groups.items():
+        group_services.setdefault(group_id, []).append(service_id)
+        group_members.setdefault(group_id, []).append(service_id)
     if "access" in raw and "proxies" in raw:
         raise _fail("access is a legacy compatibility field and cannot be combined with proxies")
     overrides = _object(raw.get("overrides", {}), "overrides")
@@ -459,16 +488,16 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     # Store obtains both Cluster and Kubo API URLs from each declared Cluster
     # edge.  v3's visible graph models only the Cluster edge, so add Kubo's
     # required private exposure here rather than relying on a stale example.
-    store = result["services"]["store-api"]
-    for connection in store.get("connections", {}).values():
-        cluster = result["services"][connection["service"]]
-        kubo_id = cluster["connections"]["kubo"]["service"]
-        kubo = result["services"][kubo_id]
-        if store["machine"] != kubo["machine"]:
-            network = connection["network"]
-            prior = required_network.setdefault(kubo_id, network)
-            if prior != network:
-                raise _fail(f"{kubo_id} needs incompatible private networks {prior} and {network}")
+    for store in (service for service in result["services"].values() if service["type"] == "store-api"):
+        for connection in store.get("connections", {}).values():
+            cluster = result["services"][connection["service"]]
+            kubo_id = cluster["connections"]["kubo"]["service"]
+            kubo = result["services"][kubo_id]
+            if store["machine"] != kubo["machine"]:
+                network = connection["network"]
+                prior = required_network.setdefault(kubo_id, network)
+                if prior != network:
+                    raise _fail(f"{kubo_id} needs incompatible private networks {prior} and {network}")
     for service_id, network in required_network.items():
         service = result["services"][service_id]
         port = _PORTS.get(service["type"])
