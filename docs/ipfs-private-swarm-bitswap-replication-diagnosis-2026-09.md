@@ -11,10 +11,10 @@ primero. El pin queda en `pinning` y termina con `pin_error` y `context
 canceled`.
 
 No es un problema de la cola de replication, de Store API ni de la asignación
-de Cluster. La recuperación falla antes: Kubo B encuentra a Kubo A como
-proveedor del CID, pero Bitswap no abre un stream hacia ese peer, no envía un
-WANT y no transfiere bytes. Por tanto, Cluster no puede materializar el pin que
-ya ha asignado.
+de Cluster. La recuperación falla en la transferencia: Kubo B encuentra a Kubo
+A como proveedor del CID y lo añade a la sesión Bitswap, pero no se observa la
+entrega de un WANT ni la transferencia de bytes. Por tanto, Cluster no puede
+materializar el pin que ya ha asignado.
 
 El escenario afectado tiene dos pares Kubo/IPFS Cluster en un único host Docker.
 Sirve para probar replicación lógica; no pretende ofrecer tolerancia ante la
@@ -79,7 +79,7 @@ docker exec <kubo-b> ipfs routing findprovs <cid> -n 1
 El segundo comando devolvió el peer ID de A. Por tanto, B conoce tanto el CID
 como el peer que lo sirve.
 
-### 3. Bitswap no inicia la transferencia
+### 3. Bitswap descubre el proveedor, pero no completa la transferencia
 
 Con el proveedor ya visible desde B:
 
@@ -89,13 +89,34 @@ docker exec <kubo-a> ipfs stats bitswap --human
 docker exec <kubo-b> ipfs stats bitswap --human
 ```
 
-El resultado fue `Error: context canceled`. Los dos `stats bitswap` siguieron
-con cero bloques y cero bytes enviados/recibidos; B no mantenía partners
-Bitswap. Al habilitar logs de depuración, A tampoco registró un WANT entrante.
+El resultado fue `Error: context canceled` al vencer el tiempo de espera de la
+prueba. Ese texto, por sí solo, no es una causa del incidente: también lo
+produce el propio comando `timeout` cuando la recuperación no ha terminado.
 
-Esto sitúa el fallo entre el descubrimiento de proveedor y la apertura del
-stream Bitswap. No es una espera normal de pinning: no hay transferencia en
-progreso.
+La traza de Bitswap aporta más información que el texto del error. En B se
+observó esta secuencia:
+
+```text
+No peers - broadcasting
+Found peer for CID
+Added peer to session
+availability -> true
+```
+
+Después de esa secuencia no se observó un stream Bitswap con transferencia, un
+WANT procesado por A ni bytes en los contadores. La conexión TCP/DHT de swarm
+sí permanece activa. La evidencia sitúa el problema en la transición entre el
+peer que la sesión considera disponible y la cola de mensajes o stream de
+Bitswap; todavía no identifica qué componente devuelve o provoca el bloqueo.
+
+Los dos `stats bitswap` permanecieron con cero bloques y cero bytes
+enviados/recibidos durante la prueba. Es una señal de que no hubo transferencia
+en esa ventana, no una prueba aislada de que la sesión nunca hubiera intentado
+conectar.
+
+Esto sitúa el fallo después del descubrimiento de proveedor y antes de una
+transferencia Bitswap observable. No se puede clasificar como una espera normal
+de pinning mientras los contadores sigan en cero y no haya un stream activo.
 
 ## Hipótesis descartadas
 
@@ -108,8 +129,8 @@ progreso.
 | CID sin proveedor anunciado | Descartada: B encuentra explícitamente a A mediante `findprovs`. |
 | Bitswap deshabilitado | Descartada: ambos nodos anuncian los protocolos y usan los defaults habilitados. |
 | Sólo afecta a Kubo 0.41 | Descartada como explicación suficiente: se reproduce con 0.42. |
-| Falta de peering persistente | No resuelve el fallo: se probó temporalmente y B siguió sin partners Bitswap. |
-| Reconectar bootstrap tras readiness | No resuelve el fallo y se retiró del entrypoint. |
+| Falta de peering persistente | No resuelve el fallo: se probó temporalmente y B siguió sin completar la transferencia. |
+| Reconectar bootstrap tras readiness | No resuelve el fallo de forma fiable y se retiró del entrypoint fuente. |
 
 ## Experimentos que no deben quedar como solución
 
@@ -123,6 +144,14 @@ Durante el diagnóstico se probaron temporalmente:
 Los cambios se revirtieron de los volúmenes de Kubo. No deben añadirse al
 inventario, al renderer ni a los entrypoints: no hicieron fiable la
 transferencia y algunos alteran innecesariamente el ciclo de vida del daemon.
+
+Durante la limpieza se detectó una diferencia entre el código fuente y el
+entorno generado. El entrypoint fuente ya no contiene el wrapper de
+reconexión, pero un bundle generado previamente puede conservar una copia en
+`.generated/.../sources/components/dark-ipfs/scripts/ipfs-entrypoint.sh`.
+Después de cambiar un entrypoint hay que regenerar o volver a publicar el
+bundle antes de recrear los contenedores; revisar sólo el archivo fuente no
+confirma qué script ejecuta Docker.
 
 ## Cómo reproducir y comprobar el problema
 
