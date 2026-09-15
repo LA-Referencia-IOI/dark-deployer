@@ -648,6 +648,8 @@ def _service_description(plan, service) -> str:
             if candidate.connections.get("store_api", {}).get("service") == service.id
         )
         if consumers:
+            if service.configuration.get("mode") == "read_only":
+                return "Store API de lectura local para " + ", ".join(consumers)
             return "Store API local para " + ", ".join(consumers)
     return _SERVICE_TYPE_DESCRIPTIONS.get(service.type, service.type)
 

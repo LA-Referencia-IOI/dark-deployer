@@ -5,8 +5,8 @@ six logical machines through one Docker daemon, with site-local LANs connected
 by a mesh VPN network.
 
 Use it to test site-aware routing, cross-site P2P, network-qualified endpoint
-aliases, a dedicated Resolver/observer placement, and storage replication across
-logical failure domains.
+aliases, two independent Resolver-observer bundles, and storage replication
+across logical failure domains.
 
 ## Shape
 
@@ -17,10 +17,14 @@ logical failure domains.
 - Networks: `site-a-lan`, `site-b-lan`, and `mesh-vpn`.
 - Blockchain: two validator groups, `blockchain-a` and `blockchain-b`, with 2
   validators each.
-- Observer: one `resolver-observer` group placed with Resolver.
+- Resolver-observer bundles: Site B has `observer01`, `resolver-api`, and its
+  read-only Store API reader; Site A has `observer02`, `resolver-api-site-a`,
+  and `store-api-reader-site-a` on `blockchain-a`.
 - RPC: one primary RPC named `rpc01`.
 - Storage: two Kubo/IPFS Cluster peers, one per storage group.
-- Proxy: loopback HTTP gateway on `localhost`.
+- Proxies: the existing loopback application gateway plus independent Resolver
+  endpoints at `http://localhost:8082/` (Site A) and
+  `http://localhost:8083/` (Site B).
 
 ## Parameters to change
 
@@ -29,12 +33,14 @@ logical failure domains.
   collides with an existing network.
 - `routing.defaults`, `routing.blockchain_p2p`, `routing.storage_p2p`, and
   `routing.storage_api` to choose LAN versus VPN paths.
-- `placement.resolver` and `placement.resolver-observer` to test Resolver near
-  or away from the observer RPC.
+- `placement.resolver-observer` and `placement.site-a-resolver-observer` to
+  move either Resolver bundle.
 - `blockchain.validator_groups` and `blockchain.observer_groups` to change
   validator and observer cardinality.
 - `storage.peers` and `storage.replication` for different replication shapes.
-- Proxy host, origin, listener, and routes for a different ingress layout.
+- Proxy host, origin, listener, and routes for a different ingress layout. The
+  two Resolver proxies use distinct ports because the lab shares one Docker
+  daemon.
 
 ## How to inspect
 

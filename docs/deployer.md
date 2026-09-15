@@ -138,7 +138,7 @@ records the decisions that normally change between installations:
 - `machines`: local or SSH hosts and their network addresses;
 - `placement`: the authoritative group-to-machine mapping;
 - `blockchain`: chain ID, RPC identity and validator group placement;
-- `storage`: peer IDs, peer groups, replica thresholds and optional local Store API replicas;
+- `storage`: peer IDs, peer groups, replica thresholds and optional local read-only Store API readers;
 - `networks`, `routes` and `routing`: networks, existing directional routes,
   and traffic choices used by remote traffic;
 - `networking`: optional NAT addresses and translated P2P ports;
@@ -178,13 +178,13 @@ multiple RPC nodes with an explicit primary, the Minter stack, dashboard,
 Store, and any positive number of storage peers. Node, group and peer names
 come from the operator inventory rather than a fixed catalogue topology.
 
-When a consumer must keep querying storage while the `apps` host is unavailable,
-`storage.api_replicas` can place another stateless Store API next to that
-consumer. Each replica declares its target group and the services whose
-`store_api` connection it replaces. Every Store API receives the same Cluster
-peer set; this improves application-path availability but does not create an
-additional IPFS data copy. `production-six-host.json` places
-`store-api-resolver` with `resolver-api` for that reason.
+When Resolver must keep retrieving content while the `apps` host is
+unavailable, `storage.readers` places a read-only Store API beside it. Each
+reader declares its target group and the Resolver services whose `store_api`
+connection it replaces. A reader receives only its own site's Cluster/Kubo
+endpoints; IPFS/Cluster P2P retrieves remote content when needed. It cannot
+publish content or alter pin allocations. `production-six-host.json` places
+`store-api-reader` with `resolver-api` for that reason.
 
 Same-machine dependencies use Docker DNS. A remote dependency receives the
 network selected by `routing`, TCP, and a matching private provider exposure.

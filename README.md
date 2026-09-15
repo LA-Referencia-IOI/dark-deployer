@@ -116,6 +116,8 @@ additional synchronized chain copy, but they do not count towards quorum.
 | [`local-observer.json`](examples/operator-inventory/local-observer.md) | `local` | 1 | A Besu observer and Resolver bound to its private RPC |
 | [`local-ha.json`](examples/operator-inventory/local-ha.md) | `lab` | 1 | Logical HA groups and two storage copies on one Docker host |
 | [`one-server-aws-sandbox.json`](examples/operator-inventory/one-server-aws-sandbox.md) | `lab` | 1 | Single-EC2 sandbox run locally on the server, with the local-ha service layout and public HTTP gateway |
+| [`aws-active-two-site-nine-host.json`](examples/operator-inventory/aws-active-two-site-nine-host.md) | `production` | 9 | AWS-active two-site shape: AWS retains QBFT quorum; the remote site preserves a chain and IPFS copy without application services |
+| [`aws-active-six-host.json`](examples/operator-inventory/aws-active-six-host.md) | `production` | 6 | AWS-only active site with applications, Resolver/observer, five validators, and two storage peers |
 | [`local-two-site.json`](examples/operator-inventory/local-two-site.md) | `lab` | 6 logical | Two isolated Docker LANs plus an inter-site VPN mesh |
 | [`lima-five-host.json`](examples/operator-inventory/lima-five-host.md) | `production` | 5 | Reproducible SSH distribution across Lima machines |
 | [`lima-two-site-five-host.json`](examples/operator-inventory/lima-two-site-five-host.md) | `lab` | 5 | Separate Lima lab: Apps plus two validators and IPFS in site A; two validators and IPFS in site B, joined through WireGuard |
@@ -319,9 +321,9 @@ Kubo, and Cluster P2P ports.
 An `edge-proxy` is the normal public entry point. Proxy routes—not the mere
 existence of a backend—decide which services are published. The six-machine
 example exposes Resolver API at `/`, while `resolver-api` consumes the local
-`observer01` RPC and `store-api-resolver` inside Docker. The latter still
-queries the shared IPFS Cluster peers over the VPN, but does not depend on the
-`apps` host for Store API availability.
+`observer01` RPC and a read-only `store-api-reader` inside Docker. The reader
+uses only its local site's Kubo/Cluster endpoints; IPFS/Cluster P2P retrieves
+remote content when necessary, without depending on the `apps` host.
 
 When an empty Docker bridge network overlaps the requested subnet, `install`,
 `apply`, and `resume` can remove it only with
@@ -433,7 +435,7 @@ and deployed Compose context with:
 
 ```bash
 venv/bin/python deploy.py recreate --inventory inventory.json \
-  --target service:store-api-resolver --build
+  --target service:store-api-reader --build
 ```
 
 `recreate` without `--build` replaces one container using the existing image and

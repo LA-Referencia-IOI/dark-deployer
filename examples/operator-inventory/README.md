@@ -22,6 +22,8 @@ Each maintained inventory has a companion guide:
 | `local-ha.json` | [local-ha.md](local-ha.md) |
 | `local-two-site.json` | [local-two-site.md](local-two-site.md) |
 | `one-server-aws-sandbox.json` | [one-server-aws-sandbox.md](one-server-aws-sandbox.md) |
+| `aws-active-two-site-nine-host.json` | [aws-active-two-site-nine-host.md](aws-active-two-site-nine-host.md) |
+| `aws-active-six-host.json` | [aws-active-six-host.md](aws-active-six-host.md) |
 | `lima-five-host.json` | [lima-five-host.md](lima-five-host.md) |
 | `lima-two-site-five-host.json` | [lima-two-site-five-host.md](lima-two-site-five-host.md) |
 | `production-five-host.json` | [production-five-host.md](production-five-host.md) |
@@ -45,8 +47,10 @@ venv/bin/python deploy.py plan --inventory examples/operator-inventory/local-ha.
 
 `local-two-site.json` is a separate executable laboratory. Its six logical
 machines run through one Docker daemon, but they are attached to `site-a-lan`,
-`site-b-lan`, and `mesh-vpn` exactly as declared. The network-qualified DNS
-aliases make the chosen path explicit (`validator03-mesh-vpn`, for example):
+`site-b-lan`, and `mesh-vpn` exactly as declared. It contains two independent
+Resolver-observer bundles with read-only local Store API readers. The
+network-qualified DNS aliases make the chosen path explicit
+(`validator03-mesh-vpn`, for example):
 
 ```bash
 venv/bin/python deploy.py inventory-network-matrix \
@@ -62,6 +66,18 @@ sandbox VPC subnet `172.31.0.0/16` and `172.31.94.30` as the server's private
 LAN address. Its gateway listens publicly on TCP/80 using `sandbox.dark-pid.net`;
 point that DNS name to the EC2 public address and allow TCP/80 in the instance
 security group.
+
+`aws-active-two-site-nine-host.json` describes an asymmetric two-site production
+shape: AWS is the active six-host site and retains its five-validator QBFT
+quorum if the three-host remote preservation site is unavailable. The remote
+site supplies two validators, an observer, one IPFS Cluster peer, and an
+independent Resolver-observer bundle with its own public proxy. It does not
+run Minter, Admin, Dashboard, or Explorer. Its three-peer replication target
+preserves a remote copy while both sites are available.
+
+`aws-active-six-host.json` is the AWS-only variant. It retains the complete
+application and Resolver stack, five validators, and two storage peers on the
+AWS site. Its storage target is two because no remote peer is present.
 
 The compact inventory has one source of truth for `placement`, `storage` and
 `proxies`. Each proxy owns a machine, listener, public origin, TLS mode and

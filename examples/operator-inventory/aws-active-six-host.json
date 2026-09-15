@@ -1,16 +1,17 @@
 {
   "format": "dark-operator-inventory",
-  "format_version": 2,
+  "format_version": 3,
   "catalog": "dark-platform-baseline-v1.0",
   "profile": "production",
   "availability": {
     "objectives": [
-      "tolerate_validator_individual"
+      "tolerate_validator_individual",
+      "observer_copy"
     ]
   },
   "deployment": {
-    "id": "dark-operator-production-six",
-    "label": "REPLACE: dARK six-host deployment with dedicated Resolver"
+    "id": "dark-operator-aws-active-six-host",
+    "label": "REPLACE: dARK AWS six-host production deployment"
   },
   "defaults": {
     "ssh": {
@@ -25,62 +26,63 @@
     }
   },
   "networks": {
-    "lan": {
+    "aws-lan": {
       "kind": "lan",
-      "cidr": "192.0.2.0/24"
-    },
-    "vpn": {
-      "kind": "vpn",
-      "cidr": "198.51.100.0/24"
+      "cidr": "172.31.0.0/16"
+    }
+  },
+  "sites": {
+    "aws": {
+      "lan": "aws-lan"
     }
   },
   "machines": {
     "apps": {
       "execution": "ssh",
-      "management_address": "192.0.2.10",
+      "management_address": "172.31.94.30",
+      "site": "aws",
       "addresses": {
-        "lan": "192.0.2.10",
-        "vpn": "198.51.100.10"
+        "aws-lan": "172.31.94.30"
       }
     },
     "resolver": {
       "execution": "ssh",
-      "management_address": "192.0.2.15",
+      "management_address": "172.31.94.31",
+      "site": "aws",
       "addresses": {
-        "lan": "192.0.2.15",
-        "vpn": "198.51.100.15"
+        "aws-lan": "172.31.94.31"
       }
     },
     "blockchain-a": {
       "execution": "ssh",
-      "management_address": "192.0.2.11",
+      "management_address": "172.31.94.32",
+      "site": "aws",
       "addresses": {
-        "lan": "192.0.2.11",
-        "vpn": "198.51.100.11"
+        "aws-lan": "172.31.94.32"
       }
     },
     "blockchain-b": {
       "execution": "ssh",
-      "management_address": "192.0.2.12",
+      "management_address": "172.31.94.33",
+      "site": "aws",
       "addresses": {
-        "lan": "192.0.2.12",
-        "vpn": "198.51.100.12"
+        "aws-lan": "172.31.94.33"
       }
     },
     "storage-1": {
       "execution": "ssh",
-      "management_address": "192.0.2.13",
+      "management_address": "172.31.94.34",
+      "site": "aws",
       "addresses": {
-        "lan": "192.0.2.13",
-        "vpn": "198.51.100.13"
+        "aws-lan": "172.31.94.34"
       }
     },
     "storage-2": {
       "execution": "ssh",
-      "management_address": "192.0.2.14",
+      "management_address": "172.31.94.35",
+      "site": "aws",
       "addresses": {
-        "lan": "192.0.2.14",
-        "vpn": "198.51.100.14"
+        "aws-lan": "172.31.94.35"
       }
     }
   },
@@ -91,19 +93,19 @@
     "blockchain-b": "blockchain-b",
     "storage-1": "storage-1",
     "storage-2": "storage-2",
-    "explorer": "blockchain-a"
+    "explorer": "apps"
   },
   "routing": {
-    "blockchain_p2p": "vpn",
-    "storage_p2p": "vpn",
-    "storage_api": "vpn",
-    "application_api": "lan"
+    "blockchain_p2p": "aws-lan",
+    "storage_p2p": "aws-lan",
+    "storage_api": "aws-lan",
+    "application_api": "aws-lan"
   },
   "blockchain": {
     "chain_id": 2025,
     "validator_groups": {
       "blockchain-a": {
-        "validator_count": 2
+        "validator_count": 3
       },
       "blockchain-b": {
         "validator_count": 2
@@ -131,7 +133,7 @@
     }
   },
   "storage": {
-    "cluster_name": "REPLACE-dark-production",
+    "cluster_name": "REPLACE-dark-aws-active-six-host",
     "peers": {
       "storage-a": {
         "group": "storage-1"
@@ -147,7 +149,9 @@
     "readers": {
       "store-api-reader": {
         "group": "resolver-observer",
-        "consumers": ["resolver-api"]
+        "consumers": [
+          "resolver-api"
+        ]
       }
     }
   },
@@ -163,8 +167,8 @@
       },
       "sites": [
         {
-          "host": "resolve.dark.example.org",
-          "public_origin": "https://resolve.dark.example.org",
+          "host": "resolve.replace.example.org",
+          "public_origin": "https://resolve.replace.example.org",
           "routes": [
             {
               "id": "arks",
@@ -176,11 +180,10 @@
         }
       ]
     },
-    "apps-private": {
+    "apps-public": {
       "group": "apps",
       "listener": {
-        "bind": "private",
-        "network": "lan",
+        "bind": "public",
         "port": 80
       },
       "tls": {
@@ -188,8 +191,8 @@
       },
       "sites": [
         {
-          "host": "apps.dark.example.org",
-          "public_origin": "https://apps.dark.example.org",
+          "host": "apps.replace.example.org",
+          "public_origin": "https://apps.replace.example.org",
           "routes": [
             {
               "id": "dashboard",
@@ -231,7 +234,7 @@
   },
   "overrides": {
     "explorer": {
-      "group": "explorer"
+      "group": "apps"
     },
     "resolver": {
       "group": "resolver-observer"

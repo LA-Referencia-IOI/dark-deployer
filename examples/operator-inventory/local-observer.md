@@ -1,8 +1,9 @@
 # local-observer
 
-`local-observer.json` is a single-host local inventory focused on the Besu
-observer role. It keeps one observer node beside the applications so Resolver
-can use a local observer RPC without making that node part of consensus.
+`local-observer.json` is a single-host local inventory focused on the
+Resolver-observer bundle. It keeps the Besu observer, Resolver API and the
+Resolver-local read-only Store API reader on the same host. The observer provides the
+local RPC used by Resolver without becoming part of consensus.
 
 Use it to verify observer rendering, observer RPC wiring, local Resolver
 configuration, and observer-aware chain artifact behavior.
@@ -13,7 +14,8 @@ configuration, and observer-aware chain artifact behavior.
 - Machines: one local machine named `local`.
 - Network: one local LAN named `lab`.
 - Blockchain: one validator group named `validators` with 4 validators.
-- Observer: one observer group named `observers` with 1 observer.
+- Resolver-observer bundle: one group named `resolver-observer` containing the
+  observer, Resolver API and its local read-only Store API reader.
 - RPC: one primary RPC named `rpc01` in the `apps` group.
 - Storage: one Kubo/IPFS Cluster peer named `storage-a`.
 - Proxy: loopback HTTP gateway on `localhost`.
@@ -25,8 +27,10 @@ configuration, and observer-aware chain artifact behavior.
 - `networks.lab.cidr` and `machines.local.addresses.lab` if there is a subnet
   collision.
 - `blockchain.observer_groups.*.observer_count` to test one or more observers.
-- Resolver-related placement and overrides if you want Resolver to move away
-  from the observer group in a derived inventory.
+- The `resolver` override and `storage.readers.store-api-reader` keep Resolver
+  services together with the observer. The reader is read-only and uses the
+  local storage peer; change them together if you deliberately want a
+  different topology.
 - `blockchain.chain_id` when generating a fresh chain artifact.
 - Proxy `host`, `public_origin`, and route paths for alternate local URLs.
 
@@ -49,6 +53,8 @@ venv/bin/python deploy.py install \
   --inventory examples/operator-inventory/local-observer.json --verbose
 ```
 
-Observers keep a synchronized chain copy and may expose RPC internally for
+The application gateway remains in `apps` because it also serves the local
+application routes; its Resolver route points to the bundled Resolver API.
+Observers keep a synchronized chain copy and expose RPC internally for
 Resolver, but they do not validate blocks and do not increase QBFT quorum
 tolerance.

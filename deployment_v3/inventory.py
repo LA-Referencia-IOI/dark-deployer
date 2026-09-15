@@ -678,13 +678,20 @@ def _validate_domain(
     for service in services:
         contract = CONNECTION_CONTRACTS.get(service.type, {})
         if service.type == "store-api":
-            # Store is the sole cross-host consumer of all Cluster APIs.  Make
-            # every edge explicit instead of deriving a hidden storage route.
+            _only_keys(service.configuration, f"services.{service.id}.configuration", {"mode"})
+            mode = service.configuration.get("mode", "read_write")
+            if mode not in {"read_write", "read_only"}:
+                raise _error(f"services.{service.id}.configuration.mode must be read_write or read_only")
+            if service.id == "store-api" and mode != "read_write":
+                raise _error("services.store-api.configuration.mode must be read_write")
+            # The main Store API is the writer and must see every Cluster API.
+            # A read-only Store API uses only same-site Cluster/Kubo endpoints;
+            # cross-site retrieval happens through the IPFS/Cluster P2P mesh.
             providers = [by_id.get(_provider_id(connection)) for connection in service.connections.values()]
             clusters = by_type.get("ipfs-cluster", [])
             if not providers or any(provider is None or provider.type != "ipfs-cluster" for provider in providers):
                 raise _error(f"services.{service.id}.connections must contain only ipfs-cluster services")
-            if {provider.id for provider in providers} != {cluster.id for cluster in clusters}:
+            if mode != "read_only" and {provider.id for provider in providers} != {cluster.id for cluster in clusters}:
                 raise _error(f"services.{service.id}.connections must name every ipfs-cluster service exactly once")
         elif service.type == "edge-proxy":
             routes = _proxy_routes(service)

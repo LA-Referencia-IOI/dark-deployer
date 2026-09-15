@@ -22,7 +22,7 @@
     "apps": "local",
     "validators": "local",
     "storage-1": "local",
-    "observers": "local"
+    "resolver-observer": "local"
   },
   "routing": {
     "blockchain_p2p": "lab",
@@ -38,7 +38,7 @@
       }
     },
     "observer_groups": {
-      "observers": {
+      "resolver-observer": {
         "observer_count": 1
       }
     },
@@ -64,6 +64,12 @@
     "replication": {
       "publish_after_replicas": 1,
       "target_replicas": 1
+    },
+    "readers": {
+      "store-api-reader": {
+        "group": "resolver-observer",
+        "consumers": ["resolver-api"]
+      }
     }
   },
   "proxies": {
@@ -123,6 +129,9 @@
     }
   },
   "overrides": {
+    "resolver": {
+      "group": "resolver-observer"
+    },
     "settings": {
       "minter": {
         "shoulder": "200"

@@ -1,0 +1,213 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 3,
+  "catalog": "dark-platform-baseline-v1.0",
+  "profile": "production",
+  "availability": {
+    "objectives": ["tolerate_validator_individual", "observer_copy"]
+  },
+  "deployment": {
+    "id": "dark-operator-aws-active-two-site",
+    "label": "REPLACE: dARK AWS-active two-site production deployment"
+  },
+  "defaults": {
+    "ssh": {
+      "user": "dark",
+      "port": 22,
+      "private_key_file": "/etc/dark-deployer/ssh/REPLACE-deploy-ed25519"
+    },
+    "paths": {
+      "workspace_root": "/srv/dark",
+      "data_root": "/srv/dark/data",
+      "secrets_root": "/srv/dark/secrets"
+    }
+  },
+  "networks": {
+    "aws-lan": {"kind": "lan", "cidr": "172.31.0.0/16"},
+    "site-b-lan": {"kind": "lan", "cidr": "10.64.20.0/24"},
+    "mesh-vpn": {"kind": "vpn", "cidr": "10.250.40.0/24"}
+  },
+  "sites": {
+    "aws": {"lan": "aws-lan"},
+    "site-b": {"lan": "site-b-lan"}
+  },
+  "machines": {
+    "apps": {
+      "execution": "ssh",
+      "management_address": "172.31.94.30",
+      "site": "aws",
+      "addresses": {"aws-lan": "172.31.94.30", "mesh-vpn": "10.250.40.10"}
+    },
+    "resolver": {
+      "execution": "ssh",
+      "management_address": "172.31.94.31",
+      "site": "aws",
+      "addresses": {"aws-lan": "172.31.94.31", "mesh-vpn": "10.250.40.11"}
+    },
+    "blockchain-a": {
+      "execution": "ssh",
+      "management_address": "172.31.94.32",
+      "site": "aws",
+      "addresses": {"aws-lan": "172.31.94.32", "mesh-vpn": "10.250.40.12"}
+    },
+    "blockchain-b": {
+      "execution": "ssh",
+      "management_address": "172.31.94.33",
+      "site": "aws",
+      "addresses": {"aws-lan": "172.31.94.33", "mesh-vpn": "10.250.40.13"}
+    },
+    "storage-1": {
+      "execution": "ssh",
+      "management_address": "172.31.94.34",
+      "site": "aws",
+      "addresses": {"aws-lan": "172.31.94.34", "mesh-vpn": "10.250.40.14"}
+    },
+    "storage-2": {
+      "execution": "ssh",
+      "management_address": "172.31.94.35",
+      "site": "aws",
+      "addresses": {"aws-lan": "172.31.94.35", "mesh-vpn": "10.250.40.15"}
+    },
+    "site-b-validator": {
+      "execution": "ssh",
+      "management_address": "10.64.20.10",
+      "site": "site-b",
+      "addresses": {"site-b-lan": "10.64.20.10", "mesh-vpn": "10.250.40.20"}
+    },
+    "site-b-observer": {
+      "execution": "ssh",
+      "management_address": "10.64.20.11",
+      "site": "site-b",
+      "addresses": {"site-b-lan": "10.64.20.11", "mesh-vpn": "10.250.40.21"}
+    },
+    "storage-3": {
+      "execution": "ssh",
+      "management_address": "10.64.20.12",
+      "site": "site-b",
+      "addresses": {"site-b-lan": "10.64.20.12", "mesh-vpn": "10.250.40.22"}
+    }
+  },
+  "placement": {
+    "apps": "apps",
+    "resolver-observer": "resolver",
+    "blockchain-a": "blockchain-a",
+    "blockchain-b": "blockchain-b",
+    "blockchain-c": "site-b-validator",
+    "site-b-observer": "site-b-observer",
+    "storage-1": "storage-1",
+    "storage-2": "storage-2",
+    "storage-3": "storage-3",
+    "explorer": "apps"
+  },
+  "routing": {
+    "blockchain_p2p": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
+    "storage_p2p": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
+    "storage_api": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
+    "application_api": {"same_site": "site_lan", "cross_site": "mesh-vpn"}
+  },
+  "blockchain": {
+    "chain_id": 2025,
+    "validator_groups": {
+      "blockchain-a": {"validator_count": 3},
+      "blockchain-b": {"validator_count": 2},
+      "blockchain-c": {"validator_count": 2}
+    },
+    "observer_groups": {
+      "resolver-observer": {"observer_count": 1},
+      "site-b-observer": {"observer_count": 1}
+    },
+    "rpc": {
+      "primary": "rpc01",
+      "nodes": {"rpc01": {"group": "apps"}},
+      "bindings": {"resolver-api": "observer01"}
+    },
+    "artifact": {
+      "path": "blockchain/role-artifact",
+      "source": "REPLACE/secrets/chain-artifact"
+    }
+  },
+  "resolver": {
+    "instances": {
+      "resolver-api-site-b": {
+        "group": "site-b-observer",
+        "reader": "store-api-reader-site-b",
+        "rpc": "observer02"
+      }
+    }
+  },
+  "storage": {
+    "cluster_name": "REPLACE-dark-aws-active-two-site",
+    "peers": {
+      "storage-a": {"group": "storage-1"},
+      "storage-b": {"group": "storage-2"},
+      "storage-c": {"group": "storage-3"}
+    },
+    "replication": {"publish_after_replicas": 1, "target_replicas": 3},
+    "readers": {
+      "store-api-reader": {
+        "group": "resolver-observer",
+        "consumers": ["resolver-api"]
+      },
+      "store-api-reader-site-b": {
+        "group": "site-b-observer",
+        "consumers": ["resolver-api-site-b"]
+      }
+    }
+  },
+  "proxies": {
+    "resolver-public": {
+      "group": "resolver-observer",
+      "listener": {"bind": "public", "port": 80},
+      "tls": {"mode": "external"},
+      "sites": [{
+        "host": "resolve.replace.example.org",
+        "public_origin": "https://resolve.replace.example.org",
+        "routes": [{
+          "id": "arks",
+          "path": "/",
+          "service": "resolver-api",
+          "upstream_path": "/api/v1/arks/"
+        }]
+      }]
+    },
+    "resolver-public-site-b": {
+      "group": "site-b-observer",
+      "listener": {"bind": "public", "port": 80},
+      "tls": {"mode": "external"},
+      "sites": [{
+        "host": "resolve-site-b.replace.example.org",
+        "public_origin": "https://resolve-site-b.replace.example.org",
+        "routes": [{
+          "id": "arks-site-b",
+          "path": "/",
+          "service": "resolver-api-site-b",
+          "upstream_path": "/api/v1/arks/"
+        }]
+      }]
+    },
+    "apps-public": {
+      "group": "apps",
+      "listener": {"bind": "public", "port": 80},
+      "tls": {"mode": "external"},
+      "sites": [{
+        "host": "apps.replace.example.org",
+        "public_origin": "https://apps.replace.example.org",
+        "routes": [
+          {"id": "dashboard", "path": "/admin/", "service": "dashboard", "upstream_path": "/"},
+          {"id": "explorer", "path": "/explorer/", "service": "explorer", "upstream_path": "/"},
+          {"id": "minter-v1", "path": "/api/v1/", "service": "minter-api", "upstream_path": "/api/v1/"},
+          {"id": "minter-docs", "path": "/api/docs", "service": "minter-api", "upstream_path": "/docs"},
+          {"id": "minter-openapi", "path": "/api/openapi.json", "service": "minter-api", "upstream_path": "/openapi.json"}
+        ]
+      }]
+    }
+  },
+  "secrets": {
+    "source_root": "REPLACE/secrets"
+  },
+  "overrides": {
+    "explorer": {"group": "apps"},
+    "resolver": {"group": "resolver-observer"},
+    "settings": {"minter": {"shoulder": "200"}}
+  }
+}

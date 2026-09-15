@@ -50,8 +50,8 @@
   },
   "placement": {
     "apps": "apps",
-    "resolver": "resolver",
     "resolver-observer": "resolver",
+    "site-a-resolver-observer": "blockchain-a",
     "blockchain-a": "blockchain-a",
     "blockchain-b": "blockchain-b",
     "storage-1": "storage-1",
@@ -70,11 +70,23 @@
       "blockchain-a": {"validator_count": 2},
       "blockchain-b": {"validator_count": 2}
     },
-    "observer_groups": {"resolver-observer": {"observer_count": 1}},
+    "observer_groups": {
+      "resolver-observer": {"observer_count": 1},
+      "site-a-resolver-observer": {"observer_count": 1}
+    },
     "rpc": {
       "primary": "rpc01",
       "nodes": {"rpc01": {"group": "apps"}},
       "bindings": {"resolver-api": "observer01"}
+    }
+  },
+  "resolver": {
+    "instances": {
+      "resolver-api-site-a": {
+        "group": "site-a-resolver-observer",
+        "reader": "store-api-reader-site-a",
+        "rpc": "observer02"
+      }
     }
   },
   "storage": {
@@ -84,11 +96,32 @@
       "storage-b": {"group": "storage-2"}
     },
     "replication": {"publish_after_replicas": 1, "target_replicas": 2},
-    "api_replicas": {
-      "store-api-resolver": {"group": "resolver", "consumers": ["resolver-api"]}
+    "readers": {
+      "store-api-reader": {"group": "resolver-observer", "consumers": ["resolver-api"]},
+      "store-api-reader-site-a": {"group": "site-a-resolver-observer", "consumers": ["resolver-api-site-a"]}
     }
   },
   "proxies": {
+    "resolver-public-site-a": {
+      "group": "site-a-resolver-observer",
+      "listener": {"bind": "loopback", "port": 8082},
+      "tls": {"mode": "http"},
+      "sites": [{
+        "host": "localhost",
+        "public_origin": "http://localhost:8082",
+        "routes": [{"id": "arks-site-a", "path": "/", "service": "resolver-api-site-a", "upstream_path": "/api/v1/arks/"}]
+      }]
+    },
+    "resolver-public-site-b": {
+      "group": "resolver-observer",
+      "listener": {"bind": "loopback", "port": 8083},
+      "tls": {"mode": "http"},
+      "sites": [{
+        "host": "localhost",
+        "public_origin": "http://localhost:8083",
+        "routes": [{"id": "arks-site-b", "path": "/", "service": "resolver-api", "upstream_path": "/api/v1/arks/"}]
+      }]
+    },
     "gateway": {
       "group": "apps",
       "listener": {"bind": "loopback", "port": 80},
@@ -109,7 +142,7 @@
   },
   "overrides": {
     "explorer": {"group": "explorer"},
-    "resolver": {"group": "resolver"},
+    "resolver": {"group": "resolver-observer"},
     "settings": {"minter": {"shoulder": "200"}}
   }
 }

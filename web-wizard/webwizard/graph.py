@@ -84,6 +84,7 @@ class MachineNode:
     management_address: str
     addresses: dict[str, str]
     docker_subnet: str | None
+    site: str | None
     group_ids: list[str]
     service_count: int
     # What happens to the deployment if this machine is lost (from the
@@ -148,6 +149,7 @@ class OperatorView:
     deployment_id: str
     label: str | None
     profile: str | None
+    format_version: int | None
     primary_rpc: str | None
     rpc_nodes: list[str]
     bindings: dict[str, str]
@@ -155,10 +157,19 @@ class OperatorView:
     observer_groups: dict[str, int | None]
     storage_peers: dict[str, str | None]
     replication: dict[str, int]
-    routing: dict[str, str]
+    routing: dict[str, Any]
     machines: list[str]
     networks: list[str]
+    sites: dict[str, str]
     overrides: dict[str, str]
+    api_replicas: dict[str, dict[str, Any]]
+    resolver_instances: dict[str, dict[str, Any]]
+    blockchain_advanced: dict[str, Any]
+    defaults: dict[str, Any]
+    secret_ids: list[str]
+    legacy_access: bool
+    settings_overrides: dict[str, Any]
+    component_overrides: dict[str, Any]
     objectives: list[str]
     acknowledgements: list[str]
     # The authored web edge and the NAT/announce overrides, verbatim, so the
@@ -233,6 +244,7 @@ def _operator_view(source: dict[str, Any]) -> OperatorView | None:
         deployment_id=str(deployment.get("id", "")),
         label=deployment.get("label") if isinstance(deployment.get("label"), str) else None,
         profile=source.get("profile") if isinstance(source.get("profile"), str) else None,
+        format_version=source.get("format_version") if isinstance(source.get("format_version"), int) else None,
         primary_rpc=rpc.get("primary") if isinstance(rpc.get("primary"), str) else None,
         rpc_nodes=sorted(rpc.get("nodes") or {}),
         bindings={k: v for k, v in (rpc.get("bindings") or {}).items() if isinstance(v, str)},
@@ -243,14 +255,30 @@ def _operator_view(source: dict[str, Any]) -> OperatorView | None:
             for key, item in (storage.get("peers") or {}).items()
         },
         replication={k: v for k, v in replication.items() if isinstance(v, int)},
-        routing={k: v for k, v in (source.get("routing") or {}).items() if isinstance(v, str)},
+        routing={k: v for k, v in (source.get("routing") or {}).items() if isinstance(v, (str, dict))},
         machines=sorted(source.get("machines") or {}),
         networks=sorted(source.get("networks") or {}),
+        sites={key: value.get("lan") for key, value in (source.get("sites") or {}).items()
+               if isinstance(value, dict) and isinstance(value.get("lan"), str)},
         overrides={
             key: item["group"]
             for key, item in overrides.items()
             if isinstance(item, dict) and isinstance(item.get("group"), str)
         },
+        api_replicas={key: value for key, value in (storage.get("readers") or {}).items()
+                      if isinstance(value, dict)},
+        resolver_instances={key: value for key, value in (source.get("resolver", {}).get("instances", {})
+                                                          if isinstance(source.get("resolver"), dict) else {}).items()
+                            if isinstance(value, dict)},
+        blockchain_advanced={
+            key: blockchain.get(key) for key in ("chain_id", "observer_max_block_lag", "artifact", "qbft")
+            if key in blockchain
+        },
+        defaults=source.get("defaults") if isinstance(source.get("defaults"), dict) else {},
+        secret_ids=sorted((source.get("secrets") or {}).keys()) if isinstance(source.get("secrets"), dict) else [],
+        legacy_access=isinstance(source.get("access"), dict),
+        settings_overrides=overrides.get("settings") if isinstance(overrides.get("settings"), dict) else {},
+        component_overrides=overrides.get("components") if isinstance(overrides.get("components"), dict) else {},
         objectives=[item for item in (policy.get("objectives") or []) if isinstance(item, str)],
         acknowledgements=[item for item in (policy.get("acknowledgements") or []) if isinstance(item, str)],
         proxies={
@@ -386,6 +414,7 @@ def build_graph(
             management_address=machine.management_address,
             addresses=dict(machine.addresses),
             docker_subnet=plan.docker_subnets.get(machine.id),
+            site=machine.site,
             group_ids=sorted(groups_by_machine.get(machine.id, [])),
             service_count=service_count.get(machine.id, 0),
             if_lost=_fate(machine_fate[machine.id]) if machine.id in machine_fate else None,
@@ -435,11 +464,8 @@ def build_graph(
         warnings=list(availability.warnings),
     )
 
-    routing = {
-        key: value
-        for key, value in (source.get("routing") or {}).items()
-        if isinstance(value, str)
-    }
+    routing = {key: value for key, value in (source.get("routing") or {}).items()
+               if isinstance(value, (str, dict))}
 
     return TopologyGraph(
         deployment_id=plan.deployment_id,

@@ -302,10 +302,12 @@ resolver's message as `OperationRejected`.
 | Operation | Parameters |
 |---|---|
 | `move_group` | `group`, `machine` |
-| `add_machine` | `id`, `execution` (`local`/`ssh`/`auto`), `management_address`\*, `addresses`\* |
+| `add_machine` | `id`, `execution` (`local`/`docker-lab`/`ssh`/`auto`), `site`?, `management_address`\*, `addresses`\* |
 | `remove_machine` | `id` |
 | `set_machine_address` | `id`, `network`, `address` |
+| `set_machine_site` | `id`, `site` (empty clears) |
 | `add_network` / `remove_network` | `id`, `kind`, `cidr` / `id` |
+| `add_site` / `remove_site` | `id`, `lan` / `id` |
 | `add_route` / `remove_route` | `from`, `to`, `via`? / `from`, `to` |
 | `set_validator_count` | `group`, `count` |
 | `set_observer_count` | `group`, `count` |
@@ -316,8 +318,14 @@ resolver's message as `OperationRejected`.
 | `set_primary_rpc` | `id` |
 | `set_binding` | `consumer`, `provider` (empty string clears) |
 | `set_routing` | `role` (`blockchain_p2p`/`storage_p2p`/`storage_api`/`application_api`), `network` |
+| `set_locality_routing` | `role`, `same_site`, `cross_site` (network or `site_lan`) |
 | `add_storage_peer` / `remove_storage_peer` | `id`, `group` / `id` |
 | `set_replication` | `publish_after_replicas`, `target_replicas` |
+| `add_storage_api_replica` / `remove_storage_api_replica` | `id`, `group`, `consumers` / `id` |
+| `add_storage_reader` / `remove_storage_reader` | `id`, `group`, `consumers` / `id` |
+| `set_chain_id` / `set_observer_max_block_lag` | `chain_id` / `observer_max_block_lag` |
+| `set_artifact_path` | `path` (relative to `secrets_root`) |
+| `set_qbft` | `block_period_seconds`, `epoch_length`, `request_timeout_seconds` |
 | `set_override` | `service` (`explorer`/`resolver`), `group` |
 | `set_profile` | `profile` (`local`/`lab`/`production`) |
 | `set_deployment_label` | `label` |

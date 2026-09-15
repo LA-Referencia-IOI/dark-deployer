@@ -17,7 +17,7 @@ from .session import DraftSession
 
 IDENTIFIER_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789-")
 ROUTING_ROLES = ("blockchain_p2p", "storage_p2p", "storage_api", "application_api")
-EXECUTIONS = ("local", "ssh", "auto")
+EXECUTIONS = ("local", "docker-lab", "ssh", "auto")
 NETWORK_KINDS = ("lan", "vpn")
 PROFILES = ("local", "lab", "production")
 OVERRIDE_SERVICES = ("explorer", "resolver")
@@ -105,11 +105,16 @@ def _add_machine(session: DraftSession, params: dict) -> None:
     if management is not None:
         definition["management_address"] = _text(params, "management_address")
 
-    if execution != "local":
+    if execution in {"ssh", "auto"}:
         if "management_address" not in definition:
-            raise OperationRejected("a non-local machine needs 'management_address'")
-        if "addresses" not in definition:
-            raise OperationRejected("a non-local machine needs 'addresses' {network: address}")
+            raise OperationRejected("an ssh or auto machine needs 'management_address'")
+    if execution in {"docker-lab", "ssh", "auto"} and "addresses" not in definition:
+        raise OperationRejected("a non-local machine needs 'addresses' {network: address}")
+    site = params.get("site")
+    if site:
+        site = _identifier(params, "site")
+        _known(session.raw, "sites", site, "site")
+        definition["site"] = site
 
     if machine_id in _section(session.raw, "machines"):
         raise OperationRejected(f"machine '{machine_id}' already exists")
@@ -154,6 +159,37 @@ def _remove_network(session: DraftSession, params: dict) -> None:
     network_id = _identifier(params, "id")
     _known(session.raw, "networks", network_id, "network")
     _commit(session, "networks", lambda raw: raw["networks"].pop(network_id))
+
+
+def _add_site(session: DraftSession, params: dict) -> None:
+    site_id = _identifier(params, "id")
+    lan = _identifier(params, "lan")
+    _known(session.raw, "networks", lan, "network")
+    if site_id in _section(session.raw, "sites"):
+        raise OperationRejected(f"site '{site_id}' already exists")
+    _commit(session, "sites", lambda raw: raw.setdefault("sites", {}).__setitem__(site_id, {"lan": lan}))
+
+
+def _remove_site(session: DraftSession, params: dict) -> None:
+    site_id = _identifier(params, "id")
+    _known(session.raw, "sites", site_id, "site")
+    _commit(session, "sites", lambda raw: raw["sites"].pop(site_id))
+
+
+def _set_machine_site(session: DraftSession, params: dict) -> None:
+    machine_id = _identifier(params, "id")
+    _known(session.raw, "machines", machine_id, "machine")
+    site = params.get("site")
+    if site is not None and site != "":
+        site = _identifier(params, "site")
+        _known(session.raw, "sites", site, "site")
+
+    def change(raw: dict) -> None:
+        if site:
+            raw["machines"][machine_id]["site"] = site
+        else:
+            raw["machines"][machine_id].pop("site", None)
+    _commit(session, "machines", change)
 
 
 def _routes_of(raw: dict) -> list:
@@ -356,6 +392,21 @@ def _set_routing(session: DraftSession, params: dict) -> None:
     _commit(session, "routing", lambda raw: raw.setdefault("routing", {}).__setitem__(role, network))
 
 
+def _set_locality_routing(session: DraftSession, params: dict) -> None:
+    """Use v3's explicit same-site/cross-site network selection."""
+    role = _choice(params, "role", ROUTING_ROLES)
+    same_site = params.get("same_site")
+    cross_site = params.get("cross_site")
+    for key, value in (("same_site", same_site), ("cross_site", cross_site)):
+        if value != "site_lan":
+            if not isinstance(value, str):
+                raise OperationRejected(f"'{key}' must be a network or site_lan")
+            _known(session.raw, "networks", value, "network")
+    _commit(session, "routing", lambda raw: raw.setdefault("routing", {}).__setitem__(role, {
+        "same_site": same_site, "cross_site": cross_site,
+    }))
+
+
 def _add_storage_peer(session: DraftSession, params: dict) -> None:
     peer = _identifier(params, "id")
     group = _identifier(params, "group")
@@ -387,11 +438,66 @@ def _set_replication(session: DraftSession, params: dict) -> None:
     _commit(session, "storage", change)
 
 
+def _add_storage_api_replica(session: DraftSession, params: dict) -> None:
+    replica = _identifier(params, "id")
+    group = _identifier(params, "group")
+    consumers = params.get("consumers")
+    _known(session.raw, "placement", group, "group")
+    if not isinstance(consumers, list) or not consumers or any(not isinstance(item, str) for item in consumers):
+        raise OperationRejected("'consumers' must be a non-empty list of service identifiers")
+    consumers = list(dict.fromkeys(consumers))
+    replicas = _section(_section(session.raw, "storage"), "readers")
+    if replica in replicas:
+        raise OperationRejected(f"storage API replica '{replica}' already exists")
+    _commit(session, "storage", lambda raw: raw["storage"].setdefault("readers", {}).__setitem__(replica, {
+        "group": group, "consumers": consumers,
+    }))
+
+
+def _remove_storage_api_replica(session: DraftSession, params: dict) -> None:
+    replica = _identifier(params, "id")
+    _known(_section(session.raw, "storage"), "readers", replica, "storage reader")
+    _commit(session, "storage", lambda raw: raw["storage"]["readers"].pop(replica))
+
+
+def _set_chain_number(session: DraftSession, params: dict, field: str, *, minimum: int) -> None:
+    value = _count(params, field, minimum=minimum, maximum=2_147_483_647)
+    _commit(session, "blockchain", lambda raw: _blockchain(raw).__setitem__(field, value))
+
+
+def _set_chain_id(session: DraftSession, params: dict) -> None:
+    _set_chain_number(session, params, "chain_id", minimum=1)
+
+
+def _set_observer_max_block_lag(session: DraftSession, params: dict) -> None:
+    _set_chain_number(session, params, "observer_max_block_lag", minimum=0)
+
+
+def _set_artifact_path(session: DraftSession, params: dict) -> None:
+    path = _text(params, "path")
+    if path.startswith("/") or ".." in path.split("/"):
+        raise OperationRejected("artifact path must be relative to secrets_root")
+    _commit(session, "blockchain", lambda raw: _blockchain(raw).setdefault("artifact", {}).__setitem__("path", path))
+
+
+def _set_qbft(session: DraftSession, params: dict) -> None:
+    fields = ("block_period_seconds", "epoch_length", "request_timeout_seconds")
+    values = {field: _count(params, field, minimum=1, maximum=2_147_483_647) for field in fields}
+    _commit(session, "blockchain", lambda raw: _blockchain(raw).__setitem__("qbft", values))
+
+
 def _set_override(session: DraftSession, params: dict) -> None:
     """Move explorer or resolver out of the apps group on its own."""
     service = _choice(params, "service", OVERRIDE_SERVICES)
     group = _identifier(params, "group")
     _known(session.raw, "placement", group, "group")
+    # A proxy is bound to a group, not a movable singleton. Catch this before
+    # the resolver reaches unrelated endpoint derivation so the operator sees
+    # the actionable reason for the rejected move.
+    current = _section(_section(session.raw, "overrides"), service).get("group")
+    for proxy_id, proxy in _section(session.raw, "proxies").items():
+        if isinstance(proxy, dict) and proxy.get("group") == current and group != current:
+            raise OperationRejected(f"proxy '{proxy_id}' is bound to group '{current}'")
     _commit(
         session, "overrides",
         lambda raw: raw.setdefault("overrides", {}).setdefault(service, {}).__setitem__("group", group),
@@ -465,6 +571,8 @@ def _service_ids(raw: dict) -> set[str]:
         suffix = str(peer).removeprefix("storage-")
         ids |= {f"ipfs-storage-{suffix}", f"cluster-storage-{suffix}"}
     ids |= set(_section(raw, "proxies") or {})
+    ids |= set(_section(_section(raw, "resolver"), "instances") or {})
+    ids |= set(_section(_section(raw, "storage"), "readers") or {})
     return ids | set(CATALOGUE_SINGLETONS)
 
 
@@ -546,7 +654,7 @@ def _add_proxy(session: DraftSession, params: dict) -> None:
         raise OperationRejected(f"proxy '{proxy_id}' already exists")
 
     service = _text(params, "service")
-    if service not in ROUTE_TARGETS:
+    if service not in ROUTE_TARGETS and not service.startswith("resolver-api-"):
         raise OperationRejected("a proxy route must target: " + ", ".join(ROUTE_TARGETS))
     route_id = _identifier(params, "route_id")
     path = _text(params, "path")
@@ -633,7 +741,7 @@ def _add_proxy_route(session: DraftSession, params: dict) -> None:
     path = _text(params, "path")
     upstream = _text(params, "upstream_path")
     service = _text(params, "service")
-    if service not in ROUTE_TARGETS:
+    if service not in ROUTE_TARGETS and not service.startswith("resolver-api-"):
         raise OperationRejected("a proxy route must target: " + ", ".join(ROUTE_TARGETS))
     existing = {route.get("id") for route in _section(session.raw, "proxies")[proxy_id]["sites"][index].get("routes", [])}
     if route_id in existing:
@@ -679,8 +787,11 @@ _HANDLERS: dict[str, Callable[[DraftSession, dict], None]] = {
     "add_machine": _add_machine,
     "remove_machine": _remove_machine,
     "set_machine_address": _set_machine_address,
+    "set_machine_site": _set_machine_site,
     "add_network": _add_network,
     "remove_network": _remove_network,
+    "add_site": _add_site,
+    "remove_site": _remove_site,
     "set_validator_count": _set_validator_count,
     "set_observer_count": _set_observer_count,
     "add_validator_group": _add_validator_group,
@@ -692,9 +803,18 @@ _HANDLERS: dict[str, Callable[[DraftSession, dict], None]] = {
     "set_primary_rpc": _set_primary_rpc,
     "set_binding": _set_binding,
     "set_routing": _set_routing,
+    "set_locality_routing": _set_locality_routing,
     "add_storage_peer": _add_storage_peer,
     "remove_storage_peer": _remove_storage_peer,
     "set_replication": _set_replication,
+    "add_storage_api_replica": _add_storage_api_replica,
+    "remove_storage_api_replica": _remove_storage_api_replica,
+    "add_storage_reader": _add_storage_api_replica,
+    "remove_storage_reader": _remove_storage_api_replica,
+    "set_chain_id": _set_chain_id,
+    "set_observer_max_block_lag": _set_observer_max_block_lag,
+    "set_artifact_path": _set_artifact_path,
+    "set_qbft": _set_qbft,
     "set_override": _set_override,
     "set_profile": _set_profile,
     "set_deployment_label": _set_deployment_label,

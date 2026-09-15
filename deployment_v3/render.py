@@ -149,7 +149,13 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
     elif service.type == "minter-migrate":
         values |= {"DATABASE_URL": f"postgresql://dark:dark@{host('database')}:5432/minter", "METADATA_STORAGE_PATH": "/app/metadata_storage"}
     elif service.type == "store-api":
-        values |= {"STORE_API_HOST": "0.0.0.0", "STORE_API_PORT": "8003", "STORAGE_BACKEND": "ipfs_cluster", "STORAGE_ENDPOINTS_FILE": "/config/storage-endpoints.json"}
+        values |= {
+            "STORE_API_HOST": "0.0.0.0",
+            "STORE_API_PORT": "8003",
+            "STORE_API_MODE": service.configuration.get("mode", "read_write"),
+            "STORAGE_BACKEND": "ipfs_cluster",
+            "STORAGE_ENDPOINTS_FILE": "/config/storage-endpoints.json",
+        }
     elif service.type == "admin-api":
         values |= {"ADMIN_API_HOST": "0.0.0.0", "ADMIN_API_PORT": "8000", "DARK_RPC_URL": connection("rpc"), "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"])}
     elif service.type == "resolver-api":

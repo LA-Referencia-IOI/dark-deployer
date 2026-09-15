@@ -19,6 +19,7 @@
     "routing": {"type": "object"},
     "networking": {"type": "object"},
     "blockchain": {"type": "object"},
+    "resolver": {"type": "object"},
     "storage": {"type": "object"},
     "proxies": {"type": "object"},
     "access": {"type": "object"},

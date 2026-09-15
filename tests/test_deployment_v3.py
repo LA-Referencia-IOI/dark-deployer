@@ -327,7 +327,7 @@ class DeploymentV3Tests(unittest.TestCase):
                     self.assertIn("name: dark-local-ha-local-apps", (machine / "groups" / "apps" / "compose.yaml").read_text())
 
     def test_operator_examples_resolve_to_valid_v3_and_render_resolved_contract(self):
-        for name, services in (("local-simple", 23), ("local-observer", 24), ("local-ha", 25), ("production-five-host", 25)):
+        for name, services in (("local-simple", 23), ("local-observer", 25), ("local-ha", 25), ("production-five-host", 25)):
             source = ROOT / "examples" / "operator-inventory" / f"{name}.json"
             resolution = resolve_inventory_path(source)
             self.assertEqual(len(resolution.document["services"]), services)
@@ -518,15 +518,17 @@ class DeploymentV3Tests(unittest.TestCase):
     def test_production_six_host_places_resolver_on_local_store_api(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-six-host.json")
         resolver = plan.service("resolver-api")
-        store = plan.service("store-api-resolver")
+        store = plan.service("store-api-reader")
         self.assertEqual(store.machine_id, resolver.machine_id)
         self.assertEqual(resolver.connections["store_api"], {"service": store.id})
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "bundle"
             render_plan(plan, output)
-            env = (output / "machines" / "resolver" / "groups" / "resolver" / "env" / "resolver-api.env").read_text()
-            storage = json.loads((output / "machines" / "resolver" / "groups" / "resolver" / "config" / "storage-endpoints.json").read_text())
-        self.assertIn("METADATA_STORE_API_URL=http://store-api-resolver:8003\n", env)
+            env = (output / "machines" / "resolver" / "groups" / "resolver-observer" / "env" / "resolver-api.env").read_text()
+            reader_env = (output / "machines" / "resolver" / "groups" / "resolver-observer" / "env" / "store-api-reader.env").read_text()
+            storage = json.loads((output / "machines" / "resolver" / "groups" / "resolver-observer" / "config" / "storage-endpoints.json").read_text())
+        self.assertIn("METADATA_STORE_API_URL=http://store-api-reader:8003\n", env)
+        self.assertIn("STORE_API_MODE=read_only\n", reader_env)
         self.assertEqual({node["id"] for node in storage["nodes"]}, {"storage-a", "storage-b"})
 
     def test_data_readiness_probes_unexposed_store_from_its_container(self):
@@ -709,13 +711,13 @@ class DeploymentV3Tests(unittest.TestCase):
         executor = self._RecordingRemoteExecutor()
         with tempfile.TemporaryDirectory() as temporary:
             project_root = Path(temporary)
-            self._prepare_lifecycle_bundle(plan, project_root, "store-api-resolver")
+            self._prepare_lifecycle_bundle(plan, project_root, "store-api-reader")
             with patch.object(runner_module, "resolve_executor", return_value=executor):
-                result = runner_module.manage_service(plan, project_root, "restart", "service:store-api-resolver")
+                result = runner_module.manage_service(plan, project_root, "restart", "service:store-api-reader")
         self.assertEqual(result["machine"], "resolver")
-        self.assertEqual(result["group"], "resolver")
-        self.assertEqual(result["project"], "dark-operator-production-six-resolver-resolver")
-        self.assertTrue(any(command[-2:] == ("restart", "store-api-resolver") for command, _ in executor.calls))
+        self.assertEqual(result["group"], "resolver-observer")
+        self.assertEqual(result["project"], "dark-operator-production-six-resolver-resolver-observer")
+        self.assertTrue(any(command[-2:] == ("restart", "store-api-reader") for command, _ in executor.calls))
 
     def test_service_lifecycle_rejects_ambiguous_or_one_shot_targets(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
@@ -761,21 +763,21 @@ class DeploymentV3Tests(unittest.TestCase):
                 command = tuple(argv)
                 self.calls.append((command, timeout))
                 project = command[4] if len(command) > 4 and command[:3] == ("docker", "ps", "-a") else ""
-                if project.endswith("-resolver-resolver"):
-                    return CommandResult(command, 0, "store-api-resolver\trunning\tUp 10 seconds\nresolver-api\texited\tExited (1)\n", "")
+                if project.endswith("-resolver-resolver-observer"):
+                    return CommandResult(command, 0, "store-api-reader\trunning\tUp 10 seconds\nresolver-api\texited\tExited (1)\n", "")
                 return CommandResult(command, 0, "", "")
 
         executor = RuntimeExecutor()
         with tempfile.TemporaryDirectory() as temporary:
             project_root = Path(temporary)
-            self._prepare_lifecycle_bundle(plan, project_root, "store-api-resolver")
+            self._prepare_lifecycle_bundle(plan, project_root, "store-api-reader")
             with patch.object(runner_module, "resolve_executor", return_value=executor):
                 rows = runner_module.list_managed_services(plan, project_root)
         by_service = {row["service"]: row for row in rows}
-        store = by_service["store-api-resolver"]
+        store = by_service["store-api-reader"]
         resolver = by_service["resolver-api"]
         self.assertEqual(store["state"], "running")
-        self.assertEqual(store["description"], "Store API local para resolver-api")
+        self.assertEqual(store["description"], "Store API de lectura local para resolver-api")
         self.assertEqual(store["actions"], ["stop", "start", "restart", "recreate", "remove"])
         self.assertEqual(resolver["state"], "exited")
         self.assertEqual(by_service["minter-api"]["state"], "missing")

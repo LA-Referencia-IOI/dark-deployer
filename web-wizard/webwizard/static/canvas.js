@@ -98,10 +98,14 @@ function truncate(text, maxChars) {
   return text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
 }
 
-function el(tag, className, text) {
+function el(tag, className, ...children) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
+  for (const child of children) {
+    if (child === undefined || child === null) continue;
+    if (child instanceof Node) node.appendChild(child);
+    else node.appendChild(document.createTextNode(String(child)));
+  }
   return node;
 }
 
@@ -481,7 +485,10 @@ function renderNetworks(graph) {
   routing.innerHTML = '';
   for (const [key, value] of Object.entries(graph.routing)) {
     const row = el('div', 'route');
-    row.append(el('span', null, ROUTING_LABEL[key] || key), el('span', null, value));
+    const summary = value && typeof value === 'object'
+      ? `same site: ${value.same_site || '—'} · cross site: ${value.cross_site || '—'}`
+      : value;
+    row.append(el('span', null, ROUTING_LABEL[key] || key), el('span', null, summary));
     routing.appendChild(row);
   }
 
@@ -710,6 +717,7 @@ function renderSelection(graph) {
 
   const meta = el('div', 'selection-meta');
   meta.append(el('span', null, machine.execution));
+  if (machine.site) meta.append(el('span', null, `site: ${machine.site}`));
   meta.append(el('span', null, machine.management_address));
   meta.append(el('span', null, `${machine.service_count} service(s)`));
   body.appendChild(meta);
@@ -718,6 +726,12 @@ function renderSelection(graph) {
     const row = el('div', 'route');
     row.append(el('span', null, networkId), el('span', null, address));
     body.appendChild(row);
+  }
+
+  if (Object.keys(graph.operator.sites || {}).length) {
+    const choices = [['', 'no site'], ...Object.keys(graph.operator.sites).map((site) => [site, site])];
+    body.appendChild(field('Site', selectControl(choices, machine.site || '',
+      (site) => applyOp('set_machine_site', { id: machine.id, site }))));
   }
 
   if (machine.execution !== 'local') {
@@ -810,10 +824,23 @@ function renderStructure(graph) {
 
   const routingWrap = el('div');
   for (const role of ROUTING_ROLES) {
-    routingWrap.appendChild(field(ROUTING_LABEL[role], selectControl(
-      operator.networks.map((network) => [network, network]), operator.routing[role],
-      (network) => applyOp('set_routing', { role, network }),
-    )));
+    const current = operator.routing[role];
+    if (current && typeof current === 'object') {
+      const choices = [['site_lan', 'site LAN'], ...operator.networks.map((network) => [network, network])];
+      const same = selectControl(choices, current.same_site, () => {});
+      const cross = selectControl(choices, current.cross_site, () => {});
+      routingWrap.appendChild(field(ROUTING_LABEL[role], el('div', 'inline',
+        el('span', null, 'same'), same, el('span', null, 'cross'), cross,
+        miniButton('Apply', () => applyOp('set_locality_routing', {
+          role, same_site: same.value, cross_site: cross.value,
+        })),
+      )));
+    } else {
+      routingWrap.appendChild(field(ROUTING_LABEL[role], selectControl(
+        operator.networks.map((network) => [network, network]), current,
+        (network) => applyOp('set_routing', { role, network }),
+      )));
+    }
   }
   const routingField = el('div', 'field');
   routingField.appendChild(el('span', 'field-label', 'Routing (which network each link uses)'));
@@ -829,6 +856,74 @@ function renderStructure(graph) {
       target_replicas: Number(target.value),
     })));
   body.appendChild(field(`Storage replicas (${Object.keys(operator.storage_peers).length} peer(s))`, replicate));
+
+  if (operator.format_version >= 3) {
+    const advanced = operator.blockchain_advanced || {};
+    const chain = numberInput(advanced.chain_id || '', { min: 1, max: 2147483647 });
+    const lag = numberInput(advanced.observer_max_block_lag ?? '', { min: 0, max: 2147483647 });
+    const artifact = document.createElement('input');
+    artifact.type = 'text';
+    artifact.value = (advanced.artifact || {}).path || '';
+    artifact.placeholder = 'relative artifact path';
+    body.appendChild(field('Chain ID', el('div', 'inline', chain,
+      miniButton('Apply', () => applyOp('set_chain_id', { chain_id: Number(chain.value) })) )));
+    body.appendChild(field('Observer max. lag', el('div', 'inline', lag,
+      miniButton('Apply', () => applyOp('set_observer_max_block_lag', { observer_max_block_lag: Number(lag.value) })) )));
+    body.appendChild(field('Blockchain artifact', el('div', 'inline', artifact,
+      miniButton('Apply', () => applyOp('set_artifact_path', { path: artifact.value.trim() })) )));
+    const qbft = advanced.qbft || {};
+    const blockPeriod = numberInput(qbft.block_period_seconds || '', { min: 1, max: 2147483647 });
+    const epoch = numberInput(qbft.epoch_length || '', { min: 1, max: 2147483647 });
+    const timeout = numberInput(qbft.request_timeout_seconds || '', { min: 1, max: 2147483647 });
+    body.appendChild(field('QBFT (period / epoch / timeout)', el('div', 'inline', blockPeriod, epoch, timeout,
+      miniButton('Apply', () => applyOp('set_qbft', {
+        block_period_seconds: Number(blockPeriod.value), epoch_length: Number(epoch.value),
+        request_timeout_seconds: Number(timeout.value),
+      })) )));
+
+    const sites = el('div');
+    for (const [site, lan] of Object.entries(operator.sites || {})) {
+      sites.appendChild(el('div', 'route', el('span', null, `${site} · ${lan}`),
+        miniButton('Remove', () => applyOp('remove_site', { id: site }), true)));
+    }
+    const siteId = document.createElement('input');
+    siteId.type = 'text';
+    siteId.placeholder = 'site id';
+    const siteLan = selectControl(operator.networks.map((network) => [network, network]), operator.networks[0], () => {});
+    sites.appendChild(el('div', 'inline', siteId, siteLan,
+      miniButton('Add site', () => applyOp('add_site', { id: siteId.value.trim(), lan: siteLan.value }))));
+    body.appendChild(field('Sites and LANs', sites));
+
+    const replicas = el('div');
+    for (const [id, replica] of Object.entries(operator.api_replicas || {})) {
+      replicas.appendChild(el('div', 'route', el('span', null,
+        `${id} → ${replica.group} (${(replica.consumers || []).join(', ')})`),
+        miniButton('Remove', () => applyOp('remove_storage_api_replica', { id }), true)));
+    }
+    const replicaId = document.createElement('input');
+    replicaId.type = 'text'; replicaId.placeholder = 'replica id';
+    const replicaGroup = selectControl(graph.groups.map((group) => [group.id, group.id]), graph.groups[0] && graph.groups[0].id, () => {});
+    const storeConsumers = [...new Set(graph.edges.filter((edge) => edge.name === 'store_api').map((edge) => edge.consumer))];
+    const replicaConsumer = selectControl(storeConsumers.map((id) => [id, id]), storeConsumers[0], () => {});
+    if (storeConsumers.length) replicas.appendChild(el('div', 'inline', replicaId, replicaGroup, replicaConsumer,
+      miniButton('Add', () => applyOp('add_storage_api_replica', {
+        id: replicaId.value.trim(), group: replicaGroup.value, consumers: [replicaConsumer.value],
+      }))));
+    body.appendChild(field('Storage readers', replicas));
+    const resolverInstances = operator.resolver_instances || {};
+    if (Object.keys(resolverInstances).length) {
+      const rows = el('div');
+      for (const [id, config] of Object.entries(resolverInstances)) {
+        rows.appendChild(el('div', 'route', `${id} · group ${config.group || '—'} · reader ${config.reader || '—'} · RPC ${config.rpc || '—'}`));
+      }
+      body.appendChild(field('Resolver instances', rows));
+    }
+    if (operator.legacy_access) body.appendChild(riskNote('Legacy access is preserved for compatibility; migrate it to proxies before making access changes.'));
+    if ((operator.secret_ids || []).length) body.appendChild(el('p', 'local-note', `Secret references preserved (${operator.secret_ids.join(', ')}); values are never read or shown.`));
+    if (Object.keys(operator.settings_overrides || {}).length || Object.keys(operator.component_overrides || {}).length) {
+      body.appendChild(el('p', 'local-note', 'Settings and component overrides are preserved as catalogue-controlled values and are intentionally read-only here.'));
+    }
+  }
 
   const networkList = el('div');
   for (const networkId of operator.networks) {
@@ -1028,17 +1123,19 @@ function renderPalette(graph) {
 
   const build = {
     machine(idField) {
-      const execution = selectControl([['local', 'local'], ['ssh', 'ssh']], 'ssh', () => {});
+      const execution = selectControl([['local', 'local'], ['docker-lab', 'docker-lab'], ['ssh', 'ssh'], ['auto', 'auto']], 'docker-lab', () => {});
       const management = textInput('management address');
+      const site = selectControl([['', 'no site'], ...Object.keys(operator.sites || {}).map((id) => [id, id])], '', () => {});
       const addresses = new Map();
       for (const network of operator.networks) addresses.set(network, textInput(`${network} address`));
 
-      form.append(field('Identifier', idField), field('Execution', execution), field('Management address', management));
+      form.append(field('Identifier', idField), field('Execution', execution), field('Site', site), field('Management address', management));
       for (const [network, node] of addresses) form.appendChild(field(`${network} address`, node));
 
       submitRow('Add machine', () => {
         const params = { id: idField.value.trim(), execution: execution.value };
-        if (execution.value !== 'local') params.management_address = management.value.trim();
+        if (['ssh', 'auto'].includes(execution.value)) params.management_address = management.value.trim();
+        if (site.value) params.site = site.value;
         const filled = {};
         for (const [network, node] of addresses) {
           const value = node.value.trim();
@@ -1174,8 +1271,9 @@ function renderWebEdge(graph) {
 
     const routeId = textInput('', 'route id');
     const routePath = textInput('', '/path/');
+    const resolverRoutes = graph.services.filter((service) => service.type === 'resolver-api').map((service) => [service.id, service.id]);
     const routeService = selectControl(
-      [['dashboard', 'dashboard'], ['explorer', 'explorer'], ['minter-api', 'minter-api'], ['resolver-api', 'resolver-api']],
+      [['dashboard', 'dashboard'], ['explorer', 'explorer'], ['minter-api', 'minter-api'], ...resolverRoutes],
       'dashboard', () => {},
     );
     const upstream = textInput('/', '/');
@@ -1255,12 +1353,19 @@ function buildBoxes(graph, fabric = false) {
 
 /* -- the fabric: networks as bands above the fleet -------------------- */
 
-function networkBands(graph) {
-  return graph.networks.map((network, index) => ({
+function networkBands(graph, mode = '') {
+  const sites = graph.operator && graph.operator.sites ? graph.operator.sites : {};
+  const siteOf = new Map(Object.entries(sites).map(([site, lan]) => [lan, site]));
+  const networks = mode === 'site'
+    ? [...graph.networks].sort((a, b) => (a.kind === 'vpn' ? -1 : 1) - (b.kind === 'vpn' ? -1 : 1)
+      || (siteOf.get(a.id) || a.id).localeCompare(siteOf.get(b.id) || b.id))
+    : graph.networks;
+  return networks.map((network, index) => ({
     id: network.id,
     kind: network.kind,
     cidr: network.cidr,
     machines: network.machine_ids,
+    site: siteOf.get(network.id) || null,
     tint: NETWORK_TINT[index % NETWORK_TINT.length],
     y: PAD + index * (FBAND_H + FBAND_GAP),
   }));
@@ -1308,10 +1413,11 @@ function layoutBoxes(boxes, mode, graph, top) {
     return bands;
   }
 
-  if (mode === 'function' || mode === 'network') {
+  if (mode === 'function' || mode === 'network' || mode === 'site') {
     const keyOf = mode === 'function'
       ? (box) => dominantFamily(box)
-      : (box) => networkSignature(box.machine.id, graph);
+      : mode === 'site' ? (box) => box.machine.site || 'no site'
+        : (box) => networkSignature(box.machine.id, graph);
     const grouped = new Map();
     for (const box of boxes) {
       const key = keyOf(box);
@@ -1362,7 +1468,7 @@ function finalizeLayout(boxes, bands, fabricBands = [], gutter = 0) {
 }
 
 function layoutFor(graph, fabric, mode, positions) {
-  const bands = networkBands(graph);
+  const bands = networkBands(graph, mode);
   // The route gutter is only needed where the routes are actually drawn.
   const gutter = fabric && graph.routes.length ? ROUTE_GUTTER : 0;
   const boxes = buildBoxes(graph, fabric);
@@ -1479,11 +1585,11 @@ function drawFabric(root, graph, layout, prominent) {
       class: 'fabric-strip', x: PAD, y: band.y, width: right - PAD, height: FBAND_H,
       rx: 3, fill: band.tint,
     }, group);
-    const label = svgEl('text', { x: PAD + 12, y: band.y + 17, class: 'fabric-label' }, group);
+    const label = svgEl('text', { x: PAD + 12, y: band.y + 17, class: `fabric-label ${band.kind === 'vpn' ? 'fabric-backbone' : 'fabric-site-lan'}` }, group);
     const name = svgEl('tspan', { class: 'fabric-name' }, label);
     name.textContent = band.id;
     const meta = svgEl('tspan', { class: 'fabric-meta', dx: 10 }, label);
-    meta.textContent = `${band.kind}  ${band.cidr}`;
+    meta.textContent = `${band.kind}${band.site ? ` · ${band.site}` : ' · site backbone'}  ${band.cidr}`;
     svgText(group, right - 12, band.y + 17, `${band.machines.length} machine(s)`, 'fabric-count', {
       'text-anchor': 'end',
     });
@@ -1539,7 +1645,7 @@ function drawMachines(root, graph, layout, localMap) {
     svgEl('rect', { x: box.x, y: box.y, width: box.w, height: MHEAD, fill: 'transparent' }, header);
     svgText(header, box.x + MIP, box.y + 24, machine.id, 'machine-id');
     const subnet = machine.docker_subnet ? `  ${machine.docker_subnet}` : '';
-    svgText(header, box.x + MIP, box.y + 43, `${machine.execution === 'local' ? 'local' : 'ssh'}  ${machine.management_address}${subnet}`, 'machine-meta');
+    svgText(header, box.x + MIP, box.y + 43, `${machine.execution}${machine.site ? ` · ${machine.site}` : ''}  ${machine.management_address}${subnet}`, 'machine-meta');
 
     const risk = machineRisk(machine);
     if (risk) {
@@ -1578,7 +1684,11 @@ function drawMachines(root, graph, layout, localMap) {
 
       for (const rect of placed.rects) {
         const service = rect.service;
-        const nodeGroup = svgEl('g', { class: 'node', 'data-id': service.id }, groupEl);
+        const proxyHasPublicSite = service.type === 'edge-proxy' && graph.operator && graph.operator.proxies
+          && graph.operator.proxies[service.id] && (graph.operator.proxies[service.id].sites || [])
+            .some((site) => site.public_origin);
+        const isPublic = (service.exposure && ['public', 'direct', 'gateway'].includes(service.exposure.mode)) || proxyHasPublicSite;
+        const nodeGroup = svgEl('g', { class: `node${isPublic ? ' node-public' : ''}`, 'data-id': service.id }, groupEl);
         svgEl('rect', { class: 'node-box', x: rect.x, y: rect.y, width: rect.w, height: rect.h, rx: 3 }, nodeGroup);
         svgEl('rect', {
           class: 'node-stripe', x: rect.x, y: rect.y + 3, width: 3, height: rect.h - 6,
@@ -1590,6 +1700,7 @@ function drawMachines(root, graph, layout, localMap) {
         if (exposure) {
           svgText(nodeGroup, rect.x + rect.w - 12, rect.y + 37, truncate(exposure, 22), 'node-exposure', { 'text-anchor': 'end' });
         }
+        if (isPublic) svgText(nodeGroup, rect.x + rect.w - 12, rect.y + 15, '↗ PUBLIC', 'node-public-label', { 'text-anchor': 'end' });
 
         const internal = localMap.get(service.id) || [];
         if (internal.length) {

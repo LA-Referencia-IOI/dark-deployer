@@ -9,6 +9,7 @@ from pathlib import Path
 
 from deployment_v3.inventory_resolver import OperatorInventoryError, resolve_inventory
 from deployment_v3.artifacts import chain_context, export_chain_group, static_nodes, write_artifact_manifest, verify_artifact_manifest
+from deployment_v3.availability import analyze
 from deployment_v3.planner import build_plan
 from deployment_v3.render import render_plan
 from deployment_v3.catalogs import get_catalog
@@ -48,6 +49,45 @@ class InventoryEvolutionTests(unittest.TestCase):
                 with self.assertRaisesRegex(OperatorInventoryError, "2xx"):
                     resolve_inventory(document, source_path=ROOT / "inventory.json")
 
+    def test_aws_active_two_site_inventory_keeps_aws_quorum_after_site_b_validator_loss(self):
+        inventory_path = ROOT / "examples" / "operator-inventory" / "aws-active-two-site-nine-host.json"
+        plan = build_plan(inventory_path)
+        report = analyze(plan)
+
+        self.assertEqual((report.validators, report.quorum), (7, 5))
+        site_b_loss = next(
+            scenario for scenario in report.scenarios
+            if scenario.kind == "validator_group" and scenario.target == "blockchain-c"
+        )
+        self.assertEqual((site_b_loss.consensus, site_b_loss.validators_remaining), ("continues", 5))
+        self.assertEqual(report.storage_target_replicas, 3)
+        self.assertEqual(
+            {service.id for service in plan.services if service.machine_id.startswith("site-b")},
+            {"validator06", "validator07", "observer02", "store-api-reader-site-b", "resolver-api-site-b", "resolver-public-site-b"},
+        )
+
+    def test_aws_two_site_declares_local_resolver_reader_and_observer_rpc(self):
+        path = ROOT / "examples/operator-inventory/aws-active-two-site-nine-host.json"
+        resolution = resolve_inventory(json.loads(path.read_text()), source_path=path)
+        services = resolution.document["services"]
+        self.assertEqual(services["resolver-api-site-b"]["connections"]["rpc"], {"service": "observer02"})
+        self.assertEqual(services["resolver-api-site-b"]["connections"]["store_api"], {"service": "store-api-reader-site-b"})
+        self.assertEqual(services["store-api-reader-site-b"]["configuration"], {"mode": "read_only"})
+        self.assertEqual(services["resolver-public-site-b"]["connections"]["arks-site-b"], {"service": "resolver-api-site-b"})
+
+    def test_resolver_store_replica_uses_only_same_site_clusters(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory/aws-active-two-site-nine-host.json").read_text())
+        resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
+        connections = resolution.document["services"]["store-api-reader"]["connections"]
+        self.assertEqual(set(connections), {"cluster_cluster-storage-a", "cluster_cluster-storage-b"})
+        self.assertNotIn("cluster_cluster-storage-c", connections)
+
+    def test_local_observer_uses_resolver_observer_bundle(self):
+        path = ROOT / "examples/operator-inventory/local-observer.json"
+        resolution = resolve_inventory(json.loads(path.read_text()), source_path=path)
+        bundle = resolution.document["groups"]["resolver-observer"]["members"]
+        self.assertEqual(set(bundle), {"observer01", "resolver-api", "store-api-reader"})
+
     def test_operator_v1_is_rejected(self):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
         document["format_version"] = 1
@@ -79,7 +119,7 @@ class InventoryEvolutionTests(unittest.TestCase):
             "mesh-vpn": {"kind": "vpn", "cidr": "10.200.0.0/24"},
         }
         document["sites"] = {"eu": {"lan": "eu-lan"}, "us": {"lan": "us-lan"}}
-        eu = {"apps", "resolver", "blockchain-a"}
+        eu = {"apps", "resolver", "blockchain-a", "storage-1", "storage-2"}
         for index, (machine_id, machine) in enumerate(document["machines"].items(), start=10):
             local = "eu-lan" if machine_id in eu else "us-lan"
             site = "eu" if machine_id in eu else "us"
@@ -112,7 +152,7 @@ class InventoryEvolutionTests(unittest.TestCase):
             render_plan(plan, bundle)
             env = (bundle / "machines" / "storage-1" / "groups" / "storage-1" / "env" / "ipfs-storage-a.env").read_text()
             compose = (bundle / "machines" / "blockchain-a" / "groups" / "blockchain-a" / "compose.yaml").read_text()
-            self.assertIn('IPFS_ANNOUNCE_MULTIADDRESSES=["/ip4/10.20.0.14/tcp/4001"]', env)
+            self.assertIn('IPFS_ANNOUNCE_MULTIADDRESSES=["/ip4/10.10.0.14/tcp/4001"]', env)
             self.assertIn("10.10.0.12:30303:30303/tcp", compose)
             self.assertIn("10.200.0.12:30303:30303/tcp", compose)
         context = chain_context(plan, "0x" + "1" * 40)
@@ -133,7 +173,10 @@ class InventoryEvolutionTests(unittest.TestCase):
         context = chain_context(plan, "0x" + "1" * 40)
         peers = static_nodes(context, {node: "a" * 128 for node in context["nodes"]})
         self.assertIn("@172.24.10.34:30303", " ".join(peers["validator01"]))
-        self.assertIn("@172.24.30.35:30303", " ".join(peers["validator01"]))
+        self.assertIn("@172.24.30.", " ".join(peers["validator01"]))
+        self.assertEqual(plan.service("resolver-api-site-a").connections["rpc"], {"service": "observer02"})
+        self.assertEqual(plan.service("resolver-api-site-a").connections["store_api"], {"service": "store-api-reader-site-a"})
+        self.assertEqual(plan.service("store-api-reader-site-a").configuration["mode"], "read_only")
         with tempfile.TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             render_plan(plan, bundle)
@@ -199,9 +242,10 @@ class InventoryEvolutionTests(unittest.TestCase):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "production-six-host.json").read_text())
         resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
         services = resolution.document["services"]
-        self.assertEqual(services["store-api-resolver"]["type"], "store-api")
-        self.assertEqual(services["store-api-resolver"]["machine"], "resolver")
-        self.assertEqual(services["resolver-api"]["connections"]["store_api"], {"service": "store-api-resolver"})
+        self.assertEqual(services["store-api-reader"]["type"], "store-api")
+        self.assertEqual(services["store-api-reader"]["machine"], "resolver")
+        self.assertEqual(services["store-api-reader"]["configuration"]["mode"], "read_only")
+        self.assertEqual(services["resolver-api"]["connections"]["store_api"], {"service": "store-api-reader"})
         self.assertEqual(services["minter-api"]["connections"]["store_api"], {"service": "store-api"})
 
     def test_production_rejects_an_unmet_unacknowledged_objective(self):

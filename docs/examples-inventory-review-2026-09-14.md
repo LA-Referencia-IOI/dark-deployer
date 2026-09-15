@@ -75,7 +75,7 @@ validadores por máquina).
 **CONFIRMADO**: los 6 compactos resuelven, planifican y renderizan. El render del
 `production-six-host` compacto produce
 `machines/resolver/groups/resolver/env/resolver-api.env` con
-`METADATA_STORE_API_URL=http://store-api-resolver:8003` y
+`METADATA_STORE_API_URL=http://store-api-reader:8003` y
 `DARK_RPC_URL=http://observer01:8545`, es decir, la réplica local del Store API
 introducida en `55bdb7a` funciona de extremo a extremo.
 
@@ -101,7 +101,7 @@ todos los casos. Resumen:
 | local-ha | `deployment`, `blockchain` | `+gateway`, `−edge-proxy`, `minter-api` cambia |
 | lima-five-host | `blockchain`, `secrets` | `+gateway`, `−edge-proxy`, 4 servicios de storage y `rpc01` cambian |
 | production-five-host | `deployment`, `blockchain`, `secrets` | `+gateway`, `−edge-proxy`, 4 de storage y `rpc01` cambian |
-| production-six-host | `secrets` | `+store-api-resolver`, `resolver-api` y `store-api` cambian |
+| production-six-host | `secrets` | `+store-api-reader`, `resolver-api` y `store-api` cambian |
 
 Diferencias sistemáticas, todas **CONFIRMADO**:
 
@@ -177,12 +177,13 @@ que nada verifica.
 
 ### 4.3 Deriva real entre familias: el Store API del resolver
 
-**CONFIRMADO**: `55bdb7a` («Add local Store API replica for resolver») modificó
+**CONFIRMADO**: `55bdb7a` («Add local Store API reader for resolver», nombre
+actualizado posteriormente) modificó
 `examples/operator-inventory/production-six-host.json` (y el resolver, render y
 tests) pero no `examples/deployment-v3/production-six-host.json`. Por eso el compacto
-resuelve a 28 servicios y el v3 a 27. El v3 «equivalente» no tiene la réplica local que
+resuelve a 28 servicios y el v3 a 27. El v3 «equivalente» no tiene el lector local que
 el README describe en su propia tabla: `README.md:115` dice «Dedicated public Resolver
-with local observer, RPC and Store API», y el fichero v3 carece de `store-api-resolver`
+with local observer, RPC and Store API», y el fichero v3 carece de `store-api-reader`
 (0 apariciones frente a 1 en el compacto).
 
 **INFERIDO**: que el v3 deba actualizarse o retirarse es una decisión de diseño, no un
@@ -285,14 +286,14 @@ mantenido.
 | `access` (modos `gateway`, `local-direct`) | en ninguno |
 | `availability.acknowledgements` | en ninguno (solo lo usan tests) |
 | `routes` de nivel superior | solo vacío en `deployment-v3/production-six-host.json` |
-| `overrides.resolver`, `storage.api_replicas` | solo en el compacto `production-six-host` |
+| `overrides.resolver`, `storage.readers` | solo en el compacto `production-six-host` |
 | `overrides.explorer`, `overrides.settings` | lima, prod5, prod6 compactos |
 
 El README de `operator-inventory` documenta `routes` y `networking.services` con un
 ejemplo de código, pero no hay ningún inventario mantenido que los ejercite: la
 resolución de NAT/advertise y el fallo por ruta ausente solo están cubiertos por tests
 unitarios, no por un ejemplo instalable. Para la función recién añadida
-(`api_replicas`), la única cobertura de ejemplo es el compacto `production-six-host`,
+(`readers`), la única cobertura de ejemplo es el compacto `production-six-host`,
 que es también el único ejemplo compacto sin gemelo v3 fiel.
 
 ---

@@ -172,7 +172,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     placement = _object(raw.get("placement"), "placement")
     blockchain = _object(raw.get("blockchain"), "blockchain")
     storage = _object(raw.get("storage"), "storage")
-    _only_keys(storage, "storage", {"cluster_name", "peers", "replication", "api_replicas"})
+    _only_keys(storage, "storage", {"cluster_name", "peers", "replication", "readers"})
     peers = _object(storage.get("peers"), "storage.peers")
     if not peers:
         raise _fail("storage.peers must contain at least one peer")
@@ -225,7 +225,32 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     for node_id in observers:
         service = deepcopy(templates["besu-observer"]); service["configuration"]["node_id"] = node_id
         result["services"][node_id] = service
-    bindings = _object(rpc.get("bindings", {}), "blockchain.rpc.bindings")
+    resolver_config = _object(raw.get("resolver", {}), "resolver")
+    _only_keys(resolver_config, "resolver", {"instances"})
+    resolver_instances = _object(resolver_config.get("instances", {}), "resolver.instances")
+    resolver_instance_groups: dict[str, str] = {}
+    resolver_instance_readers: dict[str, str] = {}
+    resolver_instance_bindings: dict[str, str] = {}
+    for service_id, definition in resolver_instances.items():
+        _identifier(service_id, f"resolver.instances.{service_id}")
+        if service_id in result["services"]:
+            raise _fail(f"resolver.instances.{service_id} duplicates a catalogue service")
+        definition = _object(definition, f"resolver.instances.{service_id}")
+        _only_keys(definition, f"resolver.instances.{service_id}", {"group", "reader", "rpc"})
+        group_id = definition.get("group")
+        reader_id = definition.get("reader")
+        if not isinstance(group_id, str):
+            raise _fail(f"resolver.instances.{service_id}.group is required")
+        if not isinstance(reader_id, str):
+            raise _fail(f"resolver.instances.{service_id}.reader is required")
+        rpc_provider = definition.get("rpc")
+        if not isinstance(rpc_provider, str):
+            raise _fail(f"resolver.instances.{service_id}.rpc is required")
+        resolver_instance_groups[service_id] = group_id
+        resolver_instance_readers[service_id] = reader_id
+        resolver_instance_bindings[service_id] = rpc_provider
+        result["services"][service_id] = deepcopy(result["services"]["resolver-api"])
+    bindings = {**resolver_instance_bindings, **_object(rpc.get("bindings", {}), "blockchain.rpc.bindings")}
     rpc_providers = set(rpc_nodes) | set(observers)
     for consumer_id, provider_id in bindings.items():
         if consumer_id not in result["services"]:
@@ -319,32 +344,51 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
 
     result["groups"] = {}
     app_machine = group_machine("apps")
-    api_replicas = _object(storage.get("api_replicas", {}), "storage.api_replicas")
-    replica_groups: dict[str, str] = {}
-    for service_id, definition in api_replicas.items():
-        _identifier(service_id, f"storage.api_replicas.{service_id}")
+    readers = _object(storage.get("readers", {}), "storage.readers")
+    reader_groups: dict[str, str] = {}
+    for service_id, definition in readers.items():
+        _identifier(service_id, f"storage.readers.{service_id}")
         if service_id in result["services"]:
-            raise _fail(f"storage.api_replicas.{service_id} duplicates a catalogue service")
-        definition = _object(definition, f"storage.api_replicas.{service_id}")
-        _only_keys(definition, f"storage.api_replicas.{service_id}", {"group", "consumers"})
+            raise _fail(f"storage.readers.{service_id} duplicates a catalogue service")
+        definition = _object(definition, f"storage.readers.{service_id}")
+        _only_keys(definition, f"storage.readers.{service_id}", {"group", "consumers"})
         group_id = definition.get("group")
         if not isinstance(group_id, str):
-            raise _fail(f"storage.api_replicas.{service_id}.group is required")
-        group_machine(group_id)
+            raise _fail(f"storage.readers.{service_id}.group is required")
+        reader_machine = group_machine(group_id)
         consumers = definition.get("consumers")
         if not isinstance(consumers, list) or not consumers or len(set(consumers)) != len(consumers):
-            raise _fail(f"storage.api_replicas.{service_id}.consumers must be a non-empty list of unique service IDs")
-        replica = deepcopy(result["services"]["store-api"])
+            raise _fail(f"storage.readers.{service_id}.consumers must be a non-empty list of unique service IDs")
+        reader = deepcopy(result["services"]["store-api"])
+        # A reader retrieves content through Kubo in its own site. Cross-site
+        # availability is IPFS/Cluster P2P, never a remote Store API call.
+        reader_site = machines_input[reader_machine].get("site")
+        local_cluster_connections = {}
+        for peer_id, peer_definition in peers.items():
+            peer_group = _object(peer_definition, f"storage.peers.{peer_id}").get("group")
+            if not isinstance(peer_group, str):
+                raise _fail(f"storage.peers.{peer_id}.group is required")
+            peer_machine = group_machine(peer_group)
+            peer_site = machines_input[peer_machine].get("site")
+            if reader_site is None or peer_site is None or reader_site == peer_site:
+                suffix = peer_id.removeprefix("storage-")
+                connection_id = f"cluster_cluster-storage-{suffix}"
+                if connection_id in reader.get("connections", {}):
+                    local_cluster_connections[connection_id] = reader["connections"][connection_id]
+        reader["connections"] = local_cluster_connections
+        reader["configuration"] = {"mode": "read_only"}
         for consumer_id in consumers:
             if not isinstance(consumer_id, str) or consumer_id not in result["services"]:
-                raise _fail(f"storage.api_replicas.{service_id}.consumers references an unknown service")
+                raise _fail(f"storage.readers.{service_id}.consumers references an unknown service")
+            if result["services"][consumer_id]["type"] != "resolver-api":
+                raise _fail(f"storage.readers.{service_id}.consumers may name only resolver-api services")
             connection = result["services"][consumer_id].get("connections", {}).get("store_api")
             if connection is None:
-                raise _fail(f"storage.api_replicas.{service_id}.consumers may name only services with a store_api connection")
+                raise _fail(f"storage.readers.{service_id}.consumers may name only services with a store_api connection")
             connection["service"] = service_id
-        result["services"][service_id] = replica
-        replica_groups[service_id] = group_id
-    dynamic_ids = set(validators) | set(observers) | set(rpc_nodes) | set(replica_groups) | {sid for sid, service in result["services"].items() if service["type"] in {"ipfs-kubo", "ipfs-cluster"}}
+        result["services"][service_id] = reader
+        reader_groups[service_id] = group_id
+    dynamic_ids = set(validators) | set(observers) | set(rpc_nodes) | set(reader_groups) | set(resolver_instances) | {sid for sid, service in result["services"].items() if service["type"] in {"ipfs-kubo", "ipfs-cluster"}}
     group_services = {"apps": [sid for sid in result["services"] if sid not in dynamic_ids]}
     group_members = {"apps": []}
     for rpc_id, definition in rpc_nodes.items():
@@ -368,7 +412,10 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         suffix = peer_id.removeprefix("storage-")
         group_services.setdefault(group_id, []).extend([f"ipfs-storage-{suffix}", f"cluster-storage-{suffix}"])
         group_members.setdefault(group_id, []).append(peer_id)
-    for service_id, group_id in replica_groups.items():
+    for service_id, group_id in reader_groups.items():
+        group_services.setdefault(group_id, []).append(service_id)
+        group_members.setdefault(group_id, []).append(service_id)
+    for service_id, group_id in resolver_instance_groups.items():
         group_services.setdefault(group_id, []).append(service_id)
         group_members.setdefault(group_id, []).append(service_id)
     if "access" in raw and "proxies" in raw:
@@ -389,6 +436,19 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         group_services["apps"].remove("resolver-api")
         group_services.setdefault(resolver_group, []).append("resolver-api")
         group_members.setdefault(resolver_group, []).append("resolver-api")
+    for service_id, reader_id in resolver_instance_readers.items():
+        if reader_id not in result["services"] or result["services"][reader_id]["type"] != "store-api":
+            raise _fail(f"resolver.instances.{service_id}.reader must name a storage reader")
+        reader_definition = result["services"][reader_id]
+        if reader_definition.get("configuration", {}).get("mode") != "read_only":
+            raise _fail(f"resolver.instances.{service_id}.reader must be read_only")
+        if service_id not in {
+            consumer_id
+            for consumer_id, service in result["services"].items()
+            if service.get("connections", {}).get("store_api", {}).get("service") == reader_id
+        }:
+            raise _fail(f"resolver.instances.{service_id}.reader must list the Resolver in its consumers")
+        result["services"][service_id]["connections"]["store_api"]["service"] = reader_id
     for group_id, services in group_services.items():
         if not services:
             continue
