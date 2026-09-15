@@ -614,6 +614,7 @@ _SERVICE_TYPE_DESCRIPTIONS = {
     "dashboard": "Panel de administración web",
     "dashboard-migrate": "Job de migración del Dashboard",
     "dashboard-mysql": "Base de datos MySQL del Dashboard",
+    "dashboard-redis": "Redis heredado; retirar durante la migración",
     "edge-proxy": "Proxy HTTP/Nginx de entrada",
     "explorer": "Explorador de blockchain",
     "ipfs-cluster": "Controlador de replicación IPFS Cluster",

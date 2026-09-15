@@ -795,6 +795,17 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertEqual(result["deployment_id"], plan.deployment_id)
         self.assertTrue(any(command[-2:] == ("stop", "store-api") for command, _ in executor.calls))
 
+    def test_legacy_dashboard_redis_snapshot_remains_operable_for_removal(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        legacy = json.loads(json.dumps(plan.raw))
+        legacy["images"]["redis"] = "redis:7-alpine"
+        legacy["services"]["dashboard-redis"] = {"type": "dashboard-redis", "machine": "local"}
+        legacy["services"]["dashboard"]["connections"]["redis"] = {"service": "dashboard-redis"}
+        legacy["services"]["dashboard-migrate"]["connections"]["redis"] = {"service": "dashboard-redis"}
+        legacy["groups"]["apps"]["services"].append("dashboard-redis")
+        restored = runner_module.build_plan_document(legacy, ROOT / "legacy-snapshot.json")
+        self.assertEqual(restored.service("dashboard-redis").type, "dashboard-redis")
+
     def test_service_listing_reads_runtime_labels_and_exposes_exact_actions(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-six-host.json")
 

@@ -30,7 +30,7 @@ REQUIRED_COMPONENTS = frozenset(
 SERVICE_TYPES = frozenset({
     "besu-rpc", "besu-validator", "besu-observer", "explorer", "minter-api", "minter-worker",
     "minter-postgres", "minter-migrate", "admin-api", "resolver-api", "store-api",
-    "dashboard", "dashboard-mysql", "dashboard-migrate",
+    "dashboard", "dashboard-mysql", "dashboard-redis", "dashboard-migrate",
     "ipfs-kubo", "ipfs-cluster", "contracts-deploy", "rpc-probe", "edge-proxy",
 })
 
@@ -171,7 +171,9 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
 
     images = _object(raw["images"], "images")
     required_images = {"besu", "postgres", "mysql", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"}
-    _only_keys(images, "images", required_images)
+    # ``redis`` is accepted only to operate snapshots rendered before Redis
+    # was removed from the Dashboard baseline. New catalog profiles omit it.
+    _only_keys(images, "images", required_images | {"redis"})
     if not required_images.issubset(images):
         raise _error("images must declare every managed runtime image")
     for image_id, image in images.items():
@@ -677,6 +679,8 @@ def _validate_domain(
                 raise _error(f"services.{service.id}.connections.{name} references unknown service {provider_id}")
     for service in services:
         contract = CONNECTION_CONTRACTS.get(service.type, {})
+        if service.type in {"dashboard", "dashboard-migrate"} and "redis" in service.connections:
+            contract = {**contract, "redis": "dashboard-redis"}
         if service.type == "store-api":
             _only_keys(service.configuration, f"services.{service.id}.configuration", {"mode"})
             mode = service.configuration.get("mode", "read_write")
