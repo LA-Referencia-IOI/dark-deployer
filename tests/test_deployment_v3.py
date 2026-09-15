@@ -745,6 +745,13 @@ class DeploymentV3Tests(unittest.TestCase):
             with self.assertRaisesRegex(runner_module.ApplyError, "one-shot"):
                 runner_module.manage_service(plan, project_root, "stop", "service:contracts-deploy")
 
+    def test_service_lifecycle_reports_unknown_target_cleanly(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "one-server-aws-sandbox.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            self._prepare_lifecycle_bundle(plan, Path(temporary), "gateway")
+            with self.assertRaisesRegex(runner_module.ApplyError, "target service is not declared"):
+                runner_module.follow_service_logs(plan, Path(temporary), "service:edge-proxy")
+
     def test_service_lifecycle_dry_run_does_not_touch_docker(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
         executor = self._RecordingLocalExecutor()

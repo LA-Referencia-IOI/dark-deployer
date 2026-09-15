@@ -771,7 +771,7 @@ def _lifecycle_target(plan, project_root: Path, target: str, *, allow_one_shot: 
     effective = _effective_plan(deployed_plan, project_root, root)
     try:
         service = effective.service(service_id)
-    except KeyError as exc:
+    except (KeyError, StopIteration) as exc:
         raise ApplyError(f"target service is not declared by deployment {plan.deployment_id}: {service_id}") from exc
     if service.type in _ONE_SHOT_SERVICE_TYPES and not allow_one_shot:
         raise ApplyError(f"{service_id} is a one-shot {service.type} job and has no lifecycle operation")
