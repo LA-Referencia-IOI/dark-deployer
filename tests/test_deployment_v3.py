@@ -551,6 +551,14 @@ class DeploymentV3Tests(unittest.TestCase):
         store = plan.service("store-api")
         self.assertEqual(verify_module._store_health_url(store, plan.machine("local")), "http://127.0.0.1:8003/health?refresh=true")
 
+    def test_compose_states_accepts_json_list(self):
+        output = json.dumps([{"Service": "api", "State": "running"}])
+        self.assertEqual(verify_module._compose_states(output), {"api": "running"})
+
+    def test_compose_states_accepts_json_lines(self):
+        output = '{"Service":"api","State":"running"}\n{"Service":"worker","State":"exited"}\n'
+        self.assertEqual(verify_module._compose_states(output), {"api": "running", "worker": "exited"})
+
     def test_dashboard_health_endpoints_are_generated_from_inventory(self):
         plan = build_plan(ROOT / "examples" / "deployment-v3" / "local-ha.json")
         with tempfile.TemporaryDirectory() as temporary:
