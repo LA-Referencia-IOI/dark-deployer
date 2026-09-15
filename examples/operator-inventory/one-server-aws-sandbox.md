@@ -36,12 +36,21 @@ keeping all services on one host.
 
 ## AWS prerequisites
 
+- Connect to the EC2 instance as `ubuntu` using the local key
+  `lareferencia-dark.pem` and the hostname `sandbox.dark-pid.net`.
+- DNS for `sandbox.dark-pid.net` and the AWS firewall/Security Group are already
+  configured; no deployer step is needed for either of them.
 - Run the deployer from the EC2 instance itself.
-- Point `sandbox.dark-pid.net` to the EC2 public address.
-- Allow inbound TCP/80 in the instance security group.
 - Ensure Docker and the deployer prerequisites are installed on the server.
 - Keep the chain artifact aligned with this exact inventory, or generate a new
   one before install.
+
+Connect from your workstation with:
+
+```bash
+chmod 600 lareferencia-dark.pem
+ssh -i lareferencia-dark.pem ubuntu@sandbox.dark-pid.net
+```
 
 ## How to inspect
 
@@ -56,8 +65,16 @@ venv/bin/python deploy.py plan \
 
 ```bash
 venv/bin/python deploy.py install \
-  --inventory examples/operator-inventory/one-server-aws-sandbox.json --verbose
+  --inventory examples/operator-inventory/one-server-aws-sandbox.json \
+  --create-master-wallet \
+  --new-chain \
+  --initialize-managed-secrets \
+  --clean-empty-network-conflicts \
+  --verbose
 ```
+
+The command is run after SSH login, from the repository root. It does not use
+SSH for deployment because the inventory declares the EC2 host as local.
 
 The expected warnings are important: all validators and storage peers share the
 same EC2 instance, so this is a sandbox with logical replicas, not an HA
