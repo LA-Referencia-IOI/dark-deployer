@@ -19,6 +19,57 @@ generating the inventory; do not invent static addresses.
 `lima-up.sh` provisions one temporary base VM and clones it into the five
 roles. The base contains no dARK data, IPFS state, Besu state, or secrets.
 
+## Two-site variant
+
+`lima-two-site-up.sh` is a separate five-VM laboratory. It preserves the
+original lab and uses `dark-two-site-*` instance names, so both can coexist in
+one store. Its distribution is intentionally asymmetric:
+
+| Site | VM | Role |
+| --- | --- | --- |
+| site-a | `dark-two-site-apps` | Apps, RPC, resolver, dashboard, proxy |
+| site-a | `dark-two-site-blockchain-a` | Validators 01 and 02 |
+| site-a | `dark-two-site-storage-1` | Kubo and IPFS Cluster peer A |
+| site-b | `dark-two-site-blockchain-b` | Validators 03 and 04 |
+| site-b | `dark-two-site-storage-2` | Kubo and IPFS Cluster peer B |
+
+The script assigns `site-a-lan` and `site-b-lan` addresses to local peers and
+creates a WireGuard `wg0` mesh for cross-site traffic. The generated operator
+inventory selects the local LAN for same-site Besu/IPFS peers and `mesh-vpn`
+for cross-site peers. `socket_vmnet` is only WireGuard's transport underlay and
+the SSH-forwarding network; dARK does not select it as a service network.
+
+Unlike the original Lima lab, this variant switches only its own guests from
+the rootless Docker supplied by Lima's template to Docker Engine's rootful
+daemon. Rootless Docker cannot publish the same P2P port on both a site-LAN IP
+and `wg0`; rootful Docker preserves those two explicit bind addresses. The
+setup also stops the template's user-owned rootless daemon and restores the
+masked `containerd` service required by the rootful engine.
+
+This validates the important routing decision and the encrypted cross-site
+path. It does not emulate physical isolation of two data centres: Lima still
+provides one shared transport segment below the two logical site-LAN address
+ranges. A routing/firewall appliance or distinct host networks is required to
+test loss or isolation of that underlay.
+
+```bash
+local-infra/lima-two-site-up.sh --store /Volumes/Test/dark-lab
+venv/bin/python local-infra/generate-lima-two-site-inventory.py \
+  --store /Volumes/Test/dark-lab
+venv/bin/python deploy.py validate \
+  --inventory examples/operator-inventory/lima-two-site-five-host.json
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/lima-two-site-five-host.json \
+  --create-master-wallet --verbose
+```
+
+The generator requires `--store` and refuses to emit an inventory unless each
+guest has its expected site-LAN and WireGuard addresses.
+
+Stop only this variant with `local-infra/lima-two-site-down.sh --store PATH`.
+To delete its five guests and its base image, while retaining the original lab,
+use `local-infra/lima-two-site-clean.sh --store PATH`; it asks for confirmation.
+
 ## Prerequisites
 
 ```bash

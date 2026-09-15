@@ -12,6 +12,7 @@ environment unless those records are wanted.
 | --- | --- | --- |
 | `scenarios/local-ha-deposit-lifecycle.ipynb` | `examples/operator-inventory/local-ha.json` | The resolved four-validator/two-storage-peer topology, the loopback gateway, a full authority-to-ARK deposit lifecycle, resolver redirect, and Store replication status. |
 | `scenarios/lima-five-host-deposit-lifecycle.ipynb` | `examples/operator-inventory/lima-five-host.json` | The distributed five-host topology, public apps gateway, private SSH checks for Admin and Store, authority-to-ARK lifecycle, resolver redirect, and two-machine replication. |
+| `scenarios/lima-two-site-network-deposit-lifecycle.ipynb` | `examples/operator-inventory/lima-two-site-five-host.json` | Two-site LAN/VPN locality, WireGuard and rootful Docker checks, storage API/P2P paths, public gateway, authority-to-ARK lifecycle, replication, and resolver redirect. |
 
 The generic notebooks at this directory's root remain useful for API
 integration work.  They intentionally retain configurable direct endpoint

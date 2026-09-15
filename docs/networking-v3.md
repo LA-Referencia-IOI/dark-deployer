@@ -1,5 +1,10 @@
 # Networking in deployment V3
 
+Legacy inventories select one network per P2P family. Operator inventory v3
+can instead choose a site LAN or an inter-site VPN per source-target pair; its
+contract, operational limits and rollout are documented in
+[Multi-site LAN, VPN and P2P proposal](multi-site-lan-vpn-proposal.md).
+
 Deployment V3 separates controller access from application traffic.
 
 | Field | Role |
@@ -13,6 +18,25 @@ Containers on the same machine use Docker DNS and their internal port. A
 connection crossing machines uses the provider's private exposure endpoint.
 The `execution` setting selects the controller transport; it does not decide
 whether a peer is local to Docker.
+
+## Local two-site Docker laboratory
+
+`execution: "docker-lab"` is reserved for the maintained
+`examples/operator-inventory/local-two-site.json` scenario. It simulates
+logical machines through a single local Docker daemon without binding LAN/VPN
+addresses on the host. Each logical machine keeps a private per-machine Docker
+network, then joins its declared site LAN and, where declared, `mesh-vpn`.
+
+Cross-machine API endpoints and P2P advertisements use network-qualified
+Docker DNS aliases such as `validator03-mesh-vpn`. This means an endpoint can
+only resolve on the selected LAN or VPN; it cannot accidentally take a
+same-site route for an inter-site edge. Public loopback/public proxy listeners
+continue to be published on the host, while private and P2P ports remain
+inside Docker.
+
+This is a topology and protocol integration laboratory, not a substitute for
+host-loss or real VPN testing: all logical machines still share one Docker
+daemon and physical host.
 
 ## Routed network domains
 

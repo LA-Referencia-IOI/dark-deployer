@@ -7,6 +7,8 @@ not bypass v3 validation, planning, rendering, secret handling, or verification.
 Use `operator-local-simple` for a quick end-to-end test, `operator-local-observer`
 to exercise an observer and a private Resolver binding, `operator-local-ha`
 to exercise two storage peers on one Docker host, and
+`operator-local-two-site` to exercise two isolated Docker LANs connected by a
+Docker VPN mesh, and
 `operator-production-five-host` as a five-machine SSH starting point. The last
 template contains documentation network ranges and `REPLACE` values and must
 be adapted before preflight.
@@ -27,6 +29,18 @@ venv/bin/python deploy.py inventory-resolve \
 venv/bin/python deploy.py plan --inventory examples/operator-inventory/local-ha.json
 ```
 
+`local-two-site.json` is a separate executable laboratory. Its six logical
+machines run through one Docker daemon, but they are attached to `site-a-lan`,
+`site-b-lan`, and `mesh-vpn` exactly as declared. The network-qualified DNS
+aliases make the chosen path explicit (`validator03-mesh-vpn`, for example):
+
+```bash
+venv/bin/python deploy.py inventory-network-matrix \
+  --inventory examples/operator-inventory/local-two-site.json
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-two-site.json --verbose
+```
+
 The compact inventory has one source of truth for `placement`, `storage` and
 `proxies`. Each proxy owns a machine, listener, public origin, TLS mode and
 typed route destinations; a machine may run only one proxy.
@@ -35,6 +49,33 @@ exposures, secret consumers, and v3 groups. Review the resolved output or run
 `inventory-explain` before applying changes. `inventory-resolve`, `plan`, and
 `validate` are safe offline inspection commands; `install`, `push`, and
 `apply` are operational actions.
+
+## Multiple sites
+
+Operator format v3 may declare the LAN that belongs to each site and assign a
+site to every machine. A locality policy keeps the authoring form compact while
+the resolver produces explicit directed P2P edges for Besu, Kubo and Cluster:
+
+```json
+"format_version": 3,
+"sites": {"eu": {"lan": "eu-lan"}, "us": {"lan": "us-lan"}},
+"routing": {
+  "defaults": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
+  "blockchain_p2p": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
+  "storage_p2p": {"same_site": "site_lan", "cross_site": "mesh-vpn"}
+}
+```
+
+Each machine declares `site` plus its LAN address and, when it participates in
+cross-site traffic, its VPN address. Inspect the resulting endpoint matrix
+before applying it:
+
+```bash
+venv/bin/python deploy.py inventory-network-matrix \
+  --inventory inventory.json
+```
+
+Version 2 inventories keep their existing global routing behavior.
 
 `routes` declares a directional route already provided by the site network;
 it does not configure a router or firewall. `networking.services` is reserved

@@ -1,0 +1,281 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 3,
+  "catalog": "dark-platform-baseline-v1.0",
+  "profile": "lab",
+  "availability": {
+    "objectives": [
+      "tolerate_validator_individual"
+    ]
+  },
+  "deployment": {
+    "id": "dark-lima-two-site-five-host",
+    "label": "dARK Lima two-site five-host acceptance lab"
+  },
+  "defaults": {
+    "ssh": {
+      "user": "dark",
+      "port": 22,
+      "private_key_file": "/etc/dark-deployer/ssh/REPLACE-deploy-ed25519"
+    },
+    "paths": {
+      "workspace_root": "/srv/dark",
+      "data_root": "/srv/dark/data",
+      "secrets_root": "/srv/dark/secrets"
+    }
+  },
+  "networks": {
+    "site-a-lan": {
+      "kind": "lan",
+      "cidr": "10.241.10.0/24"
+    },
+    "site-b-lan": {
+      "kind": "lan",
+      "cidr": "10.241.20.0/24"
+    },
+    "mesh-vpn": {
+      "kind": "vpn",
+      "cidr": "10.250.30.0/24"
+    }
+  },
+  "machines": {
+    "apps": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "site-a-lan": "10.241.10.10",
+        "mesh-vpn": "10.250.30.10"
+      },
+      "site": "site-a",
+      "ssh": {
+        "user": "lmatas",
+        "port": 50580,
+        "private_key_file": "/Volumes/Externo/dark-sedes/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-sedes/.lima/_config/dark-deployer-two-site-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    },
+    "blockchain-a": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "site-a-lan": "10.241.10.11",
+        "mesh-vpn": "10.250.30.11"
+      },
+      "site": "site-a",
+      "ssh": {
+        "user": "lmatas",
+        "port": 50589,
+        "private_key_file": "/Volumes/Externo/dark-sedes/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-sedes/.lima/_config/dark-deployer-two-site-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    },
+    "blockchain-b": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "site-b-lan": "10.241.20.11",
+        "mesh-vpn": "10.250.30.21"
+      },
+      "site": "site-b",
+      "ssh": {
+        "user": "lmatas",
+        "port": 50603,
+        "private_key_file": "/Volumes/Externo/dark-sedes/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-sedes/.lima/_config/dark-deployer-two-site-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    },
+    "storage-1": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "site-a-lan": "10.241.10.12",
+        "mesh-vpn": "10.250.30.12"
+      },
+      "site": "site-a",
+      "ssh": {
+        "user": "lmatas",
+        "port": 50596,
+        "private_key_file": "/Volumes/Externo/dark-sedes/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-sedes/.lima/_config/dark-deployer-two-site-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    },
+    "storage-2": {
+      "execution": "ssh",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "site-b-lan": "10.241.20.12",
+        "mesh-vpn": "10.250.30.22"
+      },
+      "site": "site-b",
+      "ssh": {
+        "user": "lmatas",
+        "port": 50610,
+        "private_key_file": "/Volumes/Externo/dark-sedes/.lima/_config/user",
+        "known_hosts_file": "/Volumes/Externo/dark-sedes/.lima/_config/dark-deployer-two-site-known_hosts"
+      },
+      "paths": {
+        "workspace_root": "/home/lmatas.guest/dark",
+        "data_root": "/home/lmatas.guest/dark-data",
+        "secrets_root": "/home/lmatas.guest/dark-secrets"
+      }
+    }
+  },
+  "placement": {
+    "apps": "apps",
+    "blockchain-a": "blockchain-a",
+    "blockchain-b": "blockchain-b",
+    "storage-1": "storage-1",
+    "storage-2": "storage-2",
+    "explorer": "blockchain-a"
+  },
+  "routing": {
+    "blockchain_p2p": {
+      "same_site": "site_lan",
+      "cross_site": "mesh-vpn"
+    },
+    "storage_p2p": {
+      "same_site": "site_lan",
+      "cross_site": "mesh-vpn"
+    },
+    "storage_api": {
+      "same_site": "site_lan",
+      "cross_site": "mesh-vpn"
+    },
+    "application_api": {
+      "same_site": "site_lan",
+      "cross_site": "mesh-vpn"
+    }
+  },
+  "blockchain": {
+    "chain_id": 2025,
+    "validator_groups": {
+      "blockchain-a": {
+        "validator_count": 2
+      },
+      "blockchain-b": {
+        "validator_count": 2
+      }
+    },
+    "observer_groups": {},
+    "rpc": {
+      "primary": "rpc01",
+      "nodes": {
+        "rpc01": {
+          "group": "apps"
+        }
+      }
+    },
+    "artifact": {
+      "path": "blockchain/role-artifact"
+    }
+  },
+  "storage": {
+    "cluster_name": "dark-lima-two-site",
+    "peers": {
+      "storage-a": {
+        "group": "storage-1"
+      },
+      "storage-b": {
+        "group": "storage-2"
+      }
+    },
+    "replication": {
+      "publish_after_replicas": 1,
+      "target_replicas": 2
+    }
+  },
+  "proxies": {
+    "gateway": {
+      "group": "apps",
+      "listener": {
+        "bind": "public",
+        "port": 80
+      },
+      "tls": {
+        "mode": "http"
+      },
+      "sites": [
+        {
+          "host": "192.168.105.15",
+          "public_origin": "http://192.168.105.15",
+          "routes": [
+            {
+              "id": "dashboard",
+              "path": "/admin/",
+              "service": "dashboard",
+              "upstream_path": "/"
+            },
+            {
+              "id": "explorer",
+              "path": "/explorer/",
+              "service": "explorer",
+              "upstream_path": "/"
+            },
+            {
+              "id": "minter-v1",
+              "path": "/api/v1/",
+              "service": "minter-api",
+              "upstream_path": "/api/v1/"
+            },
+            {
+              "id": "minter-docs",
+              "path": "/api/docs",
+              "service": "minter-api",
+              "upstream_path": "/docs"
+            },
+            {
+              "id": "minter-openapi",
+              "path": "/api/openapi.json",
+              "service": "minter-api",
+              "upstream_path": "/openapi.json"
+            },
+            {
+              "id": "resolver",
+              "path": "/",
+              "service": "resolver-api",
+              "upstream_path": "/api/v1/arks/"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "overrides": {
+    "explorer": {
+      "group": "explorer"
+    },
+    "settings": {
+      "minter": {
+        "shoulder": "200"
+      }
+    }
+  },
+  "sites": {
+    "site-a": {
+      "lan": "site-a-lan"
+    },
+    "site-b": {
+      "lan": "site-b-lan"
+    }
+  }
+}

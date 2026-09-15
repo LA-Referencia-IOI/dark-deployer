@@ -1,0 +1,115 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 3,
+  "catalog": "dark-platform-baseline-v1.0",
+  "profile": "lab",
+  "deployment": {
+    "id": "dark-operator-local-two-site",
+    "label": "dARK local Docker lab: two sites over VPN"
+  },
+  "networks": {
+    "site-a-lan": {"kind": "lan", "cidr": "172.24.10.0/24"},
+    "site-b-lan": {"kind": "lan", "cidr": "172.24.20.0/24"},
+    "mesh-vpn": {"kind": "vpn", "cidr": "172.24.30.0/24"}
+  },
+  "sites": {
+    "site-a": {"lan": "site-a-lan"},
+    "site-b": {"lan": "site-b-lan"}
+  },
+  "machines": {
+    "apps": {
+      "execution": "docker-lab",
+      "site": "site-a",
+      "addresses": {"site-a-lan": "172.24.10.10", "mesh-vpn": "172.24.30.10"}
+    },
+    "blockchain-a": {
+      "execution": "docker-lab",
+      "site": "site-a",
+      "addresses": {"site-a-lan": "172.24.10.11", "mesh-vpn": "172.24.30.11"}
+    },
+    "storage-1": {
+      "execution": "docker-lab",
+      "site": "site-a",
+      "addresses": {"site-a-lan": "172.24.10.12", "mesh-vpn": "172.24.30.12"}
+    },
+    "resolver": {
+      "execution": "docker-lab",
+      "site": "site-b",
+      "addresses": {"site-b-lan": "172.24.20.10", "mesh-vpn": "172.24.30.20"}
+    },
+    "blockchain-b": {
+      "execution": "docker-lab",
+      "site": "site-b",
+      "addresses": {"site-b-lan": "172.24.20.11", "mesh-vpn": "172.24.30.21"}
+    },
+    "storage-2": {
+      "execution": "docker-lab",
+      "site": "site-b",
+      "addresses": {"site-b-lan": "172.24.20.12", "mesh-vpn": "172.24.30.22"}
+    }
+  },
+  "placement": {
+    "apps": "apps",
+    "resolver": "resolver",
+    "resolver-observer": "resolver",
+    "blockchain-a": "blockchain-a",
+    "blockchain-b": "blockchain-b",
+    "storage-1": "storage-1",
+    "storage-2": "storage-2",
+    "explorer": "blockchain-a"
+  },
+  "routing": {
+    "blockchain_p2p": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
+    "storage_p2p": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
+    "storage_api": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
+    "application_api": {"same_site": "site_lan", "cross_site": "mesh-vpn"}
+  },
+  "blockchain": {
+    "chain_id": 2025,
+    "validator_groups": {
+      "blockchain-a": {"validator_count": 2},
+      "blockchain-b": {"validator_count": 2}
+    },
+    "observer_groups": {"resolver-observer": {"observer_count": 1}},
+    "rpc": {
+      "primary": "rpc01",
+      "nodes": {"rpc01": {"group": "apps"}},
+      "bindings": {"resolver-api": "observer01"}
+    }
+  },
+  "storage": {
+    "cluster_name": "dark-local-two-site",
+    "peers": {
+      "storage-a": {"group": "storage-1"},
+      "storage-b": {"group": "storage-2"}
+    },
+    "replication": {"publish_after_replicas": 1, "target_replicas": 2},
+    "api_replicas": {
+      "store-api-resolver": {"group": "resolver", "consumers": ["resolver-api"]}
+    }
+  },
+  "proxies": {
+    "gateway": {
+      "group": "apps",
+      "listener": {"bind": "loopback", "port": 80},
+      "tls": {"mode": "http"},
+      "sites": [{
+        "host": "localhost",
+        "public_origin": "http://localhost",
+        "routes": [
+          {"id": "dashboard", "path": "/admin/", "service": "dashboard", "upstream_path": "/"},
+          {"id": "explorer", "path": "/explorer/", "service": "explorer", "upstream_path": "/"},
+          {"id": "minter-v1", "path": "/api/v1/", "service": "minter-api", "upstream_path": "/api/v1/"},
+          {"id": "minter-docs", "path": "/api/docs", "service": "minter-api", "upstream_path": "/docs"},
+          {"id": "minter-openapi", "path": "/api/openapi.json", "service": "minter-api", "upstream_path": "/openapi.json"},
+          {"id": "resolver", "path": "/", "service": "resolver-api", "upstream_path": "/api/v1/arks/"}
+        ]
+      }]
+    }
+  },
+  "overrides": {
+    "explorer": {"group": "explorer"},
+    "resolver": {"group": "resolver"},
+    "settings": {"minter": {"shoulder": "200"}}
+  }
+}

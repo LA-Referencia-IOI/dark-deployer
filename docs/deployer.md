@@ -204,7 +204,7 @@ sections for placement, storage, routing, proxies, legacy access and overrides. 
 the expansion when changing a section or saving, and keeps atomic saves and
 timestamped backups.
 
-Available compact templates are `operator-local-simple`, `operator-local-observer`, `operator-local-ha`,
+Available compact templates are `operator-local-simple`, `operator-local-observer`, `operator-local-ha`, `operator-local-two-site`,
 `operator-production-five-host` and `operator-production-six-host`. Production
 templates use documentation network ranges and `REPLACE` paths; replace them
 before preflight.
