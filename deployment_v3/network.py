@@ -40,18 +40,48 @@ def internal_port(service: ServiceInstance) -> int:
     return int(service.configuration.get("port", DEFAULT_PORTS.get(service.type, 0)))
 
 
+def docker_lab_address(plan, service: ServiceInstance, network_id: str) -> str:
+    """Return a deterministic per-service IP on one physical Docker lab LAN.
+
+    A logical machine has one production address but can run several containers
+    in the lab. Besu's enode grammar only accepts IP literals, so each
+    container needs its own stable address rather than the machine's address or
+    a DNS alias. The range starts at +10 and is bounded by validation/render
+    through Docker's IPAM allocation.
+    """
+    network = next(item for item in plan.networks if item.id == network_id)
+    subnet = ipaddress.ip_network(network.cidr)
+    rank = sorted(item.id for item in plan.services).index(service.id)
+    address = subnet.network_address + 10 + rank
+    if address >= subnet.broadcast_address:
+        raise InventoryError(f"deployment topology v3: docker lab network {network_id} has no address for {service.id}")
+    return str(address)
+
+
 def endpoint_for(service: ServiceInstance, provider: Machine, consumer: Machine, connection: dict[str, str]) -> Endpoint:
     if provider.id == consumer.id:
         return Endpoint(service.id, service.id, internal_port(service), "docker")
-    if not service.exposure or service.exposure.get("mode") != "private":
+    # A docker lab has several logical machines on one Docker daemon.  It must
+    # not publish their private addresses on the macOS/Linux host: the target
+    # is reached through the explicitly shared physical Docker network instead.
+    # The alias is network-qualified so a service present on a LAN and the VPN
+    # cannot be resolved through the wrong interface.
+    if provider.execution == consumer.execution == "docker-lab":
+        network = connection.get("network")
+        if not network:
+            raise InventoryError(f"deployment topology v3: {service.id} lacks a selected docker-lab network")
+        return Endpoint(service.id, f"{service.id}-{network}", internal_port(service), "docker", network)
+    listener = next((item for item in service.listeners if item["network"] == connection.get("network")), None)
+    if not listener and (not service.exposure or service.exposure.get("mode") != "private"):
         raise InventoryError(f"deployment topology v3: {service.id} must expose a private port for remote consumers")
     network = connection.get("network")
-    if not network or service.exposure.get("network") != network:
+    if not network or (not listener and service.exposure.get("network") != network):
         raise InventoryError(f"deployment topology v3: {service.id} must expose on the selected connection network")
+    endpoint = listener or service.exposure
     return Endpoint(
         service.id,
-        str(service.exposure.get("advertise_address") or provider.address_on(network)),
-        int(service.exposure.get("advertise_port") or service.exposure["port"]),
+        str(endpoint.get("advertise_address") or provider.address_on(network)),
+        int(endpoint.get("advertise_port") or endpoint["port"]),
         "private",
         network,
     )
@@ -78,6 +108,33 @@ def host_bind_address(machine: Machine, exposure: dict | None) -> str | None:
     if exposure["mode"] == "public":
         return "0.0.0.0"
     return machine.address_on(exposure["network"])
+
+
+def listener_bind_address(machine: Machine, listener: dict) -> str:
+    """Return a host bind IP for a normalized private listener."""
+    return machine.address_on(listener["network"])
+
+
+def p2p_edges(plan, family: str, source_id: str) -> tuple[dict, ...]:
+    """Resolved directed P2P edges for a source, or an empty legacy fallback.
+
+    The explicit matrix is intentionally data, not an implicit renderer rule:
+    it can be displayed, validated and reused by artifacts, Compose and probes.
+    """
+    peerings = plan.raw.get("peerings", {}).get(family, [])
+    return tuple(edge for edge in peerings if edge["from"] == source_id)
+
+
+def p2p_bindings(plan, family: str, service_id: str, default_port: int, protocols: tuple[str, ...]) -> tuple[tuple[str, int, str], ...]:
+    """Bind every local address advertised by an incoming explicit P2P edge."""
+    edges = plan.raw.get("peerings", {}).get(family, [])
+    service = plan.service(service_id)
+    machine = plan.machine(service.machine_id)
+    bindings = {(edge["address"], int(edge["port"]), protocol) for edge in edges if edge["to"] == service_id for protocol in protocols}
+    if bindings:
+        return tuple(sorted(bindings))
+    # Existing inventories retain their singular infrastructure policy.
+    return ((machine.address_on(plan.raw["infrastructure"][{"blockchain": "besu", "ipfs": "ipfs", "cluster": "cluster"}[family]]["network"]), int(service.configuration.get("p2p_advertise_port", default_port)), protocol) for protocol in protocols)
 
 
 def p2p_endpoint(machine: Machine, service: ServiceInstance, network_id: str, default_port: int) -> tuple[str, int]:

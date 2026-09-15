@@ -236,6 +236,17 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
     if not networks:
         raise _error("networks cannot be empty")
     network_ids = {network.id for network in networks}
+    sites_raw = raw.get("sites", {})
+    sites = _object(sites_raw, "sites")
+    for site_id, definition in sites.items():
+        _identifier(site_id, f"sites.{site_id}")
+        definition = _object(definition, f"sites.{site_id}")
+        _only_keys(definition, f"sites.{site_id}", {"lan"})
+        lan = _identifier(definition.get("lan"), f"sites.{site_id}.lan")
+        if lan not in network_ids:
+            raise _error(f"sites.{site_id}.lan references unknown network {lan}")
+        if next(network for network in networks if network.id == lan).kind != "lan":
+            raise _error(f"sites.{site_id}.lan must reference a LAN network")
     routes = raw.get("routes", [])
     if not isinstance(routes, list):
         raise _error("routes must be a list")
@@ -269,10 +280,10 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
     for machine_id, definition in _object(raw["machines"], "machines").items():
         _identifier(machine_id, f"machines.{machine_id}")
         definition = _object(definition, f"machines.{machine_id}")
-        _only_keys(definition, f"machines.{machine_id}", {"execution", "management_address", "addresses", "paths", "docker", "ssh"})
+        _only_keys(definition, f"machines.{machine_id}", {"execution", "management_address", "addresses", "paths", "docker", "ssh", "site"})
         execution = definition.get("execution")
-        if execution not in {"local", "ssh", "auto"}:
-            raise _error(f"machines.{machine_id}.execution must be local, ssh or auto")
+        if execution not in {"local", "docker-lab", "ssh", "auto"}:
+            raise _error(f"machines.{machine_id}.execution must be local, docker-lab, ssh or auto")
         addresses = _object(definition.get("addresses"), f"machines.{machine_id}.addresses")
         _only_keys(addresses, f"machines.{machine_id}.addresses", {network.id for network in networks})
         if not addresses:
@@ -288,6 +299,14 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
                 raise _error(f"machines.{machine_id} address {address} is outside {network.id}")
             addresses_seen[network.id].add(address)
             canonical_addresses[network.id] = address
+        site = definition.get("site")
+        if site is not None:
+            site = _identifier(site, f"machines.{machine_id}.site")
+            if site not in sites:
+                raise _error(f"machines.{machine_id}.site references unknown site {site}")
+            site_lan = sites[site]["lan"]
+            if site_lan not in canonical_addresses:
+                raise _error(f"machines.{machine_id} must have an address on its site LAN {site_lan}")
         override_paths = dict(defaults_paths)
         local_paths = _object(definition.get("paths", {}), f"machines.{machine_id}.paths")
         _only_keys(local_paths, f"machines.{machine_id}.paths", {"workspace_root", "data_root", "secrets_root"})
@@ -307,13 +326,14 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
             data_root=_absolute_path(override_paths["data_root"], f"machines.{machine_id}.paths.data_root"),
             secrets_root=_absolute_path(override_paths["secrets_root"], f"machines.{machine_id}.paths.secrets_root"),
             docker_subnet=declared_subnet,
+            site=site,
         ))
 
     services: list[ServiceInstance] = []
     for service_id, definition in _object(raw["services"], "services").items():
         _identifier(service_id, f"services.{service_id}")
         definition = _object(definition, f"services.{service_id}")
-        _only_keys(definition, f"services.{service_id}", {"type", "machine", "connections", "configuration", "exposure"})
+        _only_keys(definition, f"services.{service_id}", {"type", "machine", "connections", "configuration", "exposure", "listeners"})
         service_type = _string(definition.get("type"), f"services.{service_id}.type")
         if service_type not in SERVICE_TYPES:
             raise _error(f"services.{service_id}.type is unknown: {service_type}")
@@ -346,6 +366,9 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
             }
         configuration = _object(definition.get("configuration", {}), f"services.{service_id}.configuration")
         exposure = definition.get("exposure")
+        listeners: tuple[dict, ...] = ()
+        if exposure is not None and "listeners" in definition:
+            raise _error(f"services.{service_id} cannot combine exposure and listeners")
         if exposure is not None:
             exposure = _object(exposure, f"services.{service_id}.exposure")
             _only_keys(exposure, f"services.{service_id}.exposure", {"mode", "network", "port", "protocols", "advertise_address", "advertise_port"})
@@ -372,7 +395,40 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
                     raise _error(f"services.{service_id}.exposure.network is not available on {machine_id}")
             elif exposure.get("network") is not None:
                 raise _error(f"services.{service_id}.exposure.network is only valid for private exposure")
-        services.append(ServiceInstance(service_id, service_type, machine_id, dict(connections), dict(configuration), exposure))
+        if "listeners" in definition:
+            raw_listeners = definition["listeners"]
+            if not isinstance(raw_listeners, list) or not raw_listeners:
+                raise _error(f"services.{service_id}.listeners must be a non-empty list")
+            parsed_listeners: list[dict] = []
+            seen_listeners: set[tuple[str, int, tuple[str, ...]]] = set()
+            machine_addresses = next(machine.addresses for machine in machines if machine.id == machine_id)
+            for index, listener in enumerate(raw_listeners):
+                listener = _object(listener, f"services.{service_id}.listeners[{index}]")
+                _only_keys(listener, f"services.{service_id}.listeners[{index}]", {"network", "port", "protocols", "advertise_address", "advertise_port"})
+                network = _identifier(listener.get("network"), f"services.{service_id}.listeners[{index}].network")
+                if network not in network_ids or network not in machine_addresses:
+                    raise _error(f"services.{service_id}.listeners[{index}].network is not available on {machine_id}")
+                port = listener.get("port")
+                if not isinstance(port, int) or not 1 <= port <= 65535:
+                    raise _error(f"services.{service_id}.listeners[{index}].port must be a TCP port")
+                protocols = listener.get("protocols", ["tcp"])
+                if not isinstance(protocols, list) or not protocols or any(item not in {"tcp", "udp"} for item in protocols):
+                    raise _error(f"services.{service_id}.listeners[{index}].protocols must contain tcp and/or udp")
+                normalized = {"network": network, "port": port, "protocols": list(dict.fromkeys(protocols))}
+                if "advertise_address" in listener:
+                    normalized["advertise_address"] = _ipv4(listener["advertise_address"], f"services.{service_id}.listeners[{index}].advertise_address")
+                if "advertise_port" in listener:
+                    advertised_port = listener["advertise_port"]
+                    if not isinstance(advertised_port, int) or not 1 <= advertised_port <= 65535:
+                        raise _error(f"services.{service_id}.listeners[{index}].advertise_port must be a TCP/UDP port")
+                    normalized["advertise_port"] = advertised_port
+                key = (network, port, tuple(normalized["protocols"]))
+                if key in seen_listeners:
+                    raise _error(f"services.{service_id}.listeners contains duplicate listener {network}:{port}")
+                seen_listeners.add(key)
+                parsed_listeners.append(normalized)
+            listeners = tuple(parsed_listeners)
+        services.append(ServiceInstance(service_id, service_type, machine_id, dict(connections), dict(configuration), exposure, listeners))
     _validate_domain(raw, services, machines, declared_routes)
     return raw, tuple(machines), tuple(services), tuple(networks)
 
@@ -689,12 +745,13 @@ def _validate_domain(
         raise _error(f"services.{minter.id} must connect to minter-postgres")
     ports: dict[tuple[str, str, int], str] = {}
     for service in services:
-        if not service.exposure or service.exposure.get("mode") == "none":
-            continue
-        key = (service.machine_id, str(service.exposure["mode"]), str(service.exposure.get("network", "")), int(service.exposure["port"]))
-        if key in ports:
-            raise _error(f"services.{service.id}.exposure duplicates {ports[key]} on {key[0]}:{key[-1]}")
-        ports[key] = service.id
+        exposed = [] if not service.exposure or service.exposure.get("mode") == "none" else [(str(service.exposure["mode"]), str(service.exposure.get("network", "")), int(service.exposure["port"]))]
+        exposed.extend(("private", str(listener["network"]), int(listener["port"])) for listener in service.listeners)
+        for mode, network, port in exposed:
+            key = (service.machine_id, mode, network, port)
+            if key in ports:
+                raise _error(f"services.{service.id} listener duplicates {ports[key]} on {key[0]}:{key[-1]}")
+            ports[key] = service.id
     if machines is not None:
         machine_by_id = {machine.id: machine for machine in machines}
         for consumer in services:
@@ -718,12 +775,48 @@ def _validate_domain(
                     sources = set(machine_by_id[consumer.machine_id].addresses)
                     if not any((source, network) in declared_routes for source in sources):
                         raise _error(f"services.{consumer.id}.connections.{name}.network is neither shared nor routed from {consumer.machine_id}")
-                if not provider.exposure or provider.exposure.get("mode") != "private":
+                listener = next((item for item in provider.listeners if item["network"] == network), None)
+                if not listener and (not provider.exposure or provider.exposure.get("mode") != "private"):
                     raise _error(f"services.{provider.id} must expose a private endpoint for {consumer.id}")
-                if provider.exposure.get("network") != network:
+                if not listener and provider.exposure.get("network") != network:
                     raise _error(f"services.{consumer.id}.connections.{name}.network does not match {provider.id} exposure")
-                if protocol not in provider.exposure.get("protocols", ["tcp"]):
+                protocols = listener["protocols"] if listener else provider.exposure.get("protocols", ["tcp"])
+                if protocol not in protocols:
                     raise _error(f"services.{consumer.id}.connections.{name}.protocol is not exposed by {provider.id}")
+        peerings = _object(raw.get("peerings", {}), "peerings")
+        _only_keys(peerings, "peerings", {"blockchain", "ipfs", "cluster"})
+        family_types = {
+            "blockchain": {"besu-rpc", "besu-validator", "besu-observer"},
+            "ipfs": {"ipfs-kubo"},
+            "cluster": {"ipfs-cluster"},
+        }
+        for family, edges in peerings.items():
+            if not isinstance(edges, list):
+                raise _error(f"peerings.{family} must be a list")
+            seen_edges: set[tuple[str, str]] = set()
+            for index, edge in enumerate(edges):
+                edge = _object(edge, f"peerings.{family}[{index}]")
+                _only_keys(edge, f"peerings.{family}[{index}]", {"from", "to", "network", "address", "port"})
+                source = _identifier(edge.get("from"), f"peerings.{family}[{index}].from")
+                target = _identifier(edge.get("to"), f"peerings.{family}[{index}].to")
+                if source == target or (source, target) in seen_edges:
+                    raise _error(f"peerings.{family}[{index}] duplicates or loops {source}->{target}")
+                seen_edges.add((source, target))
+                if source not in by_id or target not in by_id or by_id[source].type not in family_types[family] or by_id[target].type not in family_types[family]:
+                    raise _error(f"peerings.{family}[{index}] must reference {family} services")
+                network = _identifier(edge.get("network"), f"peerings.{family}[{index}].network")
+                if network not in machine_by_id[by_id[target].machine_id].addresses:
+                    raise _error(f"peerings.{family}[{index}].network is not available on target {target}")
+                if network not in machine_by_id[by_id[source].machine_id].addresses:
+                    sources = set(machine_by_id[by_id[source].machine_id].addresses)
+                    if not any((candidate, network) in declared_routes for candidate in sources):
+                        raise _error(f"peerings.{family}[{index}] is neither shared nor routed from {source}")
+                address = _ipv4(edge.get("address"), f"peerings.{family}[{index}].address")
+                if address != machine_by_id[by_id[target].machine_id].address_on(network):
+                    raise _error(f"peerings.{family}[{index}].address must match target address on {network}")
+                port = edge.get("port")
+                if not isinstance(port, int) or not 1 <= port <= 65535:
+                    raise _error(f"peerings.{family}[{index}].port must be a TCP/UDP port")
         p2p_policies = (
             ("besu", {"besu-rpc", "besu-validator", "besu-observer"}),
             ("ipfs", {"ipfs-kubo"}),
@@ -732,6 +825,9 @@ def _validate_domain(
         for policy, types in p2p_policies:
             peers = [service for service in services if service.type in types]
             if len({peer.machine_id for peer in peers}) < 2:
+                continue
+            family = {"besu": "blockchain", "ipfs": "ipfs", "cluster": "cluster"}[policy]
+            if raw.get("peerings", {}).get(family):
                 continue
             network = raw["infrastructure"][policy]["network"]
             for peer in peers:

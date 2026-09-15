@@ -10,7 +10,7 @@ import hashlib
 from pathlib import Path
 
 from .model import DeploymentPlan
-from .network import chain_node_addresses, chain_node_ports
+from .network import chain_node_addresses, chain_node_ports, docker_lab_address
 
 
 class ArtifactError(ValueError):
@@ -88,7 +88,15 @@ def verify_artifact_compatibility(plan: DeploymentPlan, artifact_root: Path, mas
     except (OSError, json.JSONDecodeError) as exc:
         raise ArtifactError(f"invalid chain context: {context_path}") from exc
     expected = chain_context(plan, master_wallet_address or actual.get("master_wallet_address", ""))
-    if actual != expected:
+    # Peer routing is mutable operational state in context v3.  Keep chain
+    # identity, genesis inputs and node keys stable when only LAN/VPN paths
+    # change; static nodes are regenerated from the current peer map.
+    comparable_actual = dict(actual)
+    comparable_expected = dict(expected)
+    if actual.get("version") == expected.get("version") == 3:
+        comparable_actual.pop("peerings", None)
+        comparable_expected.pop("peerings", None)
+    if comparable_actual != comparable_expected:
         differences = sorted({*actual.keys(), *expected.keys()})
         changed = [key for key in differences if actual.get(key) != expected.get(key)]
         detail = ", ".join(changed) or "unknown context difference"
@@ -101,10 +109,9 @@ def verify_artifact_compatibility(plan: DeploymentPlan, artifact_root: Path, mas
 def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
     if not _ADDRESS.fullmatch(master_wallet_address):
         raise ArtifactError("master wallet address must be a 20-byte hexadecimal address")
-    advertised = chain_node_addresses(plan)
-    ports = chain_node_ports(plan)
     roles = _node_roles(plan); groups = _node_groups(plan)
-    return {
+    peerings = plan.raw.get("peerings", {}).get("blockchain", [])
+    context = {
         "version": 2,
         "deployment_id": plan.deployment_id,
         "chain_id": plan.raw["blockchain"]["chain_id"],
@@ -115,12 +122,26 @@ def chain_context(plan: DeploymentPlan, master_wallet_address: str) -> dict:
             node: {
                 "role": roles[node],
                 "group": groups[node],
-                "private_address": advertised[node],
-                "p2p_port": ports[node],
+                **({} if peerings else {"private_address": chain_node_addresses(plan)[node], "p2p_port": chain_node_ports(plan)[node]}),
             }
             for node in roles
         },
     }
+    if peerings:
+        context["version"] = 3
+        # The same resolved edge is an IP endpoint on real hosts and a
+        # network-qualified Docker DNS endpoint in a local multi-site lab.
+        # Persist the rendered identity in the artifact because Besu reads
+        # static-nodes before it can consult the inventory again.
+        context["peerings"] = {"blockchain": [
+            {
+                **edge,
+                "address": docker_lab_address(plan, plan.service(edge["to"]), edge["network"]) if plan.machine(plan.service(edge["to"]).machine_id).execution == "docker-lab" else edge["address"],
+                "port": 30303 if plan.machine(plan.service(edge["to"]).machine_id).execution == "docker-lab" else edge["port"],
+            }
+            for edge in peerings
+        ]}
+    return context
 
 
 def write_chain_bootstrap(plan: DeploymentPlan, output: Path, master_wallet_address: str) -> Path:
@@ -163,13 +184,16 @@ def static_nodes(context: dict, public_keys: dict[str, str]) -> dict[str, list[s
     nodes = context.get("nodes")
     if not isinstance(nodes, dict) or set(nodes) != expected_nodes:
         raise ArtifactError("chain context does not contain the expected nodes")
-    return {
-        node: [
-            f"enode://{cleaned[peer]}@{nodes[peer]['private_address']}:{nodes[peer]['p2p_port']}"
-            for peer in nodes if peer != node
-        ]
-        for node in nodes
-    }
+    peerings = context.get("peerings", {}).get("blockchain")
+    if peerings is not None:
+        return {
+            node: [
+                f"enode://{cleaned[edge['to']]}@{edge['address']}:{edge['port']}"
+                for edge in peerings if edge["from"] == node
+            ]
+            for node in nodes
+        }
+    return {node: [f"enode://{cleaned[peer]}@{nodes[peer]['private_address']}:{nodes[peer]['p2p_port']}" for peer in nodes if peer != node] for node in nodes}
 
 
 def write_static_nodes(artifact_root: Path, public_keys: dict[str, str]) -> Path:
@@ -181,6 +205,12 @@ def write_static_nodes(artifact_root: Path, public_keys: dict[str, str]) -> Path
     destination.mkdir(exist_ok=True)
     for node, peers in static_nodes(context, public_keys).items():
         _write_json(destination / f"{node}.json", peers)
+        node_static = artifact_root / "nodes" / node / "static-nodes.json"
+        if node_static.parent.exists():
+            _write_json(node_static, peers)
+            node_static.chmod(0o644)
+    if (artifact_root / "nodes").exists():
+        write_artifact_manifest(artifact_root)
     return destination
 
 

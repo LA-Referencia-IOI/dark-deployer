@@ -55,7 +55,7 @@ venv/bin/python -m pip install -r requirements-tui.txt
 
 ## The two inventory formats
 
-### Operator inventory v2
+### Operator inventory v2 and v3
 
 This is the recommended format for new installations that follow the
 `dark-platform-baseline-v1.0` catalogue. It describes the decisions that usually differ
@@ -77,6 +77,11 @@ validation, planning, rendering, or execution. That expanded output does not
 need to be saved in order to install.
 
 Examples live in [examples/operator-inventory/](examples/operator-inventory/).
+
+Version 2 remains supported with its single network per traffic family. Version
+3 adds optional `sites`, `machines.*.site`, locality policies (`site_lan`,
+`same_site`, `cross_site`) and a resolved P2P matrix. It is the format for
+installations spanning LANs and VPNs across sites.
 
 ### Complete v3 inventory
 
@@ -110,7 +115,9 @@ additional synchronized chain copy, but they do not count towards quorum.
 | `local-simple.json` | `local` | 1 | Minimal functional path with one validator, RPC, and storage peer |
 | `local-observer.json` | `local` | 1 | A Besu observer and Resolver bound to its private RPC |
 | `local-ha.json` | `lab` | 1 | Logical HA groups and two storage copies on one Docker host |
+| `local-two-site.json` | `lab` | 6 logical | Two isolated Docker LANs plus an inter-site VPN mesh |
 | `lima-five-host.json` | `lab` | 5 | Reproducible SSH distribution across Lima machines |
+| `lima-two-site-five-host.json` | `lab` | 5 | Separate Lima lab: Apps plus two validators and IPFS in site A; two validators and IPFS in site B, joined through WireGuard |
 | `production-five-host.json` | `production` | 5 | Apps, two blockchain domains, and two storage domains |
 | `production-six-host.json` | `production` | 6 | Dedicated public Resolver with local observer, RPC and Store API |
 
@@ -120,6 +127,10 @@ secret sources have been replaced.
 
 `local-ha` demonstrates replication and logical separation, but every instance
 depends on the same Docker daemon: it does not tolerate physical host loss.
+
+`local-two-site` is a network-behaviour lab, not physical HA: it uses one Docker
+daemon but makes LAN and VPN paths observable. Same-site Besu/IPFS peers use
+their site LAN; cross-site peers use only `mesh-vpn`.
 
 ## Local quick start
 
@@ -146,6 +157,22 @@ venv/bin/python deploy.py install \
 
 The generator never silently replaces `blockchain/master-wallet.txt`. If it
 already exists, the installer asks whether it should be reused.
+
+To exercise the two-site network laboratory, use its separate deployment id:
+
+```bash
+venv/bin/python deploy.py install \
+  --inventory examples/operator-inventory/local-two-site.json \
+  --verbose
+```
+
+Before installing, inspect the resolved P2P matrix. It must show `site-a-lan`
+or `site-b-lan` for peers in one site and `mesh-vpn` for cross-site peers:
+
+```bash
+venv/bin/python deploy.py inventory-network-matrix \
+  --inventory examples/operator-inventory/local-two-site.json
+```
 
 After `verify`, run the [local-ha acceptance notebook](notebooks/scenarios/local-ha-deposit-lifecycle.ipynb)
 to exercise a complete deposit through the gateway and inspect the resulting
@@ -183,6 +210,9 @@ venv/bin/python deploy.py inventory-resolve \
 venv/bin/python deploy.py inventory-explain \
   --inventory inventory.json \
   --path /services/resolver-api/connections/rpc
+
+venv/bin/python deploy.py inventory-network-matrix \
+  --inventory inventory.json
 ```
 
 `validate`, `plan`, `inventory-resolve`, `inventory-explain`, and
@@ -375,6 +405,7 @@ payload cleanup are later worker activity, not part of a client HTTP request.
 | `inventory-edit` | Edit an inventory with Textual |
 | `inventory-resolve` | Expand operator v2 to v3 |
 | `inventory-explain` | Explain the provenance of a resolved field |
+| `inventory-network-matrix` | Show the resolved per-peer LAN/VPN endpoints |
 | `inventory-diff` | Compare two resolved inventories semantically |
 | `chain-*` | Create, export, and verify Besu artifacts |
 | `secrets-init` | Initialize managed private material |
@@ -434,6 +465,7 @@ venv/bin/python deploy.py services --deployment dark-operator-local-ha --json
 | [Inventory and artifact flow](docs/deployment-v3-inventory-and-artifact-flow.md) | Resolution, bundles, secrets, and blockchain artifacts |
 | [Service placement](docs/deployment-v3-service-placement.md) | Groups, connections, endpoints, and placement constraints |
 | [Networking](docs/networking-v3.md) | LAN, VPN, routes, NAT, ports, and firewalling |
+| [Multisite networking proposal](docs/multi-site-lan-vpn-proposal.md) | Working design for sites, per-peer LAN/VPN routing, Besu, Kubo, and IPFS Cluster |
 | [Architecture](docs/architecture.md) | dARK components and ARK lifecycle |
 | [Lima testing](docs/lima-five-host-test.md) | Five-host distributed lab |
 | [AWS deployment](docs/aws-single-az-five-host.md) | Private EC2 scenario in one Availability Zone |

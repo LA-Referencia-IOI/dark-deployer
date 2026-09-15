@@ -104,9 +104,9 @@ class DeploymentV3Tests(unittest.TestCase):
             kubo = (output / "machines" / "storage-2" / "groups" / "storage-2" / "env" / "ipfs-storage-b.env").read_text()
             cluster = (output / "machines" / "storage-2" / "groups" / "storage-2" / "env" / "cluster-storage-b.env").read_text()
         self.assertIn("IPFS_BOOTSTRAP_ENDPOINTS=/ip4/192.168.105.12/tcp/5001@4001", kubo)
-        self.assertIn("IPFS_ANNOUNCE_MULTIADDRESS=/ip4/192.168.105.13/tcp/4001", kubo)
+        self.assertIn('IPFS_ANNOUNCE_MULTIADDRESSES=["/ip4/192.168.105.13/tcp/4001"]', kubo)
         self.assertIn("CLUSTER_BOOTSTRAP_ENDPOINTS=/ip4/192.168.105.12/tcp/9094@9096", cluster)
-        self.assertIn("CLUSTER_ANNOUNCE_MULTIADDRESS=/ip4/192.168.105.13/tcp/9096", cluster)
+        self.assertIn('CLUSTER_ANNOUNCE_MULTIADDRESSES=["/ip4/192.168.105.13/tcp/9096"]', cluster)
 
     def test_private_endpoint_can_advertise_a_nat_address_and_port(self):
         source = ROOT / "examples" / "deployment-v3" / "production-five-host.json"
@@ -457,6 +457,17 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertEqual(evidence, "RPC peers=4; expected at least 4")
         self.assertEqual(calls[0][0], "http://127.0.0.1:8545")
         self.assertIn('"method":"net_peerCount"', calls[0][1])
+
+    def test_rpc_readiness_does_not_wait_for_later_observers(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-six-host.json")
+        original_curl = readiness._curl
+        try:
+            readiness._curl = lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": '{"result":"0x4"}', "stderr": ""})()
+            ok, evidence = readiness._rpc(plan, ROOT)
+        finally:
+            readiness._curl = original_curl
+        self.assertTrue(ok)
+        self.assertEqual(evidence, "RPC peers=4; expected at least 4")
 
     def test_observer_readiness_checks_sync_and_validator_exclusion(self):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 
-ExecutionMode = Literal["local", "ssh", "auto"]
+ExecutionMode = Literal["local", "docker-lab", "ssh", "auto"]
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,10 @@ class Machine:
     data_root: str
     secrets_root: str
     docker_subnet: str | None = None
+    # ``site`` is intentionally optional so pre-existing v3 inventories keep
+    # their exact single-domain semantics.  Site-aware inventories use it to
+    # select an endpoint per source/target pair.
+    site: str | None = None
 
     def address_on(self, network_id: str) -> str:
         try:
@@ -48,6 +52,10 @@ class ServiceInstance:
     connections: dict[str, dict[str, str]]
     configuration: dict
     exposure: dict | None = None
+    # A service can listen privately on more than one host address.  This is
+    # needed when local callers use a site LAN while remote callers use a VPN.
+    # ``exposure`` remains the backwards-compatible singular form.
+    listeners: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -69,17 +69,42 @@ _PORTS = {
 }
 
 
-def _network_for(consumer: dict, provider: dict, routing: dict) -> str:
-    if provider["type"] == "ipfs-cluster":
+def _selector_network(selector: object, *, source_machine: dict, target_machine: dict, sites: dict, path: str) -> str:
+    """Resolve a literal network or the compact ``site_lan`` selector."""
+    if not isinstance(selector, str) or not selector:
+        raise _fail(f"{path} must select a network or site_lan")
+    if selector != "site_lan":
+        return selector
+    site = target_machine.get("site")
+    if not isinstance(site, str) or site not in sites or not isinstance(sites[site], dict) or not isinstance(sites[site].get("lan"), str):
+        raise _fail(f"{path} uses site_lan but target machine has no declared site ({target_machine.get('management_address', 'unknown')})")
+    return sites[site]["lan"]
+
+
+def _network_for(consumer: dict, provider: dict, routing: dict, machines: dict, sites: dict, *, traffic_kind: str | None = None) -> str:
+    if traffic_kind:
+        kind = traffic_kind
+    elif provider["type"] == "ipfs-cluster":
         kind = "storage_api"
     elif provider["type"] in {"ipfs-kubo", "ipfs-cluster"}:
         kind = "storage_p2p"
     else:
         kind = "application_api"
-    network = routing.get(kind)
-    if not isinstance(network, str) or not network:
+    policy = routing.get(kind, routing.get("defaults"))
+    if policy is None:
         raise _fail(f"routing.{kind} is required for remote connection to {provider['type']}")
-    return network
+    source_machine = machines[consumer["machine"]]
+    target_machine = machines[provider["machine"]]
+    if isinstance(policy, str):
+        return _selector_network(policy, source_machine=source_machine, target_machine=target_machine, sites=sites, path=f"routing.{kind}")
+    if not isinstance(policy, dict):
+        raise _fail(f"routing.{kind} must be a network, site_lan or locality policy")
+    _only_keys(policy, f"routing.{kind}", {"same_site", "cross_site"})
+    source_site, target_site = source_machine.get("site"), target_machine.get("site")
+    if not isinstance(source_site, str) or not isinstance(target_site, str):
+        raise _fail(f"routing.{kind} locality policy requires sites on both machines")
+    branch = "same_site" if source_site == target_site else "cross_site"
+    return _selector_network(policy.get(branch), source_machine=source_machine, target_machine=target_machine, sites=sites, path=f"routing.{kind}.{branch}")
 
 
 def _route_exists(routes: list[dict], consumer: dict, provider_network: str) -> bool:
@@ -229,6 +254,9 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     networks = raw.get("networks")
     if networks is not None:
         result["networks"] = deepcopy(_object(networks, "networks"))
+    site_definitions = _object(raw.get("sites", {}), "sites")
+    if site_definitions:
+        result["sites"] = deepcopy(site_definitions)
     if "routes" in raw:
         result["routes"] = deepcopy(raw["routes"])
 
@@ -238,10 +266,10 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         _identifier(machine_id, f"machines.{machine_id}")
         definition = _object(definition, f"machines.{machine_id}")
         execution = definition.get("execution")
-        if execution not in {"local", "ssh", "auto"}:
-            raise _fail(f"machines.{machine_id}.execution must be local, ssh or auto")
+        if execution not in {"local", "docker-lab", "ssh", "auto"}:
+            raise _fail(f"machines.{machine_id}.execution must be local, docker-lab, ssh or auto")
         item = {"execution": execution}
-        if execution != "local":
+        if execution not in {"local", "docker-lab"}:
             for field in ("management_address", "addresses"):
                 if field not in definition:
                     raise _fail(f"machines.{machine_id}.{field} is required for {execution}")
@@ -257,6 +285,8 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         for field in ("paths", "ssh", "docker"):
             if field in definition:
                 item[field] = deepcopy(definition[field])
+        if "site" in definition:
+            item["site"] = definition["site"]
         result["machines"][machine_id] = item
 
     def group_machine(group_id: str) -> str:
@@ -456,14 +486,22 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
 
     # Recalculate the connection transport and only publish what a remote edge needs.
     routing = _object(raw.get("routing", {}), "routing")
-    # P2P is not represented as a service connection, but v3 still needs a
-    # concrete network to derive Besu/Kubo/Cluster announce addresses.
+    # Legacy inventories retain one infrastructure network.  A locality policy
+    # is expanded below into explicit ``peerings`` and does not overwrite that
+    # compatibility value with a dict.
     if routing:
         for key, infrastructure_key in (("blockchain_p2p", "besu"), ("storage_p2p", "ipfs"), ("storage_p2p", "cluster")):
-            if key in routing:
+            if isinstance(routing.get(key), str) and routing[key] != "site_lan":
                 result["infrastructure"][infrastructure_key]["network"] = routing[key]
+            elif isinstance(routing.get(key), dict):
+                # Required legacy field; explicit peerings take precedence.
+                fallback = routing[key].get("cross_site")
+                if fallback == "site_lan":
+                    fallback = next(iter(site_definitions.values()), {}).get("lan")
+                if isinstance(fallback, str):
+                    result["infrastructure"][infrastructure_key]["network"] = fallback
     machines = result["machines"]
-    required_network: dict[str, str] = {}
+    required_networks: dict[str, set[str]] = {}
     for consumer in result["services"].values():
         for connection in consumer.get("connections", {}).values():
             provider = result["services"][connection["service"]]
@@ -476,14 +514,12 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
             if consumer["machine"] == provider["machine"]:
                 connection.pop("network", None); connection.pop("protocol", None)
                 continue
-            network = _network_for(consumer, provider, routing)
+            network = _network_for(consumer, provider, routing, machines, site_definitions)
             if network not in machines[provider["machine"]]["addresses"]:
                 raise _fail(f"routing selects {network} but it is not available on {provider['machine']}")
             if network not in machines[consumer["machine"]]["addresses"] and not _route_exists(result.get("routes", []), machines[consumer["machine"]], network):
                 raise _fail(f"routing selects {network} but it is neither shared nor routed from {consumer['machine']} to {provider['machine']}")
-            prior = required_network.setdefault(connection["service"], network)
-            if prior != network:
-                raise _fail(f"{connection['service']} needs incompatible private networks {prior} and {network}")
+            required_networks.setdefault(connection["service"], set()).add(network)
             connection["network"] = network; connection["protocol"] = "tcp"
     # Store obtains both Cluster and Kubo API URLs from each declared Cluster
     # edge.  v3's visible graph models only the Cluster edge, so add Kubo's
@@ -495,10 +531,8 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
             kubo = result["services"][kubo_id]
             if store["machine"] != kubo["machine"]:
                 network = connection["network"]
-                prior = required_network.setdefault(kubo_id, network)
-                if prior != network:
-                    raise _fail(f"{kubo_id} needs incompatible private networks {prior} and {network}")
-    for service_id, network in required_network.items():
+                required_networks.setdefault(kubo_id, set()).add(network)
+    for service_id, networks_for_service in required_networks.items():
         service = result["services"][service_id]
         port = _PORTS.get(service["type"])
         if port is None:
@@ -506,10 +540,17 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
             port = current.get("port")
         if not isinstance(port, int):
             raise _fail(f"cannot derive private port for {service_id}")
-        service["exposure"] = {"mode": "private", "network": network, "port": port, "protocols": ["tcp"]}
+        if len(networks_for_service) == 1:
+            service["exposure"] = {"mode": "private", "network": next(iter(networks_for_service)), "port": port, "protocols": ["tcp"]}
+        else:
+            service.pop("exposure", None)
+            service["listeners"] = [
+                {"network": network, "port": port, "protocols": ["tcp"]}
+                for network in sorted(networks_for_service)
+            ]
     for service_id, service in result["services"].items():
         exposure = service.get("exposure")
-        if exposure and exposure.get("mode") == "private" and service_id not in required_network and service.get("type") != "edge-proxy":
+        if exposure and exposure.get("mode") == "private" and service_id not in required_networks and service.get("type") != "edge-proxy":
             # Catalogued private endpoints are examples, not a request to
             # publish a port when no resolved remote dependency needs it.
             service.pop("exposure", None)
@@ -517,7 +558,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     # expose RPC only on loopback so controller-side readiness and verification
     # can perform real JSON-RPC checks without making the endpoint public.
     rpc_service = result["services"][primary_rpc]
-    if all(machine.get("execution") == "local" for machine in machines.values()) and not rpc_service.get("exposure"):
+    if all(machine.get("execution") in {"local", "docker-lab"} for machine in machines.values()) and not rpc_service.get("exposure"):
         rpc_service["exposure"] = {"mode": "loopback", "port": _PORTS["besu-rpc"], "protocols": ["tcp"]}
     if mode == "local-direct":
         for service_id in (primary_rpc, "store-api", "minter-api", "admin-api", "resolver-api", "dashboard", "explorer"):
@@ -550,6 +591,81 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
                 raise _fail(f"networking.services.{service_id}.p2p_advertise_port must be a port")
             service.setdefault("configuration", {})["p2p_advertise_port"] = port
 
+    def locality_policy(value: object) -> bool:
+        return value == "site_lan" or isinstance(value, dict)
+
+    # Expand the compact site policy into a directed, auditable P2P matrix.
+    # It is deliberately generated after all placements and port overrides are
+    # known, so artifacts, Compose and readiness share one source of truth.
+    if locality_policy(routing.get("blockchain_p2p", routing.get("defaults"))):
+        node_services = [service for service in result["services"].values() if service["type"] in {"besu-rpc", "besu-validator", "besu-observer"}]
+        rank = {"validator": 0, "rpc": 1, "observer": 2}
+        ordered_nodes = sorted(node_services, key=lambda item: (rank[result["blockchain"]["nodes"][item["configuration"]["node_id"]]["role"]], item["configuration"]["node_id"]))
+        # Service definitions are keyed by ID; build the port map explicitly
+        # rather than relying on dict values carrying their own key.
+        ordered_ids = [service_id for service_id, service in result["services"].items() if service in ordered_nodes]
+        ordered_ids.sort(key=lambda service_id: (rank[result["blockchain"]["nodes"][result["services"][service_id]["configuration"]["node_id"]]["role"]], result["services"][service_id]["configuration"]["node_id"]))
+        ports = {
+            service_id: int(result["services"][service_id]["configuration"].get("p2p_advertise_port", result["infrastructure"]["besu"]["p2p_port_start"] + index))
+            for index, service_id in enumerate(ordered_ids)
+        }
+        result.setdefault("peerings", {})["blockchain"] = [
+            {
+                "from": source_id, "to": target_id,
+                "network": _network_for(result["services"][source_id], result["services"][target_id], routing, machines, site_definitions, traffic_kind="blockchain_p2p"),
+                "address": machines[result["services"][target_id]["machine"]]["addresses"][_network_for(result["services"][source_id], result["services"][target_id], routing, machines, site_definitions, traffic_kind="blockchain_p2p")],
+                "port": ports[target_id],
+            }
+            for source_id in ordered_ids for target_id in ordered_ids if source_id != target_id
+        ]
+    if locality_policy(routing.get("storage_p2p", routing.get("defaults"))):
+        for family, service_type, infrastructure_key, port_key in (
+            ("ipfs", "ipfs-kubo", "ipfs", "swarm_port"),
+            ("cluster", "ipfs-cluster", "cluster", "p2p_port"),
+        ):
+            ids = sorted(service_id for service_id, service in result["services"].items() if service["type"] == service_type)
+            result.setdefault("peerings", {})[family] = [
+                {
+                    "from": source_id, "to": target_id,
+                    "network": _network_for(result["services"][source_id], result["services"][target_id], routing, machines, site_definitions, traffic_kind="storage_p2p"),
+                    "address": machines[result["services"][target_id]["machine"]]["addresses"][_network_for(result["services"][source_id], result["services"][target_id], routing, machines, site_definitions, traffic_kind="storage_p2p")],
+                    "port": int(result["services"][target_id]["configuration"].get("p2p_advertise_port", result["infrastructure"][infrastructure_key][port_key])),
+                }
+                for source_id in ids for target_id in ids if source_id != target_id
+            ]
+
+    # Storage APIs are used first for bootstrap discovery. When locality
+    # routing sends different consumers through LAN and VPN, a single legacy
+    # exposure is insufficient; materialize one listener per selected network.
+    for provider_id, provider in result["services"].items():
+        if provider["type"] not in {"ipfs-kubo", "ipfs-cluster"}:
+            continue
+        exposure = provider.get("exposure")
+        if not isinstance(exposure, dict) or exposure.get("mode") != "private":
+            continue
+        networks = {
+            connection.get("network")
+            for consumer in result["services"].values()
+            for connection in consumer.get("connections", {}).values()
+            if connection.get("service") == provider_id
+            and consumer.get("machine") != provider.get("machine")
+            and isinstance(connection.get("network"), str)
+        }
+        family = "ipfs" if provider["type"] == "ipfs-kubo" else "cluster"
+        networks.update(
+            edge["network"]
+            for edge in result.get("peerings", {}).get(family, [])
+            if edge.get("to") == provider_id and isinstance(edge.get("network"), str)
+        )
+        all_networks = networks | {exposure.get("network")}
+        if len(all_networks) > 1:
+            provider.pop("exposure", None)
+            provider["listeners"] = [
+                {"network": network, "port": int(exposure["port"]), "protocols": list(exposure.get("protocols", ["tcp"]))}
+                for network in sorted(all_networks)
+                if isinstance(network, str)
+            ]
+
     secrets = _object(raw.get("secrets", {}), "secrets")
     root = secrets.get("source_root")
     if root is not None and not isinstance(root, str):
@@ -570,6 +686,10 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     except InventoryError as exc:
         raise _fail(str(exc).removeprefix("deployment topology v3: ")) from exc
     provenance = {"/components": "catalog:dark-platform-baseline-v1.0", "/images": "catalog:dark-platform-baseline-v1.0", "/settings": "catalog:dark-platform-baseline-v1.0", "/services": "catalog recipe + placement/routing", "/groups": "placement", "/storage": "storage", "/blockchain": "blockchain"}
+    if "sites" in result:
+        provenance["/sites"] = "operator sites"
+    if "peerings" in result:
+        provenance["/peerings"] = "operator locality routing"
     for node_id, definition in result["blockchain"]["nodes"].items():
         role = definition["role"]
         if role == "validator":
@@ -588,7 +708,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
         if "exposure" in service:
             provenance[f"/services/{service_id}/exposure"] = "resolved consumer reachability or explicit proxy listener"
     canonical = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
-    metadata = {"catalog": catalog.id, "catalog_sha256": catalog.digest, "operator_format_version": "2", "resolver_version": "2", "input_sha256": sha256(canonical).hexdigest()}
+    metadata = {"catalog": catalog.id, "catalog_sha256": catalog.digest, "operator_format_version": str(raw["format_version"]), "resolver_version": "3", "input_sha256": sha256(canonical).hexdigest()}
     warnings = list(_validate_production_objectives(raw, result))
     if len(peers) > 1 and len({result["groups"][g]["machine"] for g in result["groups"] if g.startswith("storage")}) == 1:
         warnings.append("Multiple storage peers on one machine provide replication but not host-failure tolerance.")

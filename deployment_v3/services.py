@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .model import DeploymentPlan, Machine, ServiceInstance
-from .network import has_remote_peer, host_bind_address, internal_port, chain_node_addresses, chain_node_ports
+from .network import has_remote_peer, host_bind_address, listener_bind_address, internal_port, chain_node_addresses, chain_node_ports, p2p_bindings, p2p_edges, docker_lab_address
 
 
 def _build(machine: Machine, dockerfile: str) -> dict:
@@ -11,27 +11,63 @@ def _build(machine: Machine, dockerfile: str) -> dict:
 
 
 def _ports(machine: Machine, service: ServiceInstance) -> list[str]:
+    result = []
+    # Private listeners in docker-lab are container-to-container only.  The
+    # gateway may still publish its intentional loopback/public listener.
+    if machine.execution == "docker-lab":
+        if service.exposure and service.exposure.get("mode") in {"loopback", "public"}:
+            bind = host_bind_address(machine, service.exposure)
+            protocols = service.exposure.get("protocols", ["tcp"])
+            return [f"{bind}:{service.exposure['port']}:{internal_port(service)}/{protocol}" for protocol in protocols]
+        return result
     bind = host_bind_address(machine, service.exposure)
-    if bind is None:
-        return []
-    protocols = service.exposure.get("protocols", ["tcp"])
-    return [f"{bind}:{service.exposure['port']}:{internal_port(service)}/{protocol}" for protocol in protocols]
+    if bind is not None:
+        protocols = service.exposure.get("protocols", ["tcp"])
+        result.extend(f"{bind}:{service.exposure['port']}:{internal_port(service)}/{protocol}" for protocol in protocols)
+    result.extend(
+        f"{listener_bind_address(machine, listener)}:{listener['port']}:{internal_port(service)}/{protocol}"
+        for listener in service.listeners
+        for protocol in listener["protocols"]
+    )
+    return result
 
 
 def _ipfs_network_ports(plan: DeploymentPlan, machine: Machine, service: ServiceInstance) -> list[str]:
-    """Publish the peer-to-peer ports needed when storage spans hosts."""
+    """Publish storage API and P2P ports on every selected peer network.
+
+    Bootstrap discovery first calls the provider API to obtain its PeerID and
+    then dials the advertised P2P port. A provider can therefore need its API
+    on a different network from its first/local consumer (for example LAN for
+    site-local traffic and VPN for a remote site).
+    """
+    if machine.execution == "docker-lab":
+        return []
     peer_type = "ipfs-kubo" if service.type == "ipfs-kubo" else "ipfs-cluster"
     if not has_remote_peer(plan, {peer_type}):
         return []
     policy = service.configuration["_infrastructure"]
-    bind = machine.address_on(policy["network"])
+    family = "ipfs" if service.type == "ipfs-kubo" else "cluster"
+    incoming_networks = sorted({edge["network"] for edge in p2p_edges(plan, family, service.id)})
+    result = []
     if service.type == "ipfs-kubo":
         port = int(service.configuration.get("p2p_advertise_port", policy["swarm_port"]))
-        return [f"{bind}:{port}:4001/tcp", f"{bind}:{port}:4001/udp"]
-    if service.type == "ipfs-cluster":
+        result.extend(f"{bind}:{bound_port}:4001/{protocol}" for bind, bound_port, protocol in p2p_bindings(plan, "ipfs", service.id, port, ("tcp", "udp")))
+        api_port = int(policy["api_port"])
+    else:
         port = int(service.configuration.get("p2p_advertise_port", policy["p2p_port"]))
-        return [f"{bind}:{port}:9096/tcp"]
-    return []
+        result.extend(f"{bind}:{bound_port}:9096/{protocol}" for bind, bound_port, protocol in p2p_bindings(plan, "cluster", service.id, port, ("tcp",)))
+        api_port = int(policy["api_port"])
+    existing = set(result)
+    declared_networks = {listener["network"] for listener in service.listeners}
+    if service.exposure and service.exposure.get("mode") == "private":
+        declared_networks.add(service.exposure["network"])
+    for network in incoming_networks:
+        if network in declared_networks:
+            continue
+        value = f"{machine.address_on(network)}:{api_port}:{api_port}/tcp"
+        if value not in existing:
+            result.append(value)
+    return result
 
 
 def _p2p_ports(plan: DeploymentPlan, machine: Machine, service: ServiceInstance) -> list[str]:
@@ -40,12 +76,11 @@ def _p2p_ports(plan: DeploymentPlan, machine: Machine, service: ServiceInstance)
     Every container listens on 30303 internally; host ports are deterministic
     from the generated chain artifact and are never an Internet-facing RPC.
     """
-    if not has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"}):
+    if machine.execution == "docker-lab" or not has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"}):
         return []
     node_id = service.configuration["node_id"]
     host_port = chain_node_ports(plan)[node_id]
-    bind = machine.address_on(plan.raw["infrastructure"]["besu"]["network"])
-    return [f"{bind}:{host_port}:30303/tcp", f"{bind}:{host_port}:30303/udp"]
+    return [f"{bind}:{bound_port}:30303/{protocol}" for bind, bound_port, protocol in p2p_bindings(plan, "blockchain", service.id, host_port, ("tcp", "udp"))]
 
 
 def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[ServiceInstance, ...], group_id: str | None = None) -> dict:
@@ -62,9 +97,9 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
         # Keep generated service instances immutable from the inventory while
         # giving the low-level port helper the policy it must expose.
         if service.type == "ipfs-kubo":
-            service = ServiceInstance(service.id, service.type, service.machine_id, service.connections, {**service.configuration, "_infrastructure": plan.raw["infrastructure"]["ipfs"]}, service.exposure)
+            service = ServiceInstance(service.id, service.type, service.machine_id, service.connections, {**service.configuration, "_infrastructure": plan.raw["infrastructure"]["ipfs"]}, service.exposure, service.listeners)
         elif service.type == "ipfs-cluster":
-            service = ServiceInstance(service.id, service.type, service.machine_id, service.connections, {**service.configuration, "_infrastructure": plan.raw["infrastructure"]["cluster"]}, service.exposure)
+            service = ServiceInstance(service.id, service.type, service.machine_id, service.connections, {**service.configuration, "_infrastructure": plan.raw["infrastructure"]["cluster"]}, service.exposure, service.listeners)
         # Compose applies later env files over earlier ones.  Keep generated
         # public defaults first and private runtime credentials last so the
         # dashboard and its database share the provisioned password.
@@ -145,5 +180,21 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             "org.dark.deployment.id": plan.deployment_id,
             "org.dark.service.id": service.id,
         }
+    networks = {network: {"name": network, "external": True}}
+    if machine.execution == "docker-lab":
+        for network_id in machine.addresses:
+            physical = f"{plan.deployment_id}-{network_id}"
+            networks[physical] = {"name": physical, "external": True}
+        for service_id, item in result.items():
+            item["networks"] = {
+                network: {},
+                **{
+                    f"{plan.deployment_id}-{network_id}": {
+                        "aliases": [f"{service_id}-{network_id}"],
+                        "ipv4_address": docker_lab_address(plan, plan.service(service_id), network_id),
+                    }
+                    for network_id in machine.addresses
+                },
+            }
     project = f"{plan.deployment_id}-{machine.id}" + (f"-{group_id}" if group_id else "")
-    return {"name": project, "services": result, "networks": {network: {"name": network, "external": True}}}
+    return {"name": project, "services": result, "networks": networks}

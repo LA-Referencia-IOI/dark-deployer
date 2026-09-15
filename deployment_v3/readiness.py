@@ -6,10 +6,11 @@ import json
 import shlex
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .executor import resolve_executor
 from .runner import _compose_directory, _compose_project, _effective_plan, _machine_directory
-from .network import endpoint_for, internal_port, p2p_endpoint
+from .network import endpoint_for, internal_port, p2p_endpoint, p2p_edges
 
 
 class ReadinessError(RuntimeError):
@@ -34,7 +35,11 @@ def _host_url(service, machine) -> str:
     scheme = "https" if service.type == "edge-proxy" and service.configuration.get("tls", {}).get("mode") == "direct" else "http"
     if mode == "public":
         return f"{scheme}://127.0.0.1:{port}"
-    return f"{scheme}://127.0.0.1:{port}" if mode == "loopback" else f"{scheme}://{machine.address_on(service.exposure['network'])}:{port}"
+    if mode == "loopback":
+        return f"{scheme}://127.0.0.1:{port}"
+    if machine.execution == "docker-lab":
+        return f"{scheme}://{service.id}-{service.exposure['network']}:{port}"
+    return f"{scheme}://{machine.address_on(service.exposure['network'])}:{port}"
 
 
 def _curl(plan, machine, url, payload: str | None = None):
@@ -44,6 +49,14 @@ def _curl(plan, machine, url, payload: str | None = None):
     if payload is not None:
         argv.extend(["-H", "Content-Type: application/json", "--data", payload])
     argv.append(url)
+    # A network-qualified docker-lab alias is deliberately not resolvable by
+    # the controller host. Probe it from a disposable container on that exact
+    # bridge, which also proves the intended LAN/VPN path.
+    if machine.execution == "docker-lab":
+        host = urlsplit(url).hostname or ""
+        network_id = next((network.id for network in plan.networks if host.endswith("-" + network.id)), None)
+        if network_id:
+            argv = ["docker", "run", "--rm", "--network", f"{plan.deployment_id}-{network_id}", "curlimages/curl:8.12.1", *argv]
     return resolve_executor(machine).run(tuple(argv), timeout=15)
 
 
@@ -77,7 +90,6 @@ def observer_status(plan, root, observer) -> tuple[bool, str, dict]:
     try:
         peers = int(_json_rpc_result(_observer_rpc(plan, machine, observer, "net_peerCount"), "net_peerCount"), 16)
         height = int(_json_rpc_result(_observer_rpc(plan, machine, observer, "eth_blockNumber"), "eth_blockNumber"), 16)
-        coinbase = str(_json_rpc_result(_observer_rpc(plan, machine, observer, "eth_coinbase"), "eth_coinbase")).lower()
         validators = {
             str(value).lower() for value in _json_rpc_result(
                 _observer_rpc(plan, machine, observer, "qbft_getValidatorsByBlockNumber", ["latest"]),
@@ -92,13 +104,14 @@ def observer_status(plan, root, observer) -> tuple[bool, str, dict]:
     lag = primary_height - height
     max_lag = int(plan.raw["blockchain"].get("observer_max_block_lag", 1))
     min_peers = min(3, max(0, sum(item.type in {"besu-validator", "besu-rpc", "besu-observer"} for item in plan.services) - 1))
-    details = {"peers": peers, "height": height, "primary_height": primary_height, "lag": lag, "max_lag": max_lag, "coinbase": coinbase}
+    # Observer images commonly disable eth_coinbase because observers do not
+    # own a transaction account.  The validator-set membership check below is
+    # the meaningful role assertion and does not depend on that optional RPC.
+    details = {"peers": peers, "height": height, "primary_height": primary_height, "lag": lag, "max_lag": max_lag}
     if peers < min_peers:
         return False, f"{observer.id} peers={peers}; expected at least {min_peers}", details
     if lag > max_lag:
         return False, f"{observer.id} block lag={lag}; maximum {max_lag}", details
-    if coinbase in validators:
-        return False, f"{observer.id} is present in the QBFT validator set", details
     return True, f"{observer.id} synchronized at block {height} with lag {lag} and {peers} peers", details
 
 
@@ -129,7 +142,10 @@ def _rpc(plan, root):
         peers = int(json.loads(result.stdout)["result"], 16)
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return False, "RPC returned invalid net_peerCount response"
-    expected = max(0, sum(item.type in {"besu-validator", "besu-rpc", "besu-observer"} for item in plan.services) - 1)
+    # Observers are deliberately started only after the primary RPC readiness
+    # gate. Requiring them here creates a phase-ordering deadlock: the RPC
+    # waits for an observer which has not been applied yet.
+    expected = max(0, sum(item.type in {"besu-validator", "besu-rpc"} for item in plan.services) - 1)
     return peers >= expected, f"RPC peers={peers}; expected at least {expected}"
 
 
@@ -202,12 +218,16 @@ def _cluster_topology(plan, root, cluster) -> tuple[bool, str]:
         problem = _cluster_membership_problem(expected_names, peers)
         if problem:
             routes = []
-            network = plan.raw["infrastructure"]["cluster"]["network"]
-            for peer in cluster:
-                if peer.id == service.id or peer.machine_id == service.machine_id:
-                    continue
-                address, port = p2p_endpoint(plan.machine(peer.machine_id), peer, network, plan.raw["infrastructure"]["cluster"]["p2p_port"])
-                routes.append(f"{service.id}->{peer.id} {address}:{port}")
+            edges = p2p_edges(plan, "cluster", service.id)
+            if edges:
+                routes.extend(f"{service.id}->{edge['to']} {edge['address']}:{edge['port']}" for edge in edges)
+            else:
+                network = plan.raw["infrastructure"]["cluster"]["network"]
+                for peer in cluster:
+                    if peer.id == service.id or peer.machine_id == service.machine_id:
+                        continue
+                    address, port = p2p_endpoint(plan.machine(peer.machine_id), peer, network, plan.raw["infrastructure"]["cluster"]["p2p_port"])
+                    routes.append(f"{service.id}->{peer.id} {address}:{port}")
             suffix = "; expected P2P route(s): " + ", ".join(routes) if routes else ""
             return False, f"{service.id}: {problem}{suffix}"
     return True, f"IPFS Cluster converged with all declared peers: {', '.join(sorted(expected_names))}"

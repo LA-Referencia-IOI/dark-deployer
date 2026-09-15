@@ -34,7 +34,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
     operational = {"services", "stop", "start", "restart", "recreate", "remove"}
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "services", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain"):
+    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "services", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
         command = actions.add_parser(name)
         if name in operational:
             source = command.add_mutually_exclusive_group(required=True)
@@ -52,6 +52,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--output", required=True, type=Path)
         if name == "inventory-explain":
             command.add_argument("--path", required=True, help="JSON Pointer in the resolved v3 document")
+        if name == "inventory-network-matrix":
+            command.add_argument("--traffic", choices=("blockchain", "ipfs", "cluster"), help="limit output to one P2P family")
         if name == "install":
             command.add_argument("--non-interactive", action="store_true")
             command.add_argument("--yes", action="store_true")
@@ -353,6 +355,15 @@ def _install(args: argparse.Namespace, plan) -> None:
                 shutil.rmtree(artifact_root)
             initialize_chain(plan, artifact_root, address)
             print(f"[OK] Initialized managed chain artifact under {artifact_root}")
+    # Site-aware peer maps are operational configuration, not new chain
+    # identity. Refresh static nodes from existing public keys before the
+    # manifest check/distribution; no genesis or private key is regenerated.
+    if plan.raw.get("peerings", {}).get("blockchain"):
+        public_keys = {
+            node: (artifact_root / "nodes" / node / "key.pub").read_text().strip()
+            for node in plan.raw["blockchain"]["nodes"]
+        }
+        write_static_nodes(artifact_root, public_keys)
     verify_artifact_manifest(artifact_root)
     verify_artifact_compatibility(plan, artifact_root, args.master_wallet_address)
     plan = _private_plan(plan, secret_root=secret_root, wallet_file=Path(args.master_wallet_file), signer_file=Path(signer_file), artifact_root=artifact_root)
@@ -518,6 +529,23 @@ def main() -> None:
                 candidates = [key for key in resolution.provenance if pointer.startswith(key + "/")]
                 source = resolution.provenance[max(candidates, key=len)] if candidates else "explicit v3 field or derived recipe detail"
             print(json.dumps({"path": pointer, "source": source, "metadata": resolution.metadata}, indent=2, sort_keys=True))
+            return
+        if args.action == "inventory-network-matrix":
+            raw, machines, services, _ = load_inventory(args.inventory)
+            names = {service.id: service for service in services}
+            families = (args.traffic,) if args.traffic else ("blockchain", "ipfs", "cluster")
+            rows = []
+            for family in families:
+                for edge in raw.get("peerings", {}).get(family, []):
+                    source, target = names[edge["from"]], names[edge["to"]]
+                    rows.append({
+                        "traffic": family,
+                        "from": edge["from"], "from_machine": source.machine_id,
+                        "to": edge["to"], "to_machine": target.machine_id,
+                        "network": edge["network"], "address": edge["address"], "port": edge["port"],
+                        "locality": "same-site" if next(item for item in machines if item.id == source.machine_id).site == next(item for item in machines if item.id == target.machine_id).site else "cross-site",
+                    })
+            print(json.dumps(rows, indent=2, sort_keys=True))
             return
         if args.action == "inventory-diff":
             before = _resolved_document(args.before)

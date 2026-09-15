@@ -49,6 +49,13 @@ def existing_chain_data(plan: DeploymentPlan) -> list[str]:
     return [item for item, present in persistent_data_inventory(plan) if present]
 
 
+def _cleanup_path_command(machine, path: str) -> tuple[str, ...]:
+    """Remove managed data even when rootful containers created root-owned files."""
+    if machine.execution == "ssh":
+        return ("sudo", "-n", "rm", "-rf", path)
+    return ("rm", "-rf", path)
+
+
 def _reject_existing_chain_data(plan: DeploymentPlan, *, resume: bool, clean: bool = False) -> None:
     """Prevent a normal install from mixing a new artifact with old Besu data."""
     if resume:
@@ -59,12 +66,12 @@ def _reject_existing_chain_data(plan: DeploymentPlan, *, resume: bool, clean: bo
             for item in existing:
                 machine_id, _, _, raw_path = item.split(":", 3)
                 machine = plan.machine(machine_id)
-                _require(resolve_executor(machine).run(("rm", "-rf", raw_path)), f"clean Besu data for {machine_id}")
+                _require(resolve_executor(machine).run(_cleanup_path_command(machine, raw_path)), f"clean Besu data for {machine_id}")
             contract = next((item for item in plan.services if item.type == "contracts-deploy"), None)
             if contract:
                 machine = plan.machine(contract.machine_id)
                 runtime = Path(machine.data_root) / plan.deployment_id / "contracts"
-                _require(resolve_executor(machine).run(("rm", "-rf", str(runtime))), f"clean contract runtime for {machine.id}")
+                _require(resolve_executor(machine).run(_cleanup_path_command(machine, str(runtime))), f"clean contract runtime for {machine.id}")
             return
         raise ApplyError(
             "persistent deployment data already exists for a normal install: "
@@ -172,6 +179,38 @@ def _ensure_machine_network(plan, machine, executor, *, clean_empty_conflicts: b
         f"create network {machine.id}: Docker subnet {subnet} conflicts with "
         f"{details or 'an existing Docker network'}.{hint}"
     )
+
+
+def _ensure_docker_lab_networks(plan, executor, *, clean_empty_conflicts: bool, prompt_cleanup_empty_conflicts: bool) -> None:
+    """Create the physical LAN/VPN bridges of a local multi-site lab once."""
+    for network in plan.networks:
+        name = f"{plan.deployment_id}-{network.id}"
+        existing = executor.run(("docker", "network", "inspect", name, "--format", "{{range .IPAM.Config}}{{.Subnet}}{{end}}"))
+        if existing.returncode == 0:
+            if existing.stdout.strip() != network.cidr:
+                raise ApplyError(f"Docker lab network {name!r} has subnet {existing.stdout.strip() or 'unknown'}, but requires {network.cidr}")
+            continue
+        conflicts = _network_conflicts(executor, network.cidr)
+        removable = [item for item in conflicts if item[2] == 0]
+        occupied = [item for item in conflicts if item[2] != 0]
+        should_clean = clean_empty_conflicts
+        if not should_clean and prompt_cleanup_empty_conflicts and removable and not occupied:
+            names = ", ".join(item[0] for item in removable)
+            answer = input(
+                f"Docker subnet {network.cidr} for lab network {network.id} is blocked by empty network(s): {names}. "
+                "Remove them and continue? [y/N]: "
+            ).strip().lower()
+            should_clean = answer in {"y", "yes"}
+        if should_clean and removable and not occupied:
+            for conflict_name, _, _ in removable:
+                _require(executor.run(("docker", "network", "rm", conflict_name)), f"remove empty conflicting network {conflict_name}")
+            _require(executor.run(("docker", "network", "create", "--driver", "bridge", "--subnet", network.cidr, name)), f"create docker lab network {network.id}")
+            continue
+        if conflicts:
+            details = ", ".join(f"{conflict_name} ({subnet}, containers={count if count >= 0 else 'unknown'})" for conflict_name, subnet, count in conflicts)
+            hint = " Re-run with --clean-empty-network-conflicts to remove only empty conflicts." if removable and not occupied else ""
+            raise ApplyError(f"create docker lab network {network.id}: Docker subnet {network.cidr} conflicts with {details}.{hint}")
+        _require(executor.run(("docker", "network", "create", "--driver", "bridge", "--subnet", network.cidr, name)), f"create docker lab network {network.id}")
 
 
 def _ignore_source_entries(directory: str, names: list[str]) -> set[str]:
@@ -305,7 +344,7 @@ def _distribute_chain_artifact(plan, project_root: Path) -> dict[str, dict[str, 
     source_ref = artifact.get("source")
     if not source_ref:
         # Local greenfield installation has already provisioned this tree.
-        if all(machine.execution == "local" for machine in plan.machines):
+        if all(machine.execution in {"local", "docker-lab"} for machine in plan.machines):
             return {}
         raise ApplyError("blockchain.artifact.source is required for SSH deployment")
     source = Path(source_ref)
@@ -353,6 +392,13 @@ def _apply_service(plan, machine, service, root, bundle, *, verbose=False, force
         clean_empty_conflicts=clean_empty_network_conflicts,
         prompt_cleanup_empty_conflicts=prompt_cleanup_empty_network_conflicts,
     )
+    if machine.execution == "docker-lab":
+        _ensure_docker_lab_networks(
+            plan,
+            executor,
+            clean_empty_conflicts=clean_empty_network_conflicts,
+            prompt_cleanup_empty_conflicts=prompt_cleanup_empty_network_conflicts,
+        )
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id), str(Path(machine.secrets_root)))), f"prepare data for {machine.id}")
     _require(executor.run(("mkdir", "-p", str(Path(machine.data_root) / plan.deployment_id / "contracts"))), f"prepare contract runtime for {machine.id}")
     if service.type in {"besu-rpc", "besu-validator", "besu-observer"}:
