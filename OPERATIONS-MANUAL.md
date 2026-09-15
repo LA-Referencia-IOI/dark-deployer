@@ -226,6 +226,18 @@ venv/bin/python deploy.py services --inventory inventory.json
 venv/bin/python deploy.py services --inventory inventory.json --json
 ```
 
+En una terminal interactiva, el mismo inventario operativo está disponible en
+una consola TUI: muestra deployments, servicios, detalle, acciones y un panel
+de logs que se refresca mientras está abierto.
+
+```bash
+venv/bin/python deploy.py tui
+```
+
+Las acciones disponibles aparecen como botones en el panel derecho. Use `l`
+para logs, `r` para refrescar y `q` para salir. Las acciones que interrumpen o
+reconstruyen un servicio piden confirmación explícita.
+
 Para imprimir las últimas líneas y seguir el log en tiempo real de un servicio
 del bundle desplegado, use el mismo selector exacto. Termine el seguimiento con
 `Ctrl-C`:
@@ -246,7 +258,8 @@ venv/bin/python deploy.py recreate \
   --target service:dashboard --build
 ```
 
-The supported operations are `stop`, `start`, `restart`, `recreate` and `remove`.
+The supported operations are `build`, `stop`, `start`, `restart`, `recreate` and `remove`.
+`build` builds an image without changing the running container.
 `recreate --build` rebuilds from the current deployed Compose context. `remove`
 removes only the managed container and never deletes volumes, bind-mounted data
 or networks. Operations resolve services from the deployed snapshot and exact

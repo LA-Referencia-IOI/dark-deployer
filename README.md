@@ -304,8 +304,11 @@ venv/bin/python deploy.py recreate \
 Use `deploy.py deployments` to list known managed deployments. Then use
 `deploy.py services --deployment DEPLOYMENT_ID` to see exact managed selectors,
 runtime state, descriptions and valid lifecycle actions. The
-operations `stop`, `start`, `restart`, `recreate` and `remove` act on one
+operations `build`, `stop`, `start`, `restart`, `recreate` and `remove` act on one
 `service:ID`; `remove` never deletes volumes, persistent data or networks.
+`build` does not restart the active container; use `recreate --build` to build
+and replace it. In an interactive terminal, `deploy.py tui` provides a service
+browser, lifecycle actions and refreshed logs over the same managed snapshots.
 
 ## Networking and exposure
 

@@ -26,6 +26,7 @@ from .sources import SourceError
 from .acquire import AcquisitionError, acquire_components
 from .inventory_editor import InventoryDocument, InventoryDocumentError, create_from_template, template_names
 from .inventory_editor.textual_app import run_textual_editor
+from .operations_tui import run_operations_tui
 from .inventory_resolver import resolve_inventory_path
 from .availability import analyze as analyze_availability
 
@@ -33,8 +34,8 @@ from .availability import analyze as analyze_availability
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
-    operational = {"services", "logs", "stop", "start", "restart", "recreate", "remove"}
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "services", "logs", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
+    operational = {"services", "logs", "build", "stop", "start", "restart", "recreate", "remove"}
+    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "services", "logs", "build", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
         command = actions.add_parser(name)
         if name in operational:
             source = command.add_mutually_exclusive_group(required=True)
@@ -86,7 +87,7 @@ def _parser() -> argparse.ArgumentParser:
         if name in {"apply", "resume"}:
             command.add_argument("--clean-empty-network-conflicts", action="store_true",
                                  help="remove only empty Docker bridge networks that overlap the requested deployment subnet")
-        if name in {"stop", "start", "restart", "recreate", "remove"}:
+        if name in {"build", "stop", "start", "restart", "recreate", "remove"}:
             command.add_argument("--target", help="exact managed service selector: service:ID")
             command.add_argument("--dry-run", action="store_true", help="show the resolved target without changing Docker")
         if name == "recreate":
@@ -114,6 +115,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--artifact-root", required=True, type=Path)
     deployments = actions.add_parser("deployments", help="list locally known managed deployments and live summaries")
     deployments.add_argument("--json", action="store_true", help="emit deployment summaries as JSON")
+    actions.add_parser("tui", help="open the interactive deployment operations console")
     create = actions.add_parser("inventory-create", help="create an inventory from a maintained template")
     create.add_argument("--template", required=True, choices=template_names())
     create.add_argument("--output", required=True, type=Path)
@@ -465,6 +467,16 @@ def _run_inventory_editor(path: Path) -> None:
         print("[INFO] Inventory editor closed without saving.")
 
 
+def _run_operations_console(project_root: Path) -> None:
+    """Open the optional deployment operations terminal UI."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise InventoryDocumentError(
+            "tui requires an interactive terminal; use deployments, services, logs, "
+            "or the non-interactive lifecycle commands instead"
+        )
+    run_operations_tui(project_root)
+
+
 def _resolved_document(path: Path) -> dict:
     """Return v3 for either input format, for read-only CLI inspection."""
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -557,6 +569,9 @@ def main() -> None:
             print(json.dumps(changes, indent=2, sort_keys=True))
             return
         project_root = Path(__file__).resolve().parents[1]
+        if args.action == "tui":
+            _run_operations_console(project_root)
+            return
         if args.action == "deployments":
             deployments = list_managed_deployments(project_root)
             if args.json:
@@ -578,7 +593,7 @@ def main() -> None:
             for warning in availability.warnings:
                 print(f"[WARN] {warning}")
             return
-        plan = _operational_plan(args, project_root) if args.action in {"services", "logs", "stop", "start", "restart", "recreate", "remove"} else build_plan(args.inventory)
+        plan = _operational_plan(args, project_root) if args.action in {"services", "logs", "build", "stop", "start", "restart", "recreate", "remove"} else build_plan(args.inventory)
         if args.action == "preflight":
             result = {machine.id: run_preflight(machine) for machine in plan.machines}
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -618,7 +633,7 @@ def main() -> None:
         if args.action == "install":
             _install(args, plan)
             return
-        if args.action in {"stop", "start", "restart", "recreate", "remove"}:
+        if args.action in {"build", "stop", "start", "restart", "recreate", "remove"}:
             if args.action == "recreate" and args.service and args.target:
                 raise ValueError("use either --service or --target, not both")
             target = args.target or (f"service:{args.service}" if args.action == "recreate" and args.service else None)
