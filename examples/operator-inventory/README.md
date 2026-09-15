@@ -13,6 +13,20 @@ Docker VPN mesh, and
 template contains documentation network ranges and `REPLACE` values and must
 be adapted before preflight.
 
+Each maintained inventory has a companion guide:
+
+| Inventory | Guide |
+| --- | --- |
+| `local-simple.json` | [local-simple.md](local-simple.md) |
+| `local-observer.json` | [local-observer.md](local-observer.md) |
+| `local-ha.json` | [local-ha.md](local-ha.md) |
+| `local-two-site.json` | [local-two-site.md](local-two-site.md) |
+| `one-server-aws-sandbox.json` | [one-server-aws-sandbox.md](one-server-aws-sandbox.md) |
+| `lima-five-host.json` | [lima-five-host.md](lima-five-host.md) |
+| `lima-two-site-five-host.json` | [lima-two-site-five-host.md](lima-two-site-five-host.md) |
+| `production-five-host.json` | [production-five-host.md](production-five-host.md) |
+| `production-six-host.json` | [production-six-host.md](production-six-host.md) |
+
 Install a maintained example directly; no copy or render step is required:
 
 ```bash
@@ -40,6 +54,14 @@ venv/bin/python deploy.py inventory-network-matrix \
 venv/bin/python deploy.py install \
   --inventory examples/operator-inventory/local-two-site.json --verbose
 ```
+
+`one-server-aws-sandbox.json` is the single-EC2 equivalent of `local-ha`: it places
+the same four validators and two storage peers on one Amazon EC2 instance and
+expects the deployer to run on that server with `execution: local`. It uses the
+sandbox VPC subnet `172.31.0.0/16` and `172.31.94.30` as the server's private
+LAN address. Its gateway listens publicly on TCP/80 using `sandbox.dark-pid.net`;
+point that DNS name to the EC2 public address and allow TCP/80 in the instance
+security group.
 
 The compact inventory has one source of truth for `placement`, `storage` and
 `proxies`. Each proxy owns a machine, listener, public origin, TLS mode and

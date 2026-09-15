@@ -35,6 +35,19 @@ class InventoryEvolutionTests(unittest.TestCase):
         self.assertEqual(resolution.document["images"], get_catalog("dark-platform-baseline-v1.0").document["images"])
         self.assertNotIn("besu_image", resolution.document["blockchain"])
 
+    def test_sandbox_minter_shoulder_can_use_lowercase_alphanumeric_characters(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "one-server-aws-sandbox.json").read_text())
+        resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
+        self.assertEqual(resolution.document["settings"]["minter"]["shoulder"], "2s0")
+
+    def test_minter_shoulder_rejects_non_lowercase_alphanumeric_2xx_values(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
+        for shoulder in ("20", "2000", "2S0", "2-0", "001"):
+            with self.subTest(shoulder=shoulder):
+                document["overrides"]["settings"]["minter"]["shoulder"] = shoulder
+                with self.assertRaisesRegex(OperatorInventoryError, "2xx"):
+                    resolve_inventory(document, source_path=ROOT / "inventory.json")
+
     def test_operator_v1_is_rejected(self):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
         document["format_version"] = 1

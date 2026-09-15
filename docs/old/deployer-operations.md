@@ -188,7 +188,7 @@ For direct ARK imports without metadata and NAAN authorization audits, see
 are part of the current `main` branch and are installed when the Minter is
 rebuilt from that branch.
 
-For the required DARK 2 `2MM` shoulder format and its minter-code assignment
+For the required DARK 2 `2xx` shoulder format and its minter-code assignment
 rules, see [Minter Shoulder Policy](minter-shoulder-policy.md).
 
 The Minter runs three workers alongside the API: metadata persistence, IPFS

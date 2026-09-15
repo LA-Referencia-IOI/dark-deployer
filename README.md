@@ -112,14 +112,15 @@ additional synchronized chain copy, but they do not count towards quorum.
 
 | Operator file | Profile | Machines | What it exercises |
 | --- | --- | ---: | --- |
-| `local-simple.json` | `local` | 1 | Minimal functional path with one validator, RPC, and storage peer |
-| `local-observer.json` | `local` | 1 | A Besu observer and Resolver bound to its private RPC |
-| `local-ha.json` | `lab` | 1 | Logical HA groups and two storage copies on one Docker host |
-| `local-two-site.json` | `lab` | 6 logical | Two isolated Docker LANs plus an inter-site VPN mesh |
-| `lima-five-host.json` | `lab` | 5 | Reproducible SSH distribution across Lima machines |
-| `lima-two-site-five-host.json` | `lab` | 5 | Separate Lima lab: Apps plus two validators and IPFS in site A; two validators and IPFS in site B, joined through WireGuard |
-| `production-five-host.json` | `production` | 5 | Apps, two blockchain domains, and two storage domains |
-| `production-six-host.json` | `production` | 6 | Dedicated public Resolver with local observer, RPC and Store API |
+| [`local-simple.json`](examples/operator-inventory/local-simple.md) | `local` | 1 | Minimal functional path with one validator, RPC, and storage peer |
+| [`local-observer.json`](examples/operator-inventory/local-observer.md) | `local` | 1 | A Besu observer and Resolver bound to its private RPC |
+| [`local-ha.json`](examples/operator-inventory/local-ha.md) | `lab` | 1 | Logical HA groups and two storage copies on one Docker host |
+| [`one-server-aws-sandbox.json`](examples/operator-inventory/one-server-aws-sandbox.md) | `lab` | 1 | Single-EC2 sandbox run locally on the server, with the local-ha service layout and public HTTP gateway |
+| [`local-two-site.json`](examples/operator-inventory/local-two-site.md) | `lab` | 6 logical | Two isolated Docker LANs plus an inter-site VPN mesh |
+| [`lima-five-host.json`](examples/operator-inventory/lima-five-host.md) | `production` | 5 | Reproducible SSH distribution across Lima machines |
+| [`lima-two-site-five-host.json`](examples/operator-inventory/lima-two-site-five-host.md) | `lab` | 5 | Separate Lima lab: Apps plus two validators and IPFS in site A; two validators and IPFS in site B, joined through WireGuard |
+| [`production-five-host.json`](examples/operator-inventory/production-five-host.md) | `production` | 5 | Apps, two blockchain domains, and two storage domains |
+| [`production-six-host.json`](examples/operator-inventory/production-six-host.md) | `production` | 6 | Dedicated public Resolver with local observer, RPC and Store API |
 
 Production examples use documentation-reserved ranges and `REPLACE` values.
 Never run them until addresses, routes, SSH keys, public origins, artifacts, and

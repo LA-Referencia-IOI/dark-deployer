@@ -527,8 +527,8 @@ def _validate_settings(settings: dict[str, Any]) -> None:
     minter = _object(settings.get("minter"), "settings.minter")
     _only_keys(minter, "settings.minter", {"shoulder", "metadata", "replication", "chain"})
     shoulder = minter.get("shoulder")
-    if not isinstance(shoulder, str) or not re.fullmatch(r"2[0-9]{2}", shoulder):
-        raise _error("settings.minter.shoulder must use the 2MM format")
+    if not isinstance(shoulder, str) or not re.fullmatch(r"2[0-9a-z]{2}", shoulder):
+        raise _error("settings.minter.shoulder must use the 2xx format with lowercase alphanumeric characters")
 
     metadata = _object(minter.get("metadata"), "settings.minter.metadata")
     metadata_required = {"page_size", "concurrency", "min_concurrency"}

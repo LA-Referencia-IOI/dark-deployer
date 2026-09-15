@@ -175,9 +175,10 @@ El orden de persistencia es L2 → L1:
 El CID de blockchain siempre apunta a L1; Resolver sigue el vínculo L1 → L2
 para devolver el registro original.
 
-Los identificadores DARK 2 nuevos usan shoulders de tres dígitos 2MM, por
-ejemplo 200 o 201. El espacio 00* se reserva para DARK 1; el sufijo MM debe ser
-único por Minter dentro de un mismo NAAN.
+Los identificadores DARK 2 nuevos usan shoulders `2xx`, con `x` alfanumérica
+minúscula, por
+ejemplo `200` o `2s0`. El espacio `00*` se reserva para DARK 1; el sufijo `xx`
+debe ser único por Minter dentro de un mismo NAAN.
 
 ## 7. Metadata, IPFS y réplicas
 

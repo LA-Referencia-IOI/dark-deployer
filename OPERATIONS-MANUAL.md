@@ -153,7 +153,7 @@ Declare each logical peer once. The resolver creates its Kubo/Cluster pair and u
 
 ### Controlled overrides
 
-The compact catalogue supplies component defaults and settings. Use only the typed override areas it supports. For example, the Minter shoulder uses the `2MM` form:
+The compact catalogue supplies component defaults and settings. Use only the typed override areas it supports. For example, the Minter shoulder uses the `2xx` form, where each `x` is lowercase alphanumeric:
 
 ```json
 {

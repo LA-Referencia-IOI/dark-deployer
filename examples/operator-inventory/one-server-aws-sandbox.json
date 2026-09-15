@@ -1,0 +1,149 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 3,
+  "catalog": "dark-platform-baseline-v1.0",
+  "profile": "lab",
+  "deployment": {
+    "id": "dark-operator-one-server-aws-sandbox",
+    "label": "dARK one-server AWS sandbox"
+  },
+  "defaults": {
+    "paths": {
+      "workspace_root": "/srv/dark",
+      "data_root": "/srv/dark/data",
+      "secrets_root": "/srv/dark/secrets"
+    }
+  },
+  "networks": {
+    "sandbox-lan": {
+      "kind": "lan",
+      "cidr": "172.31.0.0/16"
+    }
+  },
+  "sites": {
+    "sandbox": {
+      "lan": "sandbox-lan"
+    }
+  },
+  "machines": {
+    "sandbox": {
+      "execution": "local",
+      "site": "sandbox",
+      "management_address": "127.0.0.1",
+      "addresses": {
+        "sandbox-lan": "172.31.94.30"
+      }
+    }
+  },
+  "placement": {
+    "apps": "sandbox",
+    "blockchain-a": "sandbox",
+    "blockchain-b": "sandbox",
+    "storage-1": "sandbox",
+    "storage-2": "sandbox"
+  },
+  "routing": {
+    "blockchain_p2p": "sandbox-lan",
+    "storage_p2p": "sandbox-lan",
+    "storage_api": "sandbox-lan",
+    "application_api": "sandbox-lan"
+  },
+  "blockchain": {
+    "chain_id": 2025,
+    "validator_groups": {
+      "blockchain-a": {
+        "validator_count": 2
+      },
+      "blockchain-b": {
+        "validator_count": 2
+      }
+    },
+    "observer_groups": {},
+    "rpc": {
+      "primary": "rpc01",
+      "nodes": {
+        "rpc01": {
+          "group": "apps"
+        }
+      }
+    }
+  },
+  "storage": {
+    "cluster_name": "dark-one-server-aws-sandbox",
+    "peers": {
+      "storage-a": {
+        "group": "storage-1"
+      },
+      "storage-b": {
+        "group": "storage-2"
+      }
+    },
+    "replication": {
+      "publish_after_replicas": 1,
+      "target_replicas": 2
+    }
+  },
+  "proxies": {
+    "gateway": {
+      "group": "apps",
+      "listener": {
+        "bind": "public",
+        "port": 80
+      },
+      "tls": {
+        "mode": "http"
+      },
+      "sites": [
+        {
+          "host": "sandbox.dark-pid.net",
+          "public_origin": "http://sandbox.dark-pid.net",
+          "routes": [
+            {
+              "id": "dashboard",
+              "path": "/admin/",
+              "service": "dashboard",
+              "upstream_path": "/"
+            },
+            {
+              "id": "explorer",
+              "path": "/explorer/",
+              "service": "explorer",
+              "upstream_path": "/"
+            },
+            {
+              "id": "minter-v1",
+              "path": "/api/v1/",
+              "service": "minter-api",
+              "upstream_path": "/api/v1/"
+            },
+            {
+              "id": "minter-docs",
+              "path": "/api/docs",
+              "service": "minter-api",
+              "upstream_path": "/docs"
+            },
+            {
+              "id": "minter-openapi",
+              "path": "/api/openapi.json",
+              "service": "minter-api",
+              "upstream_path": "/openapi.json"
+            },
+            {
+              "id": "resolver",
+              "path": "/",
+              "service": "resolver-api",
+              "upstream_path": "/api/v1/arks/"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "overrides": {
+    "settings": {
+      "minter": {
+        "shoulder": "2s0"
+      }
+    }
+  }
+}

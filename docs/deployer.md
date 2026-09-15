@@ -166,9 +166,12 @@ The Minter shoulder is explicit in all compact examples:
 }
 ```
 
-The value must use the current `2MM` format. The resolver validates the whole
-expanded document before a plan is built. Invalid shoulders, missing groups,
-unsupported peers, ambiguous routes and invalid replica counts fail early.
+The value must use the current `2xx` format: it starts with `2` and then uses
+two lowercase alphanumeric characters. Production examples use numeric shoulders such
+as `200`; sandbox inventories may use values such as `2s0` to make minted ARKs
+visibly distinct. The resolver validates the whole expanded document before a
+plan is built. Invalid shoulders, missing groups, unsupported peers, ambiguous
+routes and invalid replica counts fail early.
 
 The current catalogue supports dynamic validator groups, observer groups,
 multiple RPC nodes with an explicit primary, the Minter stack, dashboard,
