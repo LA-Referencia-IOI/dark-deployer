@@ -18,7 +18,7 @@ from .inventory import InventoryError, load_inventory
 from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
-from .runner import ApplyError, _effective_plan, apply, existing_chain_data, list_managed_deployments, list_managed_services, manage_service, managed_plan, persistent_data_inventory, push
+from .runner import ApplyError, _effective_plan, apply, existing_chain_data, follow_service_logs, list_managed_deployments, list_managed_services, manage_service, managed_plan, persistent_data_inventory, push
 from .artifacts import ArtifactError, export_chain_group, initialize_chain, verify_artifact_compatibility, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
@@ -33,8 +33,8 @@ from .availability import analyze as analyze_availability
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
-    operational = {"services", "stop", "start", "restart", "recreate", "remove"}
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "services", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
+    operational = {"services", "logs", "stop", "start", "restart", "recreate", "remove"}
+    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "services", "logs", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
         command = actions.add_parser(name)
         if name in operational:
             source = command.add_mutually_exclusive_group(required=True)
@@ -46,6 +46,9 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--json", action="store_true")
         if name == "services":
             command.add_argument("--json", action="store_true", help="emit the runtime service list as JSON")
+        if name == "logs":
+            command.add_argument("--target", required=True, help="exact managed service selector: service:ID")
+            command.add_argument("--tail", type=int, default=100, help="number of existing log lines to print before following (default: 100)")
         if name == "render":
             command.add_argument("--output", required=True, type=Path)
         if name == "inventory-resolve":
@@ -575,7 +578,7 @@ def main() -> None:
             for warning in availability.warnings:
                 print(f"[WARN] {warning}")
             return
-        plan = _operational_plan(args, project_root) if args.action in {"services", "stop", "start", "restart", "recreate", "remove"} else build_plan(args.inventory)
+        plan = _operational_plan(args, project_root) if args.action in {"services", "logs", "stop", "start", "restart", "recreate", "remove"} else build_plan(args.inventory)
         if args.action == "preflight":
             result = {machine.id: run_preflight(machine) for machine in plan.machines}
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -608,6 +611,9 @@ def main() -> None:
                     for item in services
                 ]
                 _print_table(headers, values)
+            return
+        if args.action == "logs":
+            follow_service_logs(plan, project_root, args.target, tail=args.tail)
             return
         if args.action == "install":
             _install(args, plan)

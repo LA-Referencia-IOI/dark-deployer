@@ -83,6 +83,11 @@ lifecycle operations currently valid for it. `--json` is intended for scripts.
 The legacy `--inventory FILE` form only locates the deployment ID; the deployed
 topology snapshot remains the authority for both listing and mutations.
 
+`deploy.py logs --deployment ID --target service:ID` follows the selected
+service's Docker Compose log on its owning local or SSH host. It prints the
+last 100 lines by default; use `--tail N` to change that number and `Ctrl-C` to
+stop following without changing the deployment.
+
 ### Recreate versus apply
 
 Use `recreate` when the deployed topology remains correct and only one

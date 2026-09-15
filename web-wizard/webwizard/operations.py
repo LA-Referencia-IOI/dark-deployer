@@ -547,7 +547,7 @@ def _optional_address(params: dict, key: str) -> str | None:
 
 CATALOGUE_SINGLETONS = frozenset({
     "store-api", "minter-api", "minter-postgres", "minter-migrate", "admin-api",
-    "resolver-api", "dashboard", "dashboard-mysql", "dashboard-redis",
+    "resolver-api", "dashboard", "dashboard-mysql",
     "dashboard-migrate", "explorer", "contracts-deploy", "rpc-probe",
     "metadata-worker", "replication-worker", "chain-worker",
 })

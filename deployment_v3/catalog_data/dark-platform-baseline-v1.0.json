@@ -196,19 +196,12 @@
         "type": "dashboard-mysql",
         "machine": "apps"
       },
-      "dashboard-redis": {
-        "type": "dashboard-redis",
-        "machine": "apps"
-      },
       "dashboard-migrate": {
         "type": "dashboard-migrate",
         "machine": "apps",
         "connections": {
           "database": {
             "service": "dashboard-mysql"
-          },
-          "redis": {
-            "service": "dashboard-redis"
           },
           "admin_api": {
             "service": "admin-api"
@@ -230,9 +223,6 @@
         "connections": {
           "database": {
             "service": "dashboard-mysql"
-          },
-          "redis": {
-            "service": "dashboard-redis"
           },
           "admin_api": {
             "service": "admin-api"
@@ -355,7 +345,6 @@
       "besu": "hyperledger/besu:26.6.1",
       "postgres": "postgres:15-alpine",
       "mysql": "mysql:8.0",
-      "redis": "redis:7-alpine",
       "dashboard": "ambientum/php:8.0-nginx",
       "kubo": "ipfs/kubo:master-2026-08-17-a73e8c0@sha256:c11759f51eca6af1b2e45d93125af9058b63925704821bd37477449e3f3d9411",
       "ipfs_cluster": "ipfs/ipfs-cluster:v1.1.6",

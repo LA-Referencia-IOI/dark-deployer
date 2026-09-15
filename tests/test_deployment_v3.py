@@ -50,6 +50,10 @@ class DeploymentV3Tests(unittest.TestCase):
             stdout = "container-id\n" if command[:3] == ("docker", "ps", "-aq") else ""
             return CommandResult(command, 0, stdout, "")
 
+        def stream(self, argv):
+            self.calls.append((tuple(argv), "stream"))
+            return 0
+
     class _RecordingRemoteExecutor:
         def __init__(self):
             self.calls = []
@@ -59,6 +63,10 @@ class DeploymentV3Tests(unittest.TestCase):
             self.calls.append((command, timeout))
             stdout = "container-id\n" if command[:3] == ("docker", "ps", "-aq") else ""
             return CommandResult(command, 0, stdout, "")
+
+        def stream(self, argv):
+            self.calls.append((tuple(argv), "stream"))
+            return 0
 
     def test_contract_artifacts_are_mounted_from_the_rendered_apps_group(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
@@ -327,7 +335,7 @@ class DeploymentV3Tests(unittest.TestCase):
                     self.assertIn("name: dark-local-ha-local-apps", (machine / "groups" / "apps" / "compose.yaml").read_text())
 
     def test_operator_examples_resolve_to_valid_v3_and_render_resolved_contract(self):
-        for name, services in (("local-simple", 23), ("local-observer", 25), ("local-ha", 25), ("production-five-host", 25)):
+        for name, services in (("local-simple", 22), ("local-observer", 24), ("local-ha", 24), ("production-five-host", 24)):
             source = ROOT / "examples" / "operator-inventory" / f"{name}.json"
             resolution = resolve_inventory_path(source)
             self.assertEqual(len(resolution.document["services"]), services)
@@ -748,6 +756,30 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertTrue(result["dry_run"])
         self.assertEqual(executor.calls, [])
         self.assertFalse((root / "status.json").exists())
+
+    def test_service_logs_follow_the_resolved_compose_service(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        executor = self._RecordingLocalExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "store-api")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                result = runner_module.follow_service_logs(plan, project_root, "service:store-api", tail=25)
+        self.assertEqual(result["service"], "store-api")
+        self.assertEqual(result["tail"], 25)
+        command, timeout = executor.calls[-1]
+        self.assertEqual(timeout, "stream")
+        self.assertEqual(command[-5:], ("logs", "--follow", "--tail", "25", "store-api"))
+
+    def test_service_logs_accept_one_shot_service_output(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        executor = self._RecordingLocalExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "contracts-deploy")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                result = runner_module.follow_service_logs(plan, project_root, "service:contracts-deploy")
+        self.assertEqual(result["service"], "contracts-deploy")
 
     def test_service_lifecycle_uses_deployed_snapshot_when_working_plan_changes(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")

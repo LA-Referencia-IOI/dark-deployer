@@ -156,7 +156,7 @@ def _choices(path: tuple[str, ...]) -> tuple[str, ...] | None:
         return (
             "besu-rpc", "besu-validator", "explorer", "minter-api", "minter-worker",
             "minter-postgres", "minter-migrate", "admin-api", "resolver-api", "store-api",
-            "dashboard", "dashboard-mysql", "dashboard-redis", "dashboard-migrate",
+            "dashboard", "dashboard-mysql", "dashboard-migrate",
             "ipfs-kubo", "ipfs-cluster", "contracts-deploy", "rpc-probe", "edge-proxy",
         )
     if path[-1:] == ("worker",):

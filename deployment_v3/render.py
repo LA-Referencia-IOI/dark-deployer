@@ -168,7 +168,7 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
         values |= {
             "APP_ENV": "production", "APP_DEBUG": "false", "APP_URL": _dashboard_public_url(plan, service),
             "ASSET_URL": _dashboard_public_url(plan, service), "SESSION_PATH": _dashboard_public_path(plan, service), "FORCE_HTTPS": "false",
-            "DB_CONNECTION": "mysql", "DB_HOST": host("database"), "DB_DATABASE": "dark", "DB_USERNAME": "dark", "REDIS_HOST": host("redis"),
+            "DB_CONNECTION": "mysql", "DB_HOST": host("database"), "DB_DATABASE": "dark", "DB_USERNAME": "dark",
             "ADMIN_API_BASE_URL": connection("admin_api"), "MINTER_BASE_URL": connection("minter_api"), "RESOLVER_BASE_URL": connection("resolver_api"), "STORE_API_BASE_URL": connection("store_api"),
             "WORKER_STATUS_URL": connection("minter_api") + "/api/v1/worker/status",
             # These names are consumed by the dashboard's API Health Check

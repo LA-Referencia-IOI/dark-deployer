@@ -37,7 +37,6 @@ FAMILY_BY_TYPE: dict[str, str] = {
     "store-api": "applications",
     "dashboard": "applications",
     "dashboard-mysql": "applications",
-    "dashboard-redis": "applications",
     "dashboard-migrate": "applications",
     "explorer": "web",
     "edge-proxy": "web",

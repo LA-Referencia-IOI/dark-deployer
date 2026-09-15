@@ -12,7 +12,6 @@ DEFAULT_PORTS = {
     "resolver-api": 8002, "store-api": 8003, "dashboard": 8080,
     "explorer": 80, "edge-proxy": 80, "ipfs-kubo": 5001, "ipfs-cluster": 9094,
     "minter-postgres": 5432, "dashboard-mysql": 3306,
-    "dashboard-redis": 6379,
 }
 
 

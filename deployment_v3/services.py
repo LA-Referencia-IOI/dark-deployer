@@ -139,8 +139,6 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             result[service.id] = {**common, "build": _build(machine, "dark-store-api/Dockerfile"), "env_file": env, "ports": _ports(machine, service), "volumes": ["./config/storage-endpoints.json:/config/storage-endpoints.json:ro"]}
         elif service.type == "dashboard-mysql":
             result[service.id] = {**common, "image": images["mysql"], "env_file": env, "volumes": [f"{service_data}:/var/lib/mysql"]}
-        elif service.type == "dashboard-redis":
-            result[service.id] = {**common, "image": images["redis"], "command": ["redis-server", "--appendonly", "yes"], "volumes": [f"{service_data}:/data"]}
         elif service.type in {"dashboard", "dashboard-migrate"}:
             # Composer runs as the image's unprivileged ``ambientum`` user.
             # Keep its managed dependencies outside the synced component

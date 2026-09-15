@@ -30,7 +30,7 @@ REQUIRED_COMPONENTS = frozenset(
 SERVICE_TYPES = frozenset({
     "besu-rpc", "besu-validator", "besu-observer", "explorer", "minter-api", "minter-worker",
     "minter-postgres", "minter-migrate", "admin-api", "resolver-api", "store-api",
-    "dashboard", "dashboard-mysql", "dashboard-redis", "dashboard-migrate",
+    "dashboard", "dashboard-mysql", "dashboard-migrate",
     "ipfs-kubo", "ipfs-cluster", "contracts-deploy", "rpc-probe", "edge-proxy",
 })
 
@@ -44,8 +44,8 @@ CONNECTION_CONTRACTS = {
     "minter-migrate": {"database": "minter-postgres"},
     "admin-api": {"rpc": "besu-rpc", "contracts": "contracts-deploy"},
     "resolver-api": {"rpc": "besu-rpc", "store_api": "store-api", "contracts": "contracts-deploy"},
-    "dashboard": {"database": "dashboard-mysql", "redis": "dashboard-redis", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api", "migration": "dashboard-migrate"},
-    "dashboard-migrate": {"database": "dashboard-mysql", "redis": "dashboard-redis", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api"},
+    "dashboard": {"database": "dashboard-mysql", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api", "migration": "dashboard-migrate"},
+    "dashboard-migrate": {"database": "dashboard-mysql", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api"},
     "ipfs-cluster": {"kubo": "ipfs-kubo"},
     # Proxy connections are named by the inventory routes.  Their type and
     # completeness are validated from ``configuration.sites[].routes`` below.
@@ -170,9 +170,9 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
     _validate_schema(raw)
 
     images = _object(raw["images"], "images")
-    required_images = {"besu", "postgres", "mysql", "redis", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"}
+    required_images = {"besu", "postgres", "mysql", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"}
     _only_keys(images, "images", required_images)
-    if set(images) != required_images:
+    if not required_images.issubset(images):
         raise _error("images must declare every managed runtime image")
     for image_id, image in images.items():
         _string(image, f"images.{image_id}")

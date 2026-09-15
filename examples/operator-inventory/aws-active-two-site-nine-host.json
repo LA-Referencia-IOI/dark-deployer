@@ -96,8 +96,7 @@
     "site-b-observer": "site-b-observer",
     "storage-1": "storage-1",
     "storage-2": "storage-2",
-    "storage-3": "storage-3",
-    "explorer": "apps"
+    "storage-3": "storage-3"
   },
   "routing": {
     "blockchain_p2p": {"same_site": "site_lan", "cross_site": "mesh-vpn"},
@@ -194,7 +193,6 @@
         "public_origin": "https://apps.replace.example.org",
         "routes": [
           {"id": "dashboard", "path": "/admin/", "service": "dashboard", "upstream_path": "/"},
-          {"id": "explorer", "path": "/explorer/", "service": "explorer", "upstream_path": "/"},
           {"id": "minter-v1", "path": "/api/v1/", "service": "minter-api", "upstream_path": "/api/v1/"},
           {"id": "minter-docs", "path": "/api/docs", "service": "minter-api", "upstream_path": "/docs"},
           {"id": "minter-openapi", "path": "/api/openapi.json", "service": "minter-api", "upstream_path": "/openapi.json"}
@@ -206,7 +204,6 @@
     "source_root": "REPLACE/secrets"
   },
   "overrides": {
-    "explorer": {"group": "apps"},
     "resolver": {"group": "resolver-observer"},
     "settings": {"minter": {"shoulder": "200"}}
   }

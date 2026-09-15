@@ -40,7 +40,7 @@
       "kind": "apps",
       "machine": "local",
       "members": ["rpc01"],
-      "services": ["admin-api", "chain-worker", "contracts-deploy", "dashboard", "dashboard-migrate", "dashboard-mysql", "dashboard-redis", "edge-proxy", "explorer", "metadata-worker", "minter-api", "minter-migrate", "minter-postgres", "replication-worker", "resolver-api", "rpc01", "store-api"]
+      "services": ["admin-api", "chain-worker", "contracts-deploy", "dashboard", "dashboard-migrate", "dashboard-mysql", "edge-proxy", "explorer", "metadata-worker", "minter-api", "minter-migrate", "minter-postgres", "replication-worker", "resolver-api", "rpc01", "store-api"]
     },
     "validators": {
       "kind": "validators",
@@ -251,19 +251,12 @@
       "type": "dashboard-mysql",
       "machine": "local"
     },
-    "dashboard-redis": {
-      "type": "dashboard-redis",
-      "machine": "local"
-    },
     "dashboard-migrate": {
       "type": "dashboard-migrate",
       "machine": "local",
       "connections": {
         "database": {
           "service": "dashboard-mysql"
-        },
-        "redis": {
-          "service": "dashboard-redis"
         },
         "admin_api": {
           "service": "admin-api"
@@ -285,9 +278,6 @@
       "connections": {
         "database": {
           "service": "dashboard-mysql"
-        },
-        "redis": {
-          "service": "dashboard-redis"
         },
         "admin_api": {
           "service": "admin-api"

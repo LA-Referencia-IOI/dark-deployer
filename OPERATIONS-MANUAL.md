@@ -226,6 +226,17 @@ venv/bin/python deploy.py services --inventory inventory.json
 venv/bin/python deploy.py services --inventory inventory.json --json
 ```
 
+Para imprimir las últimas líneas y seguir el log en tiempo real de un servicio
+del bundle desplegado, use el mismo selector exacto. Termine el seguimiento con
+`Ctrl-C`:
+
+```bash
+venv/bin/python deploy.py logs \
+  --deployment dark-operator-local-ha \
+  --target service:dashboard \
+  --tail 100
+```
+
 To operate one service without touching the rest of its machine, use its exact
 `service:ID` selector:
 

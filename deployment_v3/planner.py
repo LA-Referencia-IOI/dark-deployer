@@ -17,7 +17,7 @@ PHASES = (
     ("observers", {"besu-observer"}),
     ("contracts", {"contracts-deploy", "rpc-probe"}),
     ("storage", {"ipfs-kubo", "ipfs-cluster"}),
-    ("data", {"minter-postgres", "dashboard-mysql", "dashboard-redis", "store-api", "minter-migrate"}),
+    ("data", {"minter-postgres", "dashboard-mysql", "store-api", "minter-migrate"}),
     ("applications", {"minter-api", "minter-worker", "admin-api", "resolver-api", "dashboard-migrate", "dashboard", "explorer", "edge-proxy"}),
 )
 

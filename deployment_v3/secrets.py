@@ -144,7 +144,6 @@ def initialize_greenfield_secrets(plan: DeploymentPlan, output: Path, *, overwri
                 f"DB_PASSWORD={password}",
                 f"MYSQL_PASSWORD={password}",
                 f"MYSQL_ROOT_PASSWORD={secrets.token_urlsafe(32)}",
-                "REDIS_PASSWORD=null",
                 "",
             )),
             overwrite=overwrite,
