@@ -22,6 +22,7 @@ secret, planning, and verification rules apply in both cases.
 | Operator inventory v2 | Describe a standard installation compactly | No |
 | Complete v3 inventory | Describe the full execution contract directly | No |
 | `inventory-edit` | Edit inventory sections through a Textual TUI | Only the file after confirmation |
+| `metrics` | Watch per-machine Docker metrics for one managed deployment | Nothing: it only reads |
 | `web-wizard/` | Design, visualize, and adapt operator inventories through a local web interface | Only creates a new copy |
 | `chain-*` commands | Create, export, and verify Besu artifacts | Some explicitly create artifacts |
 | `secrets-init` | Prepare managed secrets for a new installation | Yes, at the requested destination |
@@ -47,7 +48,7 @@ docker version
 docker compose version
 ```
 
-To use `inventory-edit`:
+To use `inventory-edit` or `metrics`:
 
 ```bash
 venv/bin/python -m pip install -r requirements-tui.txt
@@ -310,6 +311,17 @@ operations `build`, `stop`, `start`, `restart`, `recreate` and `remove` act on o
 and replace it. In an interactive terminal, `deploy.py tui` provides a service
 browser, lifecycle actions and refreshed logs over the same managed snapshots.
 
+For observation without any possibility of action, `deploy.py metrics` opens a
+read-only panel over the same deployment: it samples each machine once a minute
+through its own Docker daemon, locally or over the configured SSH host, and
+shows CPU, memory, container and restart state per machine plus the containers
+of the selected one. It issues no lifecycle command at all, so it is safe to
+leave open next to the operations console.
+
+```bash
+venv/bin/python deploy.py metrics
+```
+
 ## Networking and exposure
 
 Dependencies on the same machine use Docker DNS and do not publish host ports.
@@ -409,6 +421,7 @@ payload cleanup are later worker activity, not part of a client HTTP request.
 | `stop`, `start`, `restart`, `remove` | Operate on one exact managed service, locally or through its configured SSH host |
 | `inventory-create` | Create a copy from a maintained template |
 | `inventory-edit` | Edit an inventory with Textual |
+| `metrics` | Watch per-machine Docker CPU, memory, container and restart state in a read-only Textual panel |
 | `inventory-resolve` | Expand operator v2 to v3 |
 | `inventory-explain` | Explain the provenance of a resolved field |
 | `inventory-network-matrix` | Show the resolved per-peer LAN/VPN endpoints |
@@ -467,6 +480,7 @@ venv/bin/python deploy.py services --deployment dark-operator-local-ha --json
 | --- | --- |
 | [Operations manual](OPERATIONS-MANUAL.md) | Installation, configuration, verification, recovery, and troubleshooting |
 | [Deployer reference](docs/deployer.md) | Contracts, commands, security, rendering, and execution |
+| [Docker metrics panel](docs/metrics-panel.md) | Read-only per-machine Docker metrics: decisions, contract, verification |
 | [Operator inventory](docs/deployment-v3-operator-inventory-proposal.md) | Compact format and catalogue design |
 | [Inventory and artifact flow](docs/deployment-v3-inventory-and-artifact-flow.md) | Resolution, bundles, secrets, and blockchain artifacts |
 | [Service placement](docs/deployment-v3-service-placement.md) | Groups, connections, endpoints, and placement constraints |
@@ -475,6 +489,7 @@ venv/bin/python deploy.py services --deployment dark-operator-local-ha --json
 | [Architecture](docs/architecture.md) | dARK components and ARK lifecycle |
 | [Lima testing](docs/lima-five-host-test.md) | Five-host distributed lab |
 | [AWS deployment](docs/aws-single-az-five-host.md) | Private EC2 scenario in one Availability Zone |
+| [AWS CloudFormation active site](infrastructure/aws/cloudformation/README.md) | Isolated VPC, six private EC2 hosts, EBS, ALB, TLS hand-off, and inventory outputs |
 | [Web wizard](web-wizard/README.md) | Local workbench usage and guarantees |
 | [History](docs/history.md) | Archived decisions and superseded documentation |
 

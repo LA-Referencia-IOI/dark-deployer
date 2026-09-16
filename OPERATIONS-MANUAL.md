@@ -238,6 +238,19 @@ Las acciones disponibles aparecen como botones en el panel derecho. Use `l`
 para logs, `r` para refrescar y `q` para salir. Las acciones que interrumpen o
 reconstruyen un servicio piden confirmación explícita.
 
+Para observar sin poder actuar, `deploy.py metrics` abre un panel de solo
+lectura sobre el mismo despliegue: muestra una fila por máquina con CPU,
+memoria, contenedores y reinicios, más los contenedores de la máquina
+seleccionada. Cada máquina se muestrea contra su propio daemon Docker, en local
+o por su host SSH configurado, y la edad de cada muestra aparece siempre en
+pantalla. `r` refresca, `m` vuelve a muestrear la máquina seleccionada y `q`
+sale. El panel no tiene botones de ciclo de vida, así que puede quedarse abierto
+junto a la consola de operaciones.
+
+```bash
+venv/bin/python deploy.py metrics
+```
+
 Para imprimir las últimas líneas y seguir el log en tiempo real de un servicio
 del bundle desplegado, use el mismo selector exacto. Termine el seguimiento con
 `Ctrl-C`:

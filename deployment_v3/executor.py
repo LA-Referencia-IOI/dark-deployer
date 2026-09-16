@@ -42,6 +42,10 @@ class LocalExecutor(Executor):
             stdout = exc.stdout or ""
             stderr = (exc.stderr or "") + f"\ncommand timed out after {timeout:.0f}s"
             return CommandResult(tuple(argv), 124, stdout if isinstance(stdout, str) else stdout.decode(errors="replace"), stderr)
+        except OSError as exc:
+            # A binary missing on this host is a destination failure the callers
+            # already know how to report, not an exception in the controller.
+            return CommandResult(tuple(argv), 127, "", str(exc))
         return CommandResult(tuple(argv), completed.returncode, completed.stdout, completed.stderr)
 
     def stream(self, argv: Sequence[str]) -> int:

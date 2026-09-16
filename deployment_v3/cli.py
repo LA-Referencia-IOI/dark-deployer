@@ -26,6 +26,7 @@ from .sources import SourceError
 from .acquire import AcquisitionError, acquire_components
 from .inventory_editor import InventoryDocument, InventoryDocumentError, create_from_template, template_names
 from .inventory_editor.textual_app import run_textual_editor
+from .metrics.textual_app import run_metrics_tui
 from .operations_tui import run_operations_tui
 from .inventory_resolver import resolve_inventory_path
 from .availability import analyze as analyze_availability
@@ -116,6 +117,7 @@ def _parser() -> argparse.ArgumentParser:
     deployments = actions.add_parser("deployments", help="list locally known managed deployments and live summaries")
     deployments.add_argument("--json", action="store_true", help="emit deployment summaries as JSON")
     actions.add_parser("tui", help="open the interactive deployment operations console")
+    actions.add_parser("metrics", help="open the read-only Docker metrics panel")
     create = actions.add_parser("inventory-create", help="create an inventory from a maintained template")
     create.add_argument("--template", required=True, choices=template_names())
     create.add_argument("--output", required=True, type=Path)
@@ -477,6 +479,16 @@ def _run_operations_console(project_root: Path) -> None:
     run_operations_tui(project_root)
 
 
+def _run_metrics_console(project_root: Path) -> None:
+    """Open the read-only metrics panel, which offers no action at all."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise InventoryDocumentError(
+            "metrics requires an interactive terminal; use status, deployments or "
+            "services for the same state without a panel"
+        )
+    run_metrics_tui(project_root)
+
+
 def _resolved_document(path: Path) -> dict:
     """Return v3 for either input format, for read-only CLI inspection."""
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -571,6 +583,9 @@ def main() -> None:
         project_root = Path(__file__).resolve().parents[1]
         if args.action == "tui":
             _run_operations_console(project_root)
+            return
+        if args.action == "metrics":
+            _run_metrics_console(project_root)
             return
         if args.action == "deployments":
             deployments = list_managed_deployments(project_root)

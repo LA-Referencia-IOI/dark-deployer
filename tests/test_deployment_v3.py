@@ -810,6 +810,12 @@ class DeploymentV3Tests(unittest.TestCase):
                 result = runner_module.follow_service_logs(plan, project_root, "service:contracts-deploy")
         self.assertEqual(result["service"], "contracts-deploy")
 
+    def test_missing_local_binary_is_reported_instead_of_raising(self):
+        """A host without docker must fail like any other destination failure."""
+        result = LocalExecutor().run(("dark-probe-binary-that-does-not-exist",))
+        self.assertEqual(result.returncode, 127)
+        self.assertIn("dark-probe-binary-that-does-not-exist", result.stderr)
+
     def test_service_lifecycle_uses_deployed_snapshot_when_working_plan_changes(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
         changed = json.loads(json.dumps(plan.raw))
