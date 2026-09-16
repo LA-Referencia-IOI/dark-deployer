@@ -156,10 +156,16 @@ terminal, mirroring `inventory_editor`'s `_make_textual_app`.
 
 ## 4. The probe contract
 
-One machine is sampled with **one** `sh -lc` program, executed either locally or
+One machine is sampled with **one** non-login `sh -c` program, executed either locally or
 over SSH through the deployment's own executors. One session per machine per
 sample; the same parser for both transports. The program is in
 [Appendix A](#appendix-a-the-generated-probe-script).
+
+The outer shell is deliberately non-login: it inherits the executor's `PATH`
+unchanged. This prevents `/etc/profile` or user profile files from selecting a
+different Docker CLI, adding output before the probe marker, or invalidating a
+controlled test environment. The nested `sh -c` used inside the probe for
+per-container inspection is unchanged.
 
 Each section announces itself with a marker line
 (`__dark_metrics__ <section>`), prints tab-separated rows, and reports a failure

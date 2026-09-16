@@ -7,7 +7,7 @@ the lifecycle commands already use (private key, port, ``BatchMode``,
 changes nothing on the destination: every section of the probe is a read
 (``info``, ``ps``, ``stats``, ``inspect`` and, optionally, ``system df``).
 
-One machine is sampled with a single ``sh -lc`` program that prints tab
+One machine is sampled with a single non-login ``sh -c`` program that prints tab
 separated sections behind a marker line.  That keeps one SSH session per machine
 per sample, gives local and remote hosts the same parser, and avoids depending
 on the JSON key names of ``docker --format '{{json .}}'``.
@@ -576,7 +576,10 @@ def sample_machine(
     script = probe_script(plan.deployment_id, include_disk=include_disk)
     try:
         executor = resolve_executor(machine)
-        result = executor.run(("sh", "-lc", script), timeout=timeout)
+        # Preserve the executor's non-interactive environment.  A login shell
+        # may rewrite PATH through profile files, which can select a different
+        # Docker CLI (or add output before the probe marker).
+        result = executor.run(("sh", "-c", script), timeout=timeout)
     except subprocess.TimeoutExpired:
         return _unreachable(machine, f"probe timed out after {timeout:.0f}s")
     except ExecutionError as exc:

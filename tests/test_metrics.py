@@ -399,7 +399,7 @@ class SampleMachineTests(unittest.TestCase):
             metrics = sample_machine(plan, MACHINE)
         self.assertTrue(metrics.reachable)
         self.assertEqual(len(seen), 1)
-        self.assertEqual(seen[0][:2], ("sh", "-lc"))
+        self.assertEqual(seen[0][:2], ("sh", "-c"))
         self.assertIn("label=org.dark.deployment.id=dark-operator-local-ha", seen[0][2])
 
     def test_resolution_failure_is_reported_not_raised(self):
