@@ -227,6 +227,23 @@ class ContainerOrderTests(unittest.TestCase):
         self.assertEqual(view.CONTAINER_ORDERS, ("name", "cpu", "memory"))
         for order in view.CONTAINER_ORDERS:
             self.assertIn(order, view.CONTAINER_SORT_LABELS)
+            self.assertIn(order, view.CONTAINER_SORT_SHORT)
+
+    def test_the_cycle_wraps_and_an_unknown_order_restarts_it(self):
+        self.assertEqual(view.next_container_order("name"), "cpu")
+        self.assertEqual(view.next_container_order("cpu"), "memory")
+        self.assertEqual(view.next_container_order("memory"), "name")
+        self.assertEqual(view.next_container_order("nonsense"), "name")
+
+    def test_the_message_says_what_happened_and_what_comes_next(self):
+        self.assertEqual(
+            view.container_sort_message("cpu"),
+            "Containers by CPU, busiest first.  Press s again for memory, largest first.",
+        )
+        self.assertIn("Press s again for container name", view.container_sort_message("memory"))
+
+    def test_the_binding_label_names_the_whole_cycle(self):
+        self.assertEqual(view.CONTAINER_SORT_CYCLE, "Sort: name → CPU → memory")
 
 
 class MachineDetailTests(unittest.TestCase):
@@ -344,17 +361,30 @@ class MetricsPanelTests(unittest.IsolatedAsyncioTestCase):
             async with app.run_test() as pilot:
                 await self.wait_for_samples(app, pilot)
                 table = app.query_one("#container-table")
+                title = app.query_one("#containers-title")
+                status = app.query_one("#status")
                 first = lambda: table.get_row_at(0)[0]
                 self.assertEqual(first(), "fat")
+                self.assertIn("by container name", title.content)
+                # Before pressing anything, the status line already says what s does.
+                self.assertIn("s sort, next CPU", status.content)
                 await pilot.press("s")
                 self.assertEqual(app.container_order, "cpu")
                 self.assertEqual(first(), "hammer")
+                self.assertIn("by CPU, busiest first", title.content)
+                self.assertIn("Press s again for memory", status.content)
                 await pilot.press("s")
                 self.assertEqual(app.container_order, "memory")
                 self.assertEqual(first(), "fat")
+                self.assertIn("Press s again for container name", status.content)
                 await pilot.press("s")
                 self.assertEqual(app.container_order, "name")
                 self.assertEqual(first(), "fat")
+                # The message replaces the summary until the next render, and a
+                # render names the following order again.
+                app.action_refresh()
+                await self.wait_for_samples(app, pilot)
+                self.assertIn("s sort, next CPU", status.content)
 
     async def test_resampling_one_machine_does_not_touch_the_others(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")

@@ -129,11 +129,11 @@ named fields instead.
 | File | Lines | Role |
 | --- | --- | --- |
 | `deployment_v3/metrics/collector.py` | 646 | Read-only probe: command construction, execution, parsing. Imports no terminal library. |
-| `deployment_v3/metrics/textual_app.py` | 599 | The panel, plus the pure helpers it renders from. Imports Textual lazily. |
+| `deployment_v3/metrics/textual_app.py` | 628 | The panel, plus the pure helpers it renders from. Imports Textual lazily. |
 | `deployment_v3/metrics/__init__.py` | 42 | Re-exports of the collector's public surface. |
 | `deployment_v3/console.py` | 55 | Toolkit-free deployment/service state shared by both consoles. |
 | `tests/test_metrics.py` | 562 | 47 tests: contract, parser, program, rates. |
-| `tests/test_metrics_view.py` | 376 | 35 tests: view helpers, container order, warning summary, pilot runs. |
+| `tests/test_metrics_view.py` | 406 | 38 tests: view helpers, container order, warning summary, pilot runs. |
 
 Modified, in support of the above: `deployment_v3/cli.py` (import, `metrics`
 subparser, `_run_metrics_console`, dispatch branch), `deployment_v3/executor.py`
@@ -308,6 +308,16 @@ back to the name. Because the order is re-applied on every sample, rows move as
 load moves; that is what "sorted by CPU" means, but it is worth knowing before
 leaving the pane open on a second monitor.
 
+A cycle is invisible unless the interface says where it is going, so the panel
+answers the question in three places. The footer names the whole cycle
+(`s Sort: name → CPU → memory`), the status line names the next order before you
+press anything (`s sort, next CPU`), and the key announces both what just
+happened and what it will do next (*"Containers by CPU, busiest first.  Press s
+again for memory, largest first."*). The message replaces the summary line until
+the next render, which is the same behaviour as the help text and is why the
+per-machine information is duplicated in the table and the detail pane rather
+than living only in the status line.
+
 **Detail pane.** Daemon version, API version, driver, cores, memory total, the
 daemon-wide container count, an explicit sentence about the denominators, the
 first warnings, whether another machine shares this daemon, and the states of the
@@ -433,9 +443,9 @@ venv/bin/python -m pip install -r requirements-tui.txt   # Textual, optional
 python -m unittest discover -s tests -p "test_*.py"      # 150 tests
 ```
 
-Result at the time of writing: **164 tests, all passing, `ruff` clean** on the
+Result at the time of writing: **167 tests, all passing, `ruff` clean** on the
 changed and added files. 82 of those tests live in the pre-existing files (one of
-them, in `test_deployment_v3.py`, is new and belongs to this work); 82 are new and
+them, in `test_deployment_v3.py`, is new and belongs to this work); 85 are new and
 split as follows.
 
 | Class | Tests | What it establishes |
@@ -454,11 +464,11 @@ split as follows.
 | `MachineStateTests` | 6 | `sampling`, `unknown`, `unreachable`, `active`, `degraded` (restart loop, unmeasurable container) and `inactive` |
 | `MachineRowTests` | 4 | Row contents, blanked numbers for unreachable machines, explicit `sampling`, every shape matching the table |
 | `ContainerRowTests` | 4 | Stopped containers, rates attached by name, no sample means no rows, no invented percentage |
-| `ContainerOrderTests` | 7 | Name order by default, CPU busiest first, memory largest first, unmeasurable containers last under both metrics, ties by name, an unknown order falls back to the name, the cycle covers both metrics |
+| `ContainerOrderTests` | 11 | Name order by default, CPU busiest first, memory largest first, unmeasurable containers last under both metrics, ties by name, an unknown order falls back to the name, the cycle wraps and covers both metrics, and the messages name what comes next |
 | `MachineDetailTests` | 4 | Unreachable machines explain themselves, denominators are named, a shared daemon is disclosed, a machine without services says so |
 | `WarningSummaryTests` | 3 | Repeated warnings collapse to one line, a single warning keeps its raw evidence, many kinds are capped |
 | `PanelIsReadOnlyTests` | 1 | The view imports no mutating API |
-| `MetricsPanelTests` | 4 | Pilot runs: the panel renders real samples over a rendered bundle, survives an unreachable machine, re-sampling one machine does not disturb the others, and pressing `s` cycles the container order |
+| `MetricsPanelTests` | 4 | Pilot runs: the panel renders real samples over a rendered bundle, survives an unreachable machine, re-sampling one machine does not disturb the others, and pressing `s` cycles the container order and announces the next one |
 
 Three of those are worth singling out because they test something a unit test
 cannot. `ProbeProgramTests` puts a fake `docker` executable on `PATH` and lets the
@@ -503,6 +513,12 @@ here:
   deployment on the controller (21 containers, local machine). It has not been
   exercised against a remote `ssh` machine, against a multi-machine `docker-lab`
   or two-site plan, or against a stopped stack.
+* **The Textual version range.** `requirements-tui.txt` allows `textual>=0.85`,
+  and the pilot tests are written against 8.2.8. They use `app.run_test()`,
+  `query_one`, the `DataTable` row API and the `Label`/`Static` `content`
+  property, so a substantially different Textual could need test adjustments even
+  though the panel itself only relies on stable widgets. The tests skip cleanly
+  when Textual is not installed at all.
 
 ## 11. Known limitations
 

@@ -245,8 +245,11 @@ seleccionada. Cada máquina se muestrea contra su propio daemon Docker, en local
 o por su host SSH configurado, y la edad de cada muestra aparece siempre en
 pantalla. `r` refresca, `m` vuelve a muestrear la máquina seleccionada, `s` cicla
 el orden de los contenedores (nombre, CPU de mayor a menor, memoria de mayor a
-menor) y `q` sale. El panel no tiene botones de ciclo de vida, así que puede
-quedarse abierto junto a la consola de operaciones.
+menor) y `q` sale. El criterio activo aparece en el título del panel, el pie
+muestra el ciclo completo y la línea de estado avisa del orden siguiente antes de
+pulsar, para que el efecto de la tecla nunca sea una sorpresa. El panel no tiene
+botones de ciclo de vida, así que puede quedarse abierto junto a la consola de
+operaciones.
 
 ```bash
 venv/bin/python deploy.py metrics

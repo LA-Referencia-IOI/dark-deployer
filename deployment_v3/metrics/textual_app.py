@@ -57,6 +57,8 @@ CONTAINER_SORT_LABELS = {
     "cpu": "CPU, busiest first",
     "memory": "memory, largest first",
 }
+CONTAINER_SORT_SHORT = {"name": "name", "cpu": "CPU", "memory": "memory"}
+CONTAINER_SORT_CYCLE = "Sort: " + " → ".join(CONTAINER_SORT_SHORT[order] for order in CONTAINER_ORDERS)
 EMPTY = "—"
 
 
@@ -147,6 +149,27 @@ def order_containers(containers: tuple[ContainerSample, ...], order: str) -> tup
 def _busiest(value: float | int | None, name: str) -> tuple[bool, float, str]:
     """Sort key with the largest value first and the missing values last."""
     return (value is None, -(value or 0.0), name)
+
+
+def next_container_order(order: str) -> str:
+    """The order the ``s`` binding moves to next; an unknown one restarts the cycle."""
+    if order not in CONTAINER_ORDERS:
+        return CONTAINER_ORDERS[0]
+    return CONTAINER_ORDERS[(CONTAINER_ORDERS.index(order) + 1) % len(CONTAINER_ORDERS)]
+
+
+def container_sort_message(order: str) -> str:
+    """Say what just happened and what ``s`` would do next.
+
+    The cycle is invisible otherwise: the pane title shows the order in force,
+    but nothing told the operator that pressing the key again changes it, or in
+    which direction.
+    """
+    following = next_container_order(order)
+    return (
+        f"Containers by {CONTAINER_SORT_LABELS.get(order, order)}.  "
+        f"Press s again for {CONTAINER_SORT_LABELS.get(following, following)}."
+    )
 
 
 def machine_row(
@@ -304,7 +327,7 @@ def _make_textual_app(project_root: Path):
             ("shift+tab", "focus_previous", "Previous pane"),
             ("r", "refresh", "Refresh"),
             ("m", "resample", "Sample machine"),
-            ("s", "cycle_sort", "Sort containers"),
+            ("s", "cycle_sort", CONTAINER_SORT_CYCLE),
             ("question_mark", "help", "Help"),
             ("q", "quit", "Quit"),
         ]
@@ -556,7 +579,13 @@ def _make_textual_app(project_root: Path):
                 # A sample with warnings may be missing whole columns, so it must
                 # not be indistinguishable from a clean one.
                 summary.append(f"[yellow]{len(warned)} with warnings: {', '.join(warned)}[/yellow]")
-            summary.append("r refresh · m sample machine · s sort · q quit  (read-only)")
+            # The sort hint names the next order, so the effect of pressing s is
+            # never a surprise.
+            summary.append(
+                "r refresh · m sample machine · "
+                f"s sort, next {CONTAINER_SORT_SHORT[next_container_order(self.container_order)]} · "
+                "q quit  (read-only)"
+            )
             self._status("  ·  ".join(summary))
 
         # -- events ------------------------------------------------------
@@ -578,17 +607,17 @@ def _make_textual_app(project_root: Path):
                 self._sample_machines(only=machine_id)
 
         def action_cycle_sort(self) -> None:
-            """Cycle the container order: name, then busiest CPU, then memory."""
-            index = CONTAINER_ORDERS.index(self.container_order)
-            self.container_order = CONTAINER_ORDERS[(index + 1) % len(CONTAINER_ORDERS)]
+            """Move to the next container order and announce the following one."""
+            self.container_order = next_container_order(self.container_order)
             self._render_containers()
+            self._status(container_sort_message(self.container_order))
 
         def action_help(self) -> None:
             self._status(
                 "Read-only: this panel never starts, stops or removes anything.  "
                 "Tab moves between panes · r re-reads services and samples machines · "
                 "m samples the selected machine · s cycles the container order "
-                "(name, CPU, memory) · q quits"
+                f"({CONTAINER_SORT_CYCLE.removeprefix('Sort: ')}) · q quits"
             )
 
     return MetricsApp()
