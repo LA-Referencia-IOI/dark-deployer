@@ -816,6 +816,14 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 127)
         self.assertIn("dark-probe-binary-that-does-not-exist", result.stderr)
 
+    def test_a_stream_stopped_by_a_signal_is_not_reported_as_a_failure(self):
+        """Ctrl-C must not be a race between the child dying and our own signal."""
+        self.assertEqual(LocalExecutor().stream(("sh", "-c", "kill -TERM $$")), 0)
+        self.assertEqual(LocalExecutor().stream(("sh", "-c", "kill -INT $$")), 0)
+
+    def test_other_signal_deaths_stay_visible(self):
+        self.assertEqual(LocalExecutor().stream(("sh", "-c", "kill -KILL $$")), -9)
+
     def test_service_lifecycle_uses_deployed_snapshot_when_working_plan_changes(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
         changed = json.loads(json.dumps(plan.raw))

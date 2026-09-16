@@ -329,7 +329,11 @@ def _make_textual_app(project_root: Path):
                     # reported once the panel is back.
                     try:
                         follow_service_logs(plan, project_root, target, tail=LOG_TAIL)
-                    except Exception as exc:
+                    except BaseException as exc:
+                        # BaseException, not Exception: a Ctrl-C that reaches this
+                        # process instead of the streamed child arrives as
+                        # KeyboardInterrupt, and that must not skip the resume
+                        # either.
                         failure = exc
             except SuspendNotSupported:
                 self._status(
@@ -338,10 +342,14 @@ def _make_textual_app(project_root: Path):
                 )
                 return
             self.action_refresh()
-            if failure is not None:
-                self._status(f"[red]Logs for {service}:[/red] {failure}")
-            else:
+            if failure is None:
                 self._status(f"Streaming {service} finished.  The panel is live again.")
+            elif isinstance(failure, KeyboardInterrupt) or not str(failure):
+                # Stopping a follow is not a failure, whichever process happened
+                # to receive the signal.
+                self._status(f"Streaming {service} interrupted.  The panel is live again.")
+            else:
+                self._status(f"[red]Logs for {service}:[/red] {failure}")
 
         def action_help(self) -> None:
             self._status(

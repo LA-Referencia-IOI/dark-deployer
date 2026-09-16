@@ -142,6 +142,31 @@ class OperationsConsoleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(suspend.entered)
         self.assertIsNone(suspend.escaped)
 
+    async def test_a_ctrl_c_that_reaches_this_process_does_not_escape_either(self):
+        """The signal can arrive here instead of at the child; it must not win.
+
+        The child dying and this process being interrupted race each other, so
+        both orders have to leave the terminal resumable.
+        """
+        plan = self.local_ha()
+        app = operations_tui._make_textual_app(self.prepared_project_root(plan))
+        suspend = RecordingSuspend()
+
+        def interrupted_follow(plan, project_root, target, *, tail):
+            raise KeyboardInterrupt
+
+        with patch.object(operations_tui, "follow_service_logs", interrupted_follow), \
+             patch.object(textual.app.App, "suspend", lambda self: suspend):
+            async with app.run_test() as pilot:
+                await pilot.pause(0.2)
+                await pilot.press("L")
+                await pilot.pause(0.1)
+                status = str(app.query_one("#status").content)
+                self.assertIn("interrupted", status)
+                self.assertIn("live again", status)
+
+        self.assertIsNone(suspend.escaped)
+
     async def test_an_unexpected_stream_error_does_not_escape_either(self):
         plan = self.local_ha()
         app = operations_tui._make_textual_app(self.prepared_project_root(plan))

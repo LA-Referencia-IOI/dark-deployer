@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import signal
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -15,6 +16,22 @@ from .network import p2p_endpoint, p2p_edges
 
 class ExecutionError(RuntimeError):
     """A destination command could not be executed or failed."""
+
+
+def _stream_status(returncode: int) -> int:
+    """Normalise the exit status of a command attached to this terminal.
+
+    A child stopped by ``SIGINT`` or ``SIGTERM`` was asked to stop — by a
+    Ctrl-C, a ``kill``, or the terminal going away — and for a long-lived stream
+    that is how it ends, not a failure.  Without this, stopping a follow is a
+    race: whichever arrives first, the child dying or our own
+    ``KeyboardInterrupt``, decides whether the command reported success.  Any
+    other status, other signals included, stays an error so that a real crash
+    (an out-of-memory ``SIGKILL``, for instance) is still visible.
+    """
+    if returncode in (-signal.SIGINT, -signal.SIGTERM):
+        return 0
+    return returncode
 
 
 @dataclass(frozen=True)
@@ -50,7 +67,7 @@ class LocalExecutor(Executor):
 
     def stream(self, argv: Sequence[str]) -> int:
         try:
-            return subprocess.run(list(argv)).returncode
+            return _stream_status(subprocess.run(list(argv)).returncode)
         except KeyboardInterrupt:
             return 0
 
@@ -76,7 +93,7 @@ class SshExecutor(Executor):
             command.extend(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
         command.extend((f"{ssh.user}@{self.machine.management_address}", shlex.join(argv)))
         try:
-            return subprocess.run(command).returncode
+            return _stream_status(subprocess.run(command).returncode)
         except KeyboardInterrupt:
             return 0
 
