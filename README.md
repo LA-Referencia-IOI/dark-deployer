@@ -481,6 +481,7 @@ venv/bin/python deploy.py services --deployment dark-operator-local-ha --json
 | [Operations manual](OPERATIONS-MANUAL.md) | Installation, configuration, verification, recovery, and troubleshooting |
 | [Deployer reference](docs/deployer.md) | Contracts, commands, security, rendering, and execution |
 | [Docker metrics panel](docs/metrics-panel.md) | Read-only per-machine Docker metrics: decisions, contract, verification |
+| [Prometheus metrics proposal](docs/metrics-prometheus-proposal.md) | How monitoring works today, and four ways to expose it to Prometheus |
 | [Operator inventory](docs/deployment-v3-operator-inventory-proposal.md) | Compact format and catalogue design |
 | [Inventory and artifact flow](docs/deployment-v3-inventory-and-artifact-flow.md) | Resolution, bundles, secrets, and blockchain artifacts |
 | [Service placement](docs/deployment-v3-service-placement.md) | Groups, connections, endpoints, and placement constraints |
