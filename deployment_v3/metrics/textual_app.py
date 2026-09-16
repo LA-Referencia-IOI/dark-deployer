@@ -35,6 +35,7 @@ from ..console import ConsoleSnapshot, snapshot
 from ..runner import ApplyError, managed_plan
 from .collector import (
     PROBE_TIMEOUT_SECONDS,
+    WARNING_PAYLOAD_SEPARATOR,
     ContainerRate,
     MachineMetrics,
     container_rates,
@@ -178,6 +179,28 @@ def container_rows(
     return tuple(rows)
 
 
+def summarise_warnings(warnings: tuple[str, ...], *, limit: int = 5) -> tuple[str, ...]:
+    """Collapse repeated warnings so one noisy section cannot hide the rest.
+
+    A single unexpanded separator produces one identical warning per row, which
+    would otherwise fill the pane and push the service list out of view.  The
+    first warning of each kind keeps its full text, raw row included, so an
+    unfamiliar shape is still diagnosable.
+    """
+    grouped: dict[str, list[str]] = {}
+    for warning in warnings:
+        head = warning.split(WARNING_PAYLOAD_SEPARATOR, 1)[0]
+        grouped.setdefault(head, []).append(warning)
+    summary: list[str] = []
+    for head, items in grouped.items():
+        if len(summary) == limit:
+            break
+        summary.append(items[0] if len(items) == 1 else f"{head} (x{len(items)})")
+    if len(grouped) > limit:
+        summary.append(f"... and {len(grouped) - limit} more kind(s) of warning")
+    return tuple(summary)
+
+
 def machine_detail(
     metrics: MachineMetrics | None,
     *,
@@ -204,7 +227,7 @@ def machine_detail(
         lines.append("CPU and memory are shares of this daemon, not of the physical host.")
         if metrics.warnings:
             lines.append(f"[yellow]Warnings:[/yellow] {len(metrics.warnings)}")
-            lines.extend(f"  {warning}" for warning in metrics.warnings[:3])
+            lines.extend(f"  {warning}" for warning in summarise_warnings(metrics.warnings))
     lines.append("")
     lines.append("SERVICES")
     if not services:
@@ -476,6 +499,7 @@ def _make_textual_app(project_root: Path):
                 self._status("No managed deployments found.  q quits.")
                 return
             unhealthy = [m.id for m in self.plan.machines if machine_state(self.stamps[m.id].metrics if m.id in self.stamps else None, sampling=m.id in self.sampling) == "unreachable"]
+            warned = [m.id for m in self.plan.machines if m.id in self.stamps and self.stamps[m.id].metrics.warnings]
             services_age = "not read yet" if self.snapshot_age is None else f"read {format_age(time.monotonic() - self.snapshot_age)} ago"
             summary = [
                 str(self.deployment_id or "-"),
@@ -487,6 +511,10 @@ def _make_textual_app(project_root: Path):
                 summary.append(f"sampling {len(self.sampling)}")
             if unhealthy:
                 summary.append(f"[red]{len(unhealthy)} unreachable: {', '.join(unhealthy)}[/red]")
+            if warned:
+                # A sample with warnings may be missing whole columns, so it must
+                # not be indistinguishable from a clean one.
+                summary.append(f"[yellow]{len(warned)} with warnings: {', '.join(warned)}[/yellow]")
             summary.append("r refresh · m sample machine · q quit  (read-only)")
             self._status("  ·  ".join(summary))
 

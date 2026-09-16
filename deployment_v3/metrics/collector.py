@@ -25,11 +25,19 @@ Compatibility
 
 Every section asks Docker for *named template fields* rather than the JSON keys
 of ``docker --format '{{json .}}'``.  That is the same surface the deployment
-runner already depends on (``docker ps --format`` with tab separators) and it
-has been stable since Docker 1.13; the optional disk section additionally needs
-``docker system df --format``, which arrived with Docker 20.10.  The templates
-are built from the field tuples below, so the contract lives in exactly one
-place.
+runner already depends on (``docker ps --format``) and it has been stable since
+Docker 1.13; the optional disk section additionally needs ``docker system df
+--format``, which arrived with Docker 20.10.  The templates are built from the
+field tuples below, so the contract lives in exactly one place.
+
+The field separator is a **literal tab**, never the two characters ``\t``.
+Docker's commands do not agree on whether they expand that escape in a
+``--format`` template: ``ps`` and ``stats`` do, ``info`` and ``inspect`` do not,
+so a template written with ``\t`` yields a single unusable field per row on those
+two sections.  That is not hypothetical — it is what the first real run of the
+panel produced on Docker 29.8.0 / API 1.56, as one daemon warning plus one
+inspect warning per container, with the machine looking active while every
+denominator was blank.
 
 A changing contract must never turn into a wrong number, so three rules apply:
 
@@ -75,6 +83,13 @@ CRITICAL_SECTIONS = ("daemon", "containers")
 READ_ONLY_DOCKER_SUBCOMMANDS = frozenset({"info", "version", "ps", "stats", "inspect", "system"})
 # Failures that are expected and carry no information for the operator.
 BENIGN_SECTION_FAILURES = ("No containers found",)
+# The probe writes with a literal tab.  Docker's commands disagree on whether
+# they expand the ``\t`` escape in a ``--format`` template — ``ps`` and ``stats``
+# do, ``info`` and ``inspect`` do not — so the separator must not depend on
+# escape processing at all.
+_FIELD_SEPARATOR = "\t"
+# Separates a warning's grouping head from the raw row it carries as evidence.
+WARNING_PAYLOAD_SEPARATOR = " | "
 
 DAEMON_FIELDS = ("NCPU", "MemTotal", "ContainersRunning", "ServerVersion", "Driver")
 VERSION_FIELDS = ("Server.APIVersion",)
@@ -85,8 +100,16 @@ DISK_FIELDS = ("Type", "Size", "Reclaimable", "TotalCount")
 
 
 def _template(fields: Iterable[str]) -> str:
-    """Build a tab separated ``--format`` template from named fields."""
-    return r"\t".join("{{." + field + "}}" for field in fields)
+    """Build a tab separated ``--format`` template from named fields.
+
+    The separator is a *literal* tab, not the two characters ``\\t``.  Docker's
+    commands do not agree on whether they expand that escape: ``ps`` and
+    ``stats`` do, ``info`` and ``inspect`` do not, so a template written with
+    ``\\t`` collapses to a single unusable field on those sections (observed on
+    Docker 29.8.0 / API 1.56).  A literal tab is copied verbatim by every one of
+    them, because it needs no escape processing at all.
+    """
+    return _FIELD_SEPARATOR.join("{{." + field + "}}" for field in fields)
 
 
 DAEMON_FORMAT = _template(DAEMON_FIELDS)
@@ -278,6 +301,22 @@ def _summary(text: str, *, limit: int = 400) -> str:
     return collapsed[: limit - 1] + "…"
 
 
+def row_warning(kind: str, line: str, expected: int) -> str:
+    """Explain a row the parser refused, with the reason when it is knowable.
+
+    The shape is ``<head> | <raw line>``: the head is what the views group by,
+    and the raw line stays attached as evidence for a shape nobody has seen
+    before.  Two reasons have actually happened — a row with the wrong number of
+    fields, and a row where Docker never expanded the separator — so both are
+    named instead of leaving the operator to guess.
+    """
+    parts = line.split(_FIELD_SEPARATOR)
+    head = f"{kind} row: {len(parts)} field(s), expected {expected}"
+    if len(parts) == 1 and r"\t" in line:
+        head += " — Docker left the tab separator unexpanded"
+    return f"{head}{WARNING_PAYLOAD_SEPARATOR}{_summary(line, limit=120)}"
+
+
 def _unreachable(machine: Machine, error: str) -> MachineMetrics:
     return MachineMetrics(machine_id=str(machine.id), execution=str(machine.execution), reachable=False, error=error)
 
@@ -330,14 +369,20 @@ def probe_script(deployment_id: str, *, include_disk: bool = False) -> str:
 
 
 def _collect_sections(stdout: str) -> tuple[dict[str, list[str]], dict[str, str], list[str]]:
+    """Split the probe output into sections, keeping every field intact.
+
+    Row lines are *not* stripped: an empty leading field is the difference
+    between five columns and four, and stripping it would shift every value left
+    instead of reporting the row as unparsable.  Only blank lines are skipped.
+    """
     sections: dict[str, list[str]] = {}
     errors: dict[str, str] = {}
     warnings: list[str] = []
     current: str | None = None
     for raw_line in stdout.splitlines():
-        line = raw_line.strip()
-        if not line:
+        if not raw_line.strip():
             continue
+        line = raw_line.rstrip("\r")
         if line.startswith(MARKER + " "):
             current = line[len(MARKER) + 1:].strip()
             sections.setdefault(current, [])
@@ -347,7 +392,7 @@ def _collect_sections(stdout: str) -> tuple[dict[str, list[str]], dict[str, str]
                 errors[current] = line[len(ERROR_TAG) + 1:].strip()
             continue
         if current is None:
-            warnings.append(f"output before any section marker: {line[:60]}")
+            warnings.append(f"output before any section marker: {_summary(line, limit=60)}")
             continue
         sections[current].append(line)
     return sections, errors, warnings
@@ -385,26 +430,35 @@ def parse_probe_output(
 
     cores = memory_total = containers_running = None
     server_version = driver = None
+    daemon_rows = 0
     for line in sections.get("daemon", ()):
-        parts = line.split("\t")
+        parts = line.split(_FIELD_SEPARATOR)
         if len(parts) != len(DAEMON_FIELDS):
-            warnings.append(f"unexpected daemon row: {line[:60]}")
+            warnings.append(row_warning("daemon", line, len(DAEMON_FIELDS)))
             continue
+        daemon_rows += 1
         cores = _parse_int(parts[0])
         memory_total = _parse_size(parts[1])
         containers_running = _parse_int(parts[2])
         server_version = _optional_text(parts[3])
         driver = _optional_text(parts[4])
+    if daemon_rows:
+        # A reachable daemon that answers without these numbers would otherwise
+        # leave the CPU and memory columns silently blank.
+        if cores is None:
+            warnings.append("the daemon reported no NCPU value, so CPU shares cannot be computed")
+        if memory_total is None:
+            warnings.append("the daemon reported no MemTotal value, so memory shares cannot be computed")
 
     api_version = None
     for line in sections.get("version", ()):
-        api_version = _optional_text(line.split("\t")[0])
+        api_version = _optional_text(line.split(_FIELD_SEPARATOR)[0])
 
     observed: dict[str, dict[str, Any]] = {}
     for line in sections.get("containers", ()):
-        parts = line.split("\t")
+        parts = line.split(_FIELD_SEPARATOR)
         if len(parts) != len(CONTAINER_FIELDS):
-            warnings.append(f"unexpected container row: {line[:60]}")
+            warnings.append(row_warning("container", line, len(CONTAINER_FIELDS)))
             continue
         container_id, name, state, status, service_id = parts
         observed[_normalize_name(name)] = {
@@ -415,9 +469,9 @@ def parse_probe_output(
         }
 
     for line in sections.get("stats", ()):
-        parts = line.split("\t")
+        parts = line.split(_FIELD_SEPARATOR)
         if len(parts) != len(STATS_FIELDS):
-            warnings.append(f"unexpected stats row: {line[:60]}")
+            warnings.append(row_warning("stats", line, len(STATS_FIELDS)))
             continue
         container_id, name, cpu, memory, memory_percent, network, block, pids = parts
         key = _normalize_name(name)
@@ -438,9 +492,9 @@ def parse_probe_output(
         })
 
     for line in sections.get("inspect", ()):
-        parts = line.split("\t")
+        parts = line.split(_FIELD_SEPARATOR)
         if len(parts) != len(INSPECT_FIELDS):
-            warnings.append(f"unexpected inspect row: {line[:60]}")
+            warnings.append(row_warning("inspect", line, len(INSPECT_FIELDS)))
             continue
         _, name, restarts, _, started_at = parts
         key = _normalize_name(name)
@@ -455,9 +509,9 @@ def parse_probe_output(
 
     disk: list[DiskFootprint] = []
     for line in sections.get("disk", ()):
-        parts = line.split("\t")
+        parts = line.split(_FIELD_SEPARATOR)
         if len(parts) != len(DISK_FIELDS):
-            warnings.append(f"unexpected disk row: {line[:60]}")
+            warnings.append(row_warning("disk", line, len(DISK_FIELDS)))
             continue
         kind, size, reclaimable, count = parts
         disk.append(DiskFootprint(kind, _parse_size(_first_token(size)), _parse_size(_first_token(reclaimable)), _parse_int(count)))

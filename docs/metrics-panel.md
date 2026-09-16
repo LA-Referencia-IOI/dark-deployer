@@ -13,9 +13,11 @@ layer is built, how it behaves when things fail, how it is tested, and what is
 still unproven. Date: 2026-09-16, on `main`, on top of `1f22db8` ("Add
 interactive deployment operations console").
 
-Tree state: this work is contained in the commit that adds this document, on top
-of `1f22db8`. The working tree at the time of writing also contained unrelated
-modifications that are deliberately not part of it: `local-infra/lima-status.sh`,
+Tree state: this work sits on `main` on top of `1f22db8` ("Add interactive
+deployment operations console"), in the commit that adds the panel and this
+document plus the follow-up that fixes the separator defect found by the first
+real run. The working tree also contained unrelated modifications that are
+deliberately not part of it: `local-infra/lima-status.sh`,
 `local-infra/lima-two-site-down.sh`,
 `examples/operator-inventory/aws-active-six-host.md`, the untracked
 `infrastructure/` directory and `tests/test_aws_cloudformation_profile.py`.
@@ -30,11 +32,15 @@ below is marked **VERIFIED** (reproducible evidence: a test, a command or a file
 in the repository) or **INFERRED** (my reading, without direct proof). Where the
 evidence only supports part of a claim, that is said explicitly.
 
-The single most important gap: no real Docker daemon was available in the
-environment where this was written. Field names were taken from the Docker CLI
-documentation, not from a live run, so the first executions against real hosts
-should confirm them before the numbers are trusted. This is stated again, with
-its consequences, in [What is not verified](#10-what-is-not-verified).
+The single most important caveat: no real Docker daemon was available in the
+environment where this was written, so field names came from the Docker CLI
+documentation rather than from a live run. That is no longer the whole story —
+the first real execution against a running deployment happened on the same day,
+on Docker 29.8.0 / API 1.56, and it immediately found a genuine defect in the
+separator between fields, which is described in
+[what a real run found](#what-a-real-run-found) and has been fixed. What remains
+to be confirmed from a live run is listed in
+[What is not verified](#10-what-is-not-verified).
 
 ## 1. Why a separate panel
 
@@ -122,12 +128,12 @@ named fields instead.
 
 | File | Lines | Role |
 | --- | --- | --- |
-| `deployment_v3/metrics/collector.py` | 592 | Read-only probe: command construction, execution, parsing. Imports no terminal library. |
-| `deployment_v3/metrics/textual_app.py` | 523 | The panel, plus the pure helpers it renders from. Imports Textual lazily. |
+| `deployment_v3/metrics/collector.py` | 646 | Read-only probe: command construction, execution, parsing. Imports no terminal library. |
+| `deployment_v3/metrics/textual_app.py` | 551 | The panel, plus the pure helpers it renders from. Imports Textual lazily. |
 | `deployment_v3/metrics/__init__.py` | 42 | Re-exports of the collector's public surface. |
 | `deployment_v3/console.py` | 55 | Toolkit-free deployment/service state shared by both consoles. |
-| `tests/test_metrics.py` | 528 | 44 tests: contract, parser, program, rates. |
-| `tests/test_metrics_view.py` | 281 | 24 tests: view helpers and pilot runs. |
+| `tests/test_metrics.py` | 562 | 47 tests: contract, parser, program, rates. |
+| `tests/test_metrics_view.py` | 305 | 27 tests: view helpers, warning summary, pilot runs. |
 
 Modified, in support of the above: `deployment_v3/cli.py` (import, `metrics`
 subparser, `_run_metrics_console`, dispatch branch), `deployment_v3/executor.py`
@@ -235,6 +241,8 @@ those guards a `recreate` would draw a spike that looks like a real incident
 | `daemon` or `containers` section fails | Sample discarded, machine `unreachable` |
 | `stats`, `inspect`, `version` or `disk` section fails | Sample kept, section named in `warnings` |
 | A row with an unexpected field count | Row dropped, warning recorded; the rest of the section still parses |
+| A row whose separator was never expanded | Same, and the warning names the cause: `Docker left the tab separator unexpanded` |
+| The daemon answers without `NCPU` or `MemTotal` | The row is kept and the missing denominator is named, instead of leaving the CPU and memory columns silently blank |
 | `docker stats` returning "No containers found" | Not a warning: it is the normal answer for a deployment with nothing running |
 | Empty output | `unreachable`, never an empty success |
 | `NetIO`/`BlockIO` impossible to rate | Rate `None`, value still shown as cumulative-derived elsewhere |
@@ -244,8 +252,16 @@ values and its age on screen** instead of being blanked or zeroed, which is the
 whole point of an operations panel during an incident; `unreachable` is therefore
 a first-class state, not an error dialog. The distinction between critical and
 optional sections is what lets a machine remain useful when only a convenience
-section fails. And "docker CLI not found" is answered by the probe rather than by
+section fails. And "docker CLI missing" is answered by the probe rather than by
 Python, because it is a property of the destination host, not of the controller.
+
+Row lines are deliberately **not** stripped before parsing. Stripping would
+remove an empty leading field, which is the difference between five columns and
+four, and would shift every value one position left instead of reporting the row
+as unparsable — the exact silent corruption this design is built to avoid. Only
+blank lines are skipped. This was found while writing a test for the missing
+denominator case, and it is pinned by a test that parses a daemon row with an
+empty `NCPU` field.
 
 **One bug found here.** `LocalExecutor.run` caught `subprocess.TimeoutExpired` but
 not `OSError`, so a host without the `docker` binary raised `FileNotFoundError`
@@ -312,6 +328,49 @@ the same surface the deployment runner already uses for `docker ps`, and it has
 been stable for far longer than any particular JSON key capitalisation. It also
 means an unavailable field fails visibly instead of quietly yielding a default.
 
+**A literal tab, never the `\t` escape.** The second half of the same lesson, and
+the one that a live run taught us. Docker's commands do not agree on whether they
+expand `\t` inside a `--format` template: `ps` and `stats` do, `info` and
+`inspect` do not. The separator is therefore written as a real tab character,
+which needs no escape processing by anybody and is copied verbatim by all of them.
+
+### What a real run found
+
+The first execution against a running deployment — 2026-09-16, Docker 29.8.0,
+API 1.56, the `dark-operator-one-server-aws-sandbox` deployment on the controller,
+21 containers — exposed the problem above in full view.
+
+The panel reported **22 warnings**: one for the daemon row and one per container
+for the `inspect` row, all of them reading *"1 field(s), expected 5"*. The machine
+showed `active` with 21/21 containers and 13.2 GiB of memory, but its CPU column,
+its denominators and the restart total were empty, because the two sections that
+produce them had been rejected wholesale. The service list was pushed out of the
+detail pane by the wall of identical warnings.
+
+The cause was not the field names — `ps`, `stats` and `version` parsed perfectly,
+which validated the label filter, the five container fields, the eight stats
+fields, the API-version field and the join by name all at once. It was the
+separator: those two sections returned the literal characters `\t` instead of a
+tab, so each row was a single field. A cross-check inside this repository settled
+it: `runner.py` passes the very same `\t` escape to `docker ps`, and
+`deploy.py services` has always worked against these hosts, which is only possible
+if `ps` expands it.
+
+Three changes came out of the run. The separator became a literal tab. The
+warnings became actionable — they now state the field count, the expected count,
+and the cause when it is recognisable (`Docker left the tab separator
+unexpanded`), while still carrying the raw row as evidence. And repeated warnings
+are grouped by kind, so twenty-one identical lines collapse into one, and a single
+noisy section can no longer hide the service list. The status line also names
+which machines have warnings, because a sample that is missing whole columns must
+not look like a clean one.
+
+One question the run could not settle and the fix will answer on the next
+execution: whether `{{.NCPU}}` itself returns a value on that Docker version. If
+it does not, the daemon row now survives and the panel says so explicitly
+(*"the daemon reported no NCPU value"*) instead of quietly leaving the CPU column
+blank.
+
 **The contract lives in exactly one place.** The templates are built by
 `_template()` from the field tuples `DAEMON_FIELDS`, `VERSION_FIELDS`,
 `CONTAINER_FIELDS`, `STATS_FIELDS`, `INSPECT_FIELDS` and `DISK_FIELDS`, and the
@@ -364,16 +423,16 @@ venv/bin/python -m pip install -r requirements-tui.txt   # Textual, optional
 python -m unittest discover -s tests -p "test_*.py"      # 150 tests
 ```
 
-Result at the time of writing: **150 tests, all passing, `ruff` clean** on the
+Result at the time of writing: **156 tests, all passing, `ruff` clean** on the
 changed and added files. 82 of those tests live in the pre-existing files (one of
-them, in `test_deployment_v3.py`, is new and belongs to this work); 68 are new and
+them, in `test_deployment_v3.py`, is new and belongs to this work); 74 are new and
 split as follows.
 
 | Class | Tests | What it establishes |
 | --- | --- | --- |
 | `ProbeScriptTests` | 6 | Only read-only subcommands; the label filter; `disk` off by default; a hostile deployment id stays quoted and the program stays valid shell |
 | `ParseProbeOutputTests` | 11 | Denominators, per-container metrics, stopped containers keep their row without numbers, aggregates, out-of-deployment rows ignored, malformed rows warn, unit parsing, absent fields |
-| `ContractTests` | 5 | The field tuples and template shape are pinned; an unexpected field count is dropped, not shifted; the API version travels; the version section is never critical |
+| `ContractTests` | 8 | The field tuples and template shape are pinned; no template relies on Docker expanding an escape; an unexpected field count is dropped, not shifted; an unexpanded separator is named; a daemon without denominators says so; the API version travels; the version section is never critical |
 | `FailureSemanticsTests` | 6 | Unreachable transport, missing Docker, optional vs critical sections, benign "No containers found", empty output |
 | `SampleMachineTests` | 3 | Executor timeout becomes an unreachable sample; the plan's deployment id reaches the script; resolution failure is reported, not raised |
 | `ProbeProgramTests` | 3 | The real shell program runs: sections parse, a missing Docker CLI is explained, a foreign deployment is not queried |
@@ -386,6 +445,7 @@ split as follows.
 | `MachineRowTests` | 4 | Row contents, blanked numbers for unreachable machines, explicit `sampling`, every shape matching the table |
 | `ContainerRowTests` | 4 | Stopped containers, rates attached by name, no sample means no rows, no invented percentage |
 | `MachineDetailTests` | 4 | Unreachable machines explain themselves, denominators are named, a shared daemon is disclosed, a machine without services says so |
+| `WarningSummaryTests` | 3 | Repeated warnings collapse to one line, a single warning keeps its raw evidence, many kinds are capped |
 | `PanelIsReadOnlyTests` | 1 | The view imports no mutating API |
 | `MetricsPanelTests` | 3 | Pilot runs: the panel renders real samples over a rendered bundle, survives an unreachable machine, and re-sampling one machine does not disturb the others |
 
@@ -405,12 +465,18 @@ application contains no `Button` is the read-only guarantee expressed as code.
 Stated plainly, because the difference between "tested" and "trusted" matters
 here:
 
-* **Live field names.** No Docker daemon was reachable from the environment where
-  this was written. The template fields come from the CLI documentation and from
-  the templates this repository already uses. **The first run against a real host
-  should confirm them**; if a name is wrong, the section that uses it fails with a
-  warning rather than printing a wrong number, which is the behaviour the design
-  chose on purpose.
+* **Live field names, partly confirmed.** The run of 2026-09-16 confirmed against
+  a real daemon that `ps` resolves all five container fields including the service
+  label, that `stats` resolves all eight metric fields, that `version` resolves
+  `Server.APIVersion`, and that the label filter and the join by container name
+  work on a real 21-container deployment. Still to confirm, on the next run after
+  the separator fix, are the `info` fields (`NCPU`, `MemTotal`, `ContainersRunning`,
+  `ServerVersion`, `Driver`) and the `inspect` fields (`Id`, `Name`, `RestartCount`,
+  `State.Status`, `State.StartedAt`), which the breakage prevented from ever being
+  reached. If a name is wrong, the section that uses it fails with a warning rather
+  than printing a wrong number, which is the behaviour the design chose on purpose.
+* **`docker system df`.** The disk section is off by default and was not exercised
+  at all, because the run used the default configuration.
 * **`docker-lab` daemon sharing.** `daemon_key()` assumes that every `local` and
   `docker-lab` machine is sampled through the controller's single daemon, so
   several inventory machines could render as identical rows in a lab plan.
@@ -422,9 +488,10 @@ here:
   container reflect the Lima virtual machine rather than the Mac is **INFERRED**;
   the panel does not read them anyway, but the same question applies to
   `MemTotal` and it is why the detail pane states which denominator it is using.
-* **Real deployments.** The panel was never opened against `local-ha` or any
-  other running deployment. Everything verified here is verified against fakes,
-  bundles and unit-level execution.
+* **Other real deployments.** The panel has been opened against one running
+  deployment on the controller (21 containers, local machine). It has not been
+  exercised against a remote `ssh` machine, against a multi-machine `docker-lab`
+  or two-site plan, or against a stopped stack.
 
 ## 11. Known limitations
 
@@ -502,7 +569,10 @@ In the order I would tackle them:
 ## Appendix A: the generated probe script
 
 Output of `probe_script("dark-operator-local-ha")` as implemented, with the
-optional `disk` section omitted:
+optional `disk` section omitted. The separator between fields is a **literal tab
+character**, so if your viewer expands tabs the listing will look as though the
+fields are spaced rather than separated; the five lines that begin with `capture`
+are the exact `docker` invocations.
 
 ```sh
 capture() {
@@ -520,11 +590,11 @@ if ! command -v docker >/dev/null 2>&1; then
   printf '%s\n' 'docker CLI not found on this machine'
   exit 0
 fi
-capture daemon docker info --format '{{.NCPU}}\t{{.MemTotal}}\t{{.ContainersRunning}}\t{{.ServerVersion}}\t{{.Driver}}'
+capture daemon docker info --format '{{.NCPU}}	{{.MemTotal}}	{{.ContainersRunning}}	{{.ServerVersion}}	{{.Driver}}'
 capture version docker version --format '{{.Server.APIVersion}}'
-capture containers docker ps -a --filter label=org.dark.deployment.id=dark-operator-local-ha --format '{{.ID}}\t{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Label "org.dark.service.id"}}'
-capture stats docker stats --no-stream --format '{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.PIDs}}'
-capture inspect sh -c 'ids=$(docker ps -aq --filter label=org.dark.deployment.id=dark-operator-local-ha); if [ -n "$ids" ]; then docker inspect --format '"'"'{{.Id}}\t{{.Name}}\t{{.RestartCount}}\t{{.State.Status}}\t{{.State.StartedAt}}'"'"' $ids; fi'
+capture containers docker ps -a --filter label=org.dark.deployment.id=dark-operator-local-ha --format '{{.ID}}	{{.Names}}	{{.State}}	{{.Status}}	{{.Label "org.dark.service.id"}}'
+capture stats docker stats --no-stream --format '{{.ID}}	{{.Name}}	{{.CPUPerc}}	{{.MemUsage}}	{{.MemPerc}}	{{.NetIO}}	{{.BlockIO}}	{{.PIDs}}'
+capture inspect sh -c 'ids=$(docker ps -aq --filter label=org.dark.deployment.id=dark-operator-local-ha); if [ -n "$ids" ]; then docker inspect --format '"'"'{{.Id}}	{{.Name}}	{{.RestartCount}}	{{.State.Status}}	{{.State.StartedAt}}'"'"' $ids; fi'
 ```
 
 The `'"'"'` sequences are `shlex.quote` escaping the format string that `inspect`
@@ -550,4 +620,15 @@ python -c "import deployment_v3.cli, deployment_v3.metrics.textual_app"
 
 # The generated program is valid shell even with a hostile deployment id
 python -c "from deployment_v3.metrics import probe_script; print(probe_script('x; touch /tmp/pwned'))" | sh -n
+```
+
+To see what a machine's rows actually contain when a section is rejected, ask
+Docker directly and show the escapes. This is how the separator defect was
+diagnosed from the field, and it is the first thing to run if a warning appears:
+
+```bash
+# ^I marks a real tab; the two characters \t mean the escape was not expanded
+docker info --format '{{.NCPU}}\t{{.MemTotal}}\t{{.ContainersRunning}}\t{{.ServerVersion}}\t{{.Driver}}' | cat -A
+docker inspect --format '{{.Id}}\t{{.Name}}\t{{.RestartCount}}\t{{.State.Status}}\t{{.State.StartedAt}}' \
+  $(docker ps -aq --filter label=org.dark.deployment.id=DEPLOYMENT) | cat -A | head -3
 ```

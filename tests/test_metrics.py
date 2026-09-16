@@ -241,15 +241,49 @@ class ContractTests(unittest.TestCase):
     def test_formats_are_built_from_the_field_tuples(self):
         self.assertEqual(
             collector_module.DAEMON_FORMAT,
-            r"{{.NCPU}}\t{{.MemTotal}}\t{{.ContainersRunning}}\t{{.ServerVersion}}\t{{.Driver}}",
+            "{{.NCPU}}\t{{.MemTotal}}\t{{.ContainersRunning}}\t{{.ServerVersion}}\t{{.Driver}}",
         )
         for fields, template in (
             (collector_module.STATS_FIELDS, collector_module.STATS_FORMAT),
             (collector_module.INSPECT_FIELDS, collector_module.INSPECT_FORMAT),
             (collector_module.CONTAINER_FIELDS, collector_module.CONTAINER_FORMAT),
         ):
-            self.assertEqual(template.count(r"\t"), len(fields) - 1)
+            self.assertEqual(template.count("\t"), len(fields) - 1)
             self.assertEqual(template.count("{{."), len(fields))
+
+    def test_no_template_relies_on_docker_expanding_an_escape(self):
+        """docker info and docker inspect do not expand ``\\t``; ps and stats do.
+
+        The first real run of the panel lost the whole daemon row and every
+        inspect row to this, so the separator must be a real tab.
+        """
+        for template in (
+            collector_module.DAEMON_FORMAT, collector_module.VERSION_FORMAT,
+            collector_module.CONTAINER_FORMAT, collector_module.STATS_FORMAT,
+            collector_module.INSPECT_FORMAT, collector_module.DISK_FORMAT,
+        ):
+            self.assertNotIn(r"\t", template)
+        for template in (
+            collector_module.DAEMON_FORMAT, collector_module.CONTAINER_FORMAT,
+            collector_module.STATS_FORMAT, collector_module.INSPECT_FORMAT, collector_module.DISK_FORMAT,
+        ):
+            self.assertIn("\t", template)
+
+    def test_an_unexpanded_separator_is_named_in_the_warning(self):
+        """The shape the real run produced must explain itself."""
+        row = r"{{.NCPU}}\t{{.MemTotal}}\t{{.ContainersRunning}}\t{{.ServerVersion}}\t{{.Driver}}"
+        metrics = sample(daemon=(row,), containers=(CONTAINER_ROWS[0],))
+        self.assertEqual(metrics.warnings, (collector_module.row_warning("daemon", row, 5),))
+        self.assertIn("tab separator unexpanded", metrics.warnings[0])
+        self.assertIn("1 field(s), expected 5", metrics.warnings[0])
+        self.assertIsNone(metrics.cores)
+        self.assertIsNone(metrics.memory_total_bytes)
+
+    def test_a_daemon_without_denominators_says_so(self):
+        metrics = sample(daemon=("\t16750372454\t7\t29.8.0\toverlayfs",), containers=(CONTAINER_ROWS[0],))
+        self.assertIsNone(metrics.cores)
+        self.assertTrue(any("no NCPU" in warning for warning in metrics.warnings))
+        self.assertFalse(any("no MemTotal" in warning for warning in metrics.warnings))
 
     def test_a_row_with_an_unexpected_field_count_is_reported_not_shifted(self):
         metrics = sample(

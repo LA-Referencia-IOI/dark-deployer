@@ -205,6 +205,30 @@ class MachineDetailTests(unittest.TestCase):
         self.assertIn("No managed service is placed on this machine.", text)
 
 
+class WarningSummaryTests(unittest.TestCase):
+    """One noisy section must not push the service list out of the pane."""
+
+    def test_repeated_warnings_collapse_to_one_line(self):
+        warnings = tuple(
+            f"inspect row: 1 field(s), expected 5 — Docker left the tab separator unexpanded | {index}"
+            for index in range(21)
+        ) + ("daemon row: 1 field(s), expected 5 — Docker left the tab separator unexpanded | row",)
+        summary = view.summarise_warnings(warnings)
+        self.assertEqual(len(summary), 2)
+        self.assertEqual(summary[0], "inspect row: 1 field(s), expected 5 — Docker left the tab separator unexpanded (x21)")
+        self.assertIn("daemon row", summary[1])
+
+    def test_a_single_warning_keeps_its_raw_evidence(self):
+        warning = "container row: 4 field(s), expected 5 | 1a2b\tname\trunning"
+        self.assertEqual(view.summarise_warnings((warning,)), (warning,))
+
+    def test_many_kinds_are_capped(self):
+        warnings = tuple(f"kind{index} row: 1 field(s), expected 5 | line" for index in range(9))
+        summary = view.summarise_warnings(warnings, limit=5)
+        self.assertEqual(len(summary), 6)
+        self.assertIn("more kind(s) of warning", summary[-1])
+
+
 class PanelIsReadOnlyTests(unittest.TestCase):
     def test_the_view_never_imports_a_mutating_api(self):
         """The panel must stay observation-only, enforced on the module itself."""
