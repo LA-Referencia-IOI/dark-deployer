@@ -60,9 +60,12 @@ deployment or a second one on the same host is invisible or ambiguous. And they
 `deploy.py metrics` opens a read-only terminal panel over one managed deployment
 (**VERIFIED**, see [`metrics-panel.md`](metrics-panel.md)). Its collector is the
 piece that matters here. It samples each machine of a deployment with **one
-`sh -lc` program per machine**, executed locally or through the deployment's own
-SSH transport, and parses six sections: daemon denominators, docker version,
-containers, stats, inspect, and optionally `docker system df`.
+non-login `sh -c` program per machine**, executed locally or through the
+deployment's own SSH transport, and parses six sections: daemon denominators,
+docker version, containers, stats, inspect, and optionally `docker system df`.
+The shell is deliberately non-login so that profile files cannot rewrite `PATH`
+or print anything before the first probe marker; the consequence for a supervised
+run is in section 6.
 
 Four properties of that collector are the reason this document exists:
 
@@ -338,6 +341,17 @@ Nothing in this repository supervises a long-running process today — the legac
 monitors are started by hand, and no service unit exists (**VERIFIED**). Option A
 or C means adding that (launchd or systemd on the deployer's host, or cron for D),
 with the restart, logging and upgrade consequences that follow.
+
+Whatever supervises it must also provide the environment the probe expects. The
+probe runs in a deliberately **non-login** shell, so it inherits `PATH` as given
+rather than rebuilding it from profile files; that is what stops a profile from
+selecting a different Docker CLI or printing something before the first marker
+(**VERIFIED**: `sample_machine` runs `("sh", "-c", script)`). A terminal session
+already has a usable `PATH`; a launchd agent or a cron job does not, and the
+failure it produces is a clean per-machine *"docker CLI not found"* rather than a
+wrong number — visible, but only if someone looks. Setting `PATH` explicitly in
+the service definition is therefore part of the deployment of any option in this
+document, not an afterthought.
 
 Finally, a note on the second half of the `web-wizard` rule: the deployer's own
 `requirements.txt` is a pinned list in which the only web-capable library

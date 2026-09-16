@@ -468,7 +468,7 @@ class ProbeProgramTests(unittest.TestCase):
             plan = SimpleNamespace(deployment_id="dark-operator-local-ha")
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ.get('PATH', '')}"}):
                 script = probe_script(plan.deployment_id)
-                result = subprocess.run(["sh", "-lc", script], capture_output=True, text=True)
+                result = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("label=org.dark.deployment.id=dark-operator-local-ha", script)
         self.assertEqual(result.stderr, "")
