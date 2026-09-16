@@ -235,8 +235,18 @@ venv/bin/python deploy.py tui
 ```
 
 Las acciones disponibles aparecen como botones en el panel derecho. Use `l`
-para logs, `r` para refrescar y `q` para salir. Las acciones que interrumpen o
+para ver los logs dentro del panel, `L` (mayúscula) para transmitirlos en vivo en
+el terminal, `r` para refrescar y `q` para salir. Las acciones que interrumpen o
 reconstruyen un servicio piden confirmación explícita.
+
+El panel de logs relee su contenido cada cinco segundos y solo conserva las
+últimas líneas, así que lo que se ve ahí no se puede seleccionar ni copiar de
+forma fiable; además, la copia de Textual depende de la secuencia OSC 52, que
+Terminal.app no soporta. `L` evita ese problema de raíz: cede el terminal y
+ejecuta el mismo `docker compose logs --follow` que el comando `deploy.py logs`,
+de modo que lo transmitido queda en el scrollback del terminal, donde la
+selección y el copiado normales sí funcionan. Al detenerlo con Ctrl-C se vuelve
+al panel en el mismo estado.
 
 Para observar sin poder actuar, `deploy.py metrics` abre un panel de solo
 lectura sobre el mismo despliegue: muestra una fila por máquina con CPU,

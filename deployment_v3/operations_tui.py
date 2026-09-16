@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .console import ConsoleSnapshot, action_choices, service_detail, snapshot
-from .runner import ApplyError, manage_service, managed_plan, read_service_logs
+from .runner import ApplyError, follow_service_logs, manage_service, managed_plan, read_service_logs
 
 # The state and text helpers are re-exported so callers that imported them from
 # this console keep working; their implementation lives in ``console``.
@@ -46,8 +46,8 @@ def _textual():
     return App, ComposeResult, Horizontal, Vertical, Button, DataTable, Footer, Header, Label, RichLog, Static
 
 
-def run_operations_tui(project_root: Path) -> None:
-    """Run the terminal UI.  Imports Textual only for this optional command."""
+def _make_textual_app(project_root: Path):
+    """Build the console so a test can drive it without a terminal."""
     App, ComposeResult, Horizontal, Vertical, Button, DataTable, Footer, Header, Label, RichLog, Static = _textual()
 
     class OperationsApp(App):
@@ -79,6 +79,7 @@ def run_operations_tui(project_root: Path) -> None:
             ("shift+tab", "focus_previous", "Previous pane"),
             ("r", "refresh", "Refresh"),
             ("l", "logs", "Logs"),
+            ("L", "stream_logs", "Logs in terminal"),
             ("escape", "close_logs", "Close logs"),
             ("question_mark", "help", "Help"),
             ("q", "quit", "Quit"),
@@ -295,7 +296,54 @@ def run_operations_tui(project_root: Path) -> None:
             self._log_service = None
             self.query_one("#logs", RichLog).display = False
 
-        def action_help(self) -> None:
-            self._status("Tab changes pane · r refreshes · buttons execute service actions · l opens refreshed logs · Esc closes logs · q quits")
+        def action_stream_logs(self) -> None:
+            """Hand the terminal over to a live log stream of the selected service.
 
-    OperationsApp().run()
+            The stream is the same command the non-interactive ``logs`` command
+            runs, so what arrives is the terminal's own scrollback: it can be
+            selected, scrolled and copied without asking Textual's clipboard to
+            work, which it does not on macOS Terminal.  It has to run here and
+            synchronously, because suspending the app returns the terminal to its
+            normal state, and an app cannot be resumed from a worker thread.
+            """
+            from textual.app import SuspendNotSupported  # reachable only inside a running app
+
+            row = self._selected_service()
+            if row is None:
+                self._status("Select a service to stream its logs.")
+                return
+            service = str(row["service"])
+            target = str(row["target"])
+            try:
+                plan = managed_plan(project_root, self.deployment_id)
+            except ApplyError as exc:
+                self._status(f"[red]Logs for {service}:[/red] {exc}")
+                return
+            try:
+                with self.suspend():
+                    follow_service_logs(plan, project_root, target, tail=LOG_TAIL)
+            except SuspendNotSupported:
+                self._status(
+                    "[yellow]This terminal cannot hand itself over; run "
+                    f"`deploy.py logs --deployment {self.deployment_id} --target {target}` instead.[/yellow]"
+                )
+                return
+            except ApplyError as exc:
+                self._status(f"[red]Logs for {service}:[/red] {exc}")
+                return
+            self.action_refresh()
+            self._status(f"Streaming {service} finished.  The panel is live again.")
+
+        def action_help(self) -> None:
+            self._status(
+                "Tab changes pane · r refreshes · buttons execute service actions · l opens refreshed logs "
+                "in the panel · L streams the selected service's logs in the terminal, where they can be "
+                "copied · Esc closes logs · q quits"
+            )
+
+    return OperationsApp()
+
+
+def run_operations_tui(project_root: Path) -> None:
+    """Run the terminal UI.  Imports Textual only for this optional command."""
+    _make_textual_app(project_root).run()
