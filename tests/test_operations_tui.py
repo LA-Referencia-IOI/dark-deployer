@@ -33,6 +33,26 @@ except ModuleNotFoundError:  # pragma: no cover - depends on the optional extra
     TEXTUAL_AVAILABLE = False
 
 
+class RecordingSuspend:
+    """Stand-in for ``App.suspend`` that reports whether the block raised.
+
+    A real ``suspend`` with an exception inside its block skips
+    ``resume_application_mode()``, so the console must never let one escape.
+    """
+
+    def __init__(self) -> None:
+        self.entered = False
+        self.escaped: BaseException | None = None
+
+    def __enter__(self):
+        self.entered = True
+        return None
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.escaped = exc_type
+        return False
+
+
 @unittest.skipUnless(TEXTUAL_AVAILABLE, "Textual is optional (requirements-tui.txt)")
 class OperationsConsoleTests(unittest.IsolatedAsyncioTestCase):
     def prepared_project_root(self, plan=None) -> Path:
@@ -66,18 +86,14 @@ class OperationsConsoleTests(unittest.IsolatedAsyncioTestCase):
         plan = self.local_ha()
         app = operations_tui._make_textual_app(self.prepared_project_root(plan))
         calls: list[tuple[str, int]] = []
-        suspended: list[bool] = []
-
-        def fake_suspend(self):
-            suspended.append(True)
-            return contextlib.nullcontext()
+        suspend = RecordingSuspend()
 
         def fake_follow(plan, project_root, target, *, tail):
             calls.append((target, tail))
             return {"service": target}
 
         with patch.object(operations_tui, "follow_service_logs", fake_follow), \
-             patch.object(textual.app.App, "suspend", fake_suspend):
+             patch.object(textual.app.App, "suspend", lambda self: suspend):
             async with app.run_test() as pilot:
                 await pilot.pause(0.2)
                 service = app.query_one("#service-table").get_row_at(0)[0]
@@ -88,7 +104,8 @@ class OperationsConsoleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(app.screen.id, "_default")
 
         self.assertEqual(calls, [(f"service:{service}", operations_tui.LOG_TAIL)])
-        self.assertEqual(suspended, [True])
+        self.assertTrue(suspend.entered)
+        self.assertIsNone(suspend.escaped)
 
     async def test_stream_logs_without_a_selection_explains_itself(self):
         app = operations_tui._make_textual_app(self.prepared_project_root())
@@ -100,15 +117,16 @@ class OperationsConsoleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("Select a service", str(app.query_one("#status").content))
         follow.assert_not_called()
 
-    async def test_a_failed_stream_is_reported_and_the_panel_survives(self):
+    async def test_a_failed_stream_is_reported_and_never_escapes_the_suspend_block(self):
         plan = self.local_ha()
         app = operations_tui._make_textual_app(self.prepared_project_root(plan))
+        suspend = RecordingSuspend()
 
         def failing_follow(plan, project_root, target, *, tail):
             raise ApplyError("no managed container found for minter-api")
 
         with patch.object(operations_tui, "follow_service_logs", failing_follow), \
-             patch.object(textual.app.App, "suspend", lambda self: contextlib.nullcontext()):
+             patch.object(textual.app.App, "suspend", lambda self: suspend):
             async with app.run_test() as pilot:
                 await pilot.pause(0.2)
                 await pilot.press("L")
@@ -118,6 +136,29 @@ class OperationsConsoleTests(unittest.IsolatedAsyncioTestCase):
                 # Still usable afterwards: the tree is intact and can re-render.
                 app.action_refresh()
                 self.assertEqual(app.query_one("#service-table").row_count, len(plan.services))
+
+        # The terminal handover must complete normally: an exception here would
+        # leave the driver without resume_application_mode().
+        self.assertTrue(suspend.entered)
+        self.assertIsNone(suspend.escaped)
+
+    async def test_an_unexpected_stream_error_does_not_escape_either(self):
+        plan = self.local_ha()
+        app = operations_tui._make_textual_app(self.prepared_project_root(plan))
+        suspend = RecordingSuspend()
+
+        def exploding_follow(plan, project_root, target, *, tail):
+            raise OSError("ssh: command not found")
+
+        with patch.object(operations_tui, "follow_service_logs", exploding_follow), \
+             patch.object(textual.app.App, "suspend", lambda self: suspend):
+            async with app.run_test() as pilot:
+                await pilot.pause(0.2)
+                await pilot.press("L")
+                await pilot.pause(0.1)
+                self.assertIn("ssh: command not found", str(app.query_one("#status").content))
+
+        self.assertIsNone(suspend.escaped)
 
     async def test_an_unsupported_terminal_is_told_what_to_run(self):
         plan = self.local_ha()

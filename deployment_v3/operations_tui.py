@@ -319,20 +319,29 @@ def _make_textual_app(project_root: Path):
             except ApplyError as exc:
                 self._status(f"[red]Logs for {service}:[/red] {exc}")
                 return
+            failure: Exception | None = None
             try:
                 with self.suspend():
-                    follow_service_logs(plan, project_root, target, tail=LOG_TAIL)
+                    # Nothing may escape this block.  Textual's suspend() has no
+                    # try/finally around its yield, so an exception raised here
+                    # skips resume_application_mode() and leaves the terminal as
+                    # suspension left it.  The stream is therefore wrapped, and
+                    # reported once the panel is back.
+                    try:
+                        follow_service_logs(plan, project_root, target, tail=LOG_TAIL)
+                    except Exception as exc:
+                        failure = exc
             except SuspendNotSupported:
                 self._status(
                     "[yellow]This terminal cannot hand itself over; run "
                     f"`deploy.py logs --deployment {self.deployment_id} --target {target}` instead.[/yellow]"
                 )
                 return
-            except ApplyError as exc:
-                self._status(f"[red]Logs for {service}:[/red] {exc}")
-                return
             self.action_refresh()
-            self._status(f"Streaming {service} finished.  The panel is live again.")
+            if failure is not None:
+                self._status(f"[red]Logs for {service}:[/red] {failure}")
+            else:
+                self._status(f"Streaming {service} finished.  The panel is live again.")
 
         def action_help(self) -> None:
             self._status(
