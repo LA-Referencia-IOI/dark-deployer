@@ -37,6 +37,7 @@ from .collector import (
     PROBE_TIMEOUT_SECONDS,
     WARNING_PAYLOAD_SEPARATOR,
     ContainerRate,
+    ContainerSample,
     MachineMetrics,
     container_rates,
     daemon_key,
@@ -47,6 +48,15 @@ from .collector import (
 REFRESH_MACHINES_SECONDS = 60
 MACHINE_COLUMNS = ("MACHINE", "VIA", "STATE", "AGE", "CPU", "MEM", "CONT", "RST")
 CONTAINER_COLUMNS = ("CONTAINER", "SERVICE", "STATE", "CPU", "MEMORY", "NET/s", "BLOCK/s", "PIDS", "RESTARTS")
+CONTAINER_PANE_TITLE = "CONTAINERS OF THE SELECTED MACHINE"
+# Orders the `s` binding cycles through.  Both metrics go from busiest to
+# quietest, which is the question an operator asks first.
+CONTAINER_ORDERS = ("name", "cpu", "memory")
+CONTAINER_SORT_LABELS = {
+    "name": "container name",
+    "cpu": "CPU, busiest first",
+    "memory": "memory, largest first",
+}
 EMPTY = "—"
 
 
@@ -120,6 +130,25 @@ def restart_total(metrics: MachineMetrics) -> str:
     return str(sum(values))
 
 
+def order_containers(containers: tuple[ContainerSample, ...], order: str) -> tuple[ContainerSample, ...]:
+    """Order the container rows, busiest first when a metric is chosen.
+
+    Containers the daemon cannot measure — a stopped one-shot job, for instance —
+    have no value to compare, so they go last instead of sorting as zero.  Ties
+    fall back to the name, which keeps the list stable between samples.
+    """
+    if order == "cpu":
+        return tuple(sorted(containers, key=lambda item: _busiest(item.cpu_percent, item.name)))
+    if order == "memory":
+        return tuple(sorted(containers, key=lambda item: _busiest(item.memory_bytes, item.name)))
+    return tuple(sorted(containers, key=lambda item: item.name))
+
+
+def _busiest(value: float | int | None, name: str) -> tuple[bool, float, str]:
+    """Sort key with the largest value first and the missing values last."""
+    return (value is None, -(value or 0.0), name)
+
+
 def machine_row(
     metrics: MachineMetrics | None,
     *,
@@ -151,13 +180,15 @@ def machine_row(
 def container_rows(
     metrics: MachineMetrics | None,
     rates: tuple[ContainerRate, ...] = (),
+    *,
+    order: str = "name",
 ) -> tuple[tuple[str, ...], ...]:
-    """Build the per-container rows of one machine."""
+    """Build the per-container rows of one machine, in the requested order."""
     if metrics is None:
         return ()
     per_second = {item.name: item for item in rates}
     rows: list[tuple[str, ...]] = []
-    for item in metrics.containers:
+    for item in order_containers(metrics.containers, order):
         rate = per_second.get(item.name)
         if item.memory_bytes is None:
             memory = EMPTY
@@ -273,6 +304,7 @@ def _make_textual_app(project_root: Path):
             ("shift+tab", "focus_previous", "Previous pane"),
             ("r", "refresh", "Refresh"),
             ("m", "resample", "Sample machine"),
+            ("s", "cycle_sort", "Sort containers"),
             ("question_mark", "help", "Help"),
             ("q", "quit", "Quit"),
         ]
@@ -287,6 +319,7 @@ def _make_textual_app(project_root: Path):
             self.rates: dict[str, tuple[ContainerRate, ...]] = {}
             self.sampling: set[str] = set()
             self.snapshot_age: float | None = None
+            self.container_order = CONTAINER_ORDERS[0]
 
         def compose(self) -> ComposeResult:
             yield Header(name="dARK deployment metrics", show_clock=False)
@@ -301,7 +334,7 @@ def _make_textual_app(project_root: Path):
                     yield Label("DETAIL", classes="pane-title")
                     yield Static("Loading…", id="machine-detail")
             with Vertical(id="containers-pane"):
-                yield Label("CONTAINERS OF THE SELECTED MACHINE", classes="pane-title")
+                yield Label(CONTAINER_PANE_TITLE, id="containers-title", classes="pane-title")
                 yield DataTable(id="container-table", cursor_type="row")
             yield Static("Loading managed deployments…", id="status")
             yield Footer()
@@ -459,11 +492,19 @@ def _make_textual_app(project_root: Path):
             table = self._widget("#container-table")
             if table is None:
                 return
+            title = self._widget("#containers-title")
+            if title is not None:
+                title.update(f"{CONTAINER_PANE_TITLE}  ·  by {CONTAINER_SORT_LABELS.get(self.container_order, self.container_order)}")
             selected = _selected_row_key(table)
             table.clear(columns=False)
             machine_id = self._selected_machine_id()
             stamp = self.stamps.get(machine_id) if machine_id else None
-            for row in container_rows(stamp.metrics if stamp else None, self.rates.get(machine_id or "", ())):
+            rows = container_rows(
+                stamp.metrics if stamp else None,
+                self.rates.get(machine_id or "", ()),
+                order=self.container_order,
+            )
+            for row in rows:
                 table.add_row(*row, key=row[0])
             self._restore_cursor(table, selected)
 
@@ -515,7 +556,7 @@ def _make_textual_app(project_root: Path):
                 # A sample with warnings may be missing whole columns, so it must
                 # not be indistinguishable from a clean one.
                 summary.append(f"[yellow]{len(warned)} with warnings: {', '.join(warned)}[/yellow]")
-            summary.append("r refresh · m sample machine · q quit  (read-only)")
+            summary.append("r refresh · m sample machine · s sort · q quit  (read-only)")
             self._status("  ·  ".join(summary))
 
         # -- events ------------------------------------------------------
@@ -536,11 +577,18 @@ def _make_textual_app(project_root: Path):
             if machine_id:
                 self._sample_machines(only=machine_id)
 
+        def action_cycle_sort(self) -> None:
+            """Cycle the container order: name, then busiest CPU, then memory."""
+            index = CONTAINER_ORDERS.index(self.container_order)
+            self.container_order = CONTAINER_ORDERS[(index + 1) % len(CONTAINER_ORDERS)]
+            self._render_containers()
+
         def action_help(self) -> None:
             self._status(
                 "Read-only: this panel never starts, stops or removes anything.  "
                 "Tab moves between panes · r re-reads services and samples machines · "
-                "m samples the selected machine · q quits"
+                "m samples the selected machine · s cycles the container order "
+                "(name, CPU, memory) · q quits"
             )
 
     return MetricsApp()

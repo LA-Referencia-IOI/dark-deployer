@@ -177,6 +177,58 @@ class ContainerRowTests(unittest.TestCase):
         self.assertEqual(rows[0][4], "1.0 MiB")
 
 
+def busy_metrics() -> MachineMetrics:
+    """Three containers with distinct load, plus one the daemon cannot measure."""
+    return sample_metrics(containers=(
+        ContainerSample(name="quiet", container_id="1", service_id="quiet", state="running",
+                        status="Up", cpu_percent=0.4, memory_bytes=100 * 1024 ** 2),
+        ContainerSample(name="hammer", container_id="2", service_id="hammer", state="running",
+                        status="Up", cpu_percent=88.0, memory_bytes=50 * 1024 ** 2),
+        ContainerSample(name="fat", container_id="3", service_id="fat", state="running",
+                        status="Up", cpu_percent=1.0, memory_bytes=4 * 1024 ** 3),
+        ContainerSample(name="migrate", container_id="4", service_id="migrate", state="exited",
+                        status="Exited (0)"),
+    ))
+
+
+class ContainerOrderTests(unittest.TestCase):
+    def test_name_order_is_the_default(self):
+        rows = view.container_rows(busy_metrics())
+        self.assertEqual([row[0] for row in rows], ["fat", "hammer", "migrate", "quiet"])
+
+    def test_cpu_order_is_busiest_first(self):
+        rows = view.container_rows(busy_metrics(), order="cpu")
+        self.assertEqual([row[0] for row in rows], ["hammer", "fat", "quiet", "migrate"])
+
+    def test_memory_order_is_largest_first(self):
+        rows = view.container_rows(busy_metrics(), order="memory")
+        self.assertEqual([row[0] for row in rows], ["fat", "quiet", "hammer", "migrate"])
+
+    def test_unmeasurable_containers_go_last_under_either_metric(self):
+        """A stopped container has no value to compare, so it is not sorted as zero."""
+        for order in ("cpu", "memory"):
+            rows = view.container_rows(busy_metrics(), order=order)
+            self.assertEqual(rows[-1][0], "migrate")
+            self.assertEqual(rows[-1][3], view.EMPTY)
+
+    def test_ties_fall_back_to_the_name(self):
+        metrics = sample_metrics(containers=(
+            ContainerSample(name="beta", container_id="a", service_id="beta", state="running", status="Up", cpu_percent=5.0),
+            ContainerSample(name="alpha", container_id="b", service_id="alpha", state="running", status="Up", cpu_percent=5.0),
+        ))
+        rows = view.container_rows(metrics, order="cpu")
+        self.assertEqual([row[0] for row in rows], ["alpha", "beta"])
+
+    def test_an_unknown_order_falls_back_to_the_name(self):
+        rows = view.container_rows(busy_metrics(), order="nonsense")
+        self.assertEqual([row[0] for row in rows], ["fat", "hammer", "migrate", "quiet"])
+
+    def test_the_cycle_covers_both_metrics(self):
+        self.assertEqual(view.CONTAINER_ORDERS, ("name", "cpu", "memory"))
+        for order in view.CONTAINER_ORDERS:
+            self.assertIn(order, view.CONTAINER_SORT_LABELS)
+
+
 class MachineDetailTests(unittest.TestCase):
     def test_unreachable_machine_explains_itself_and_keeps_services(self):
         metrics = sample_metrics(reachable=False, error="probe timed out after 8s", containers=())
@@ -284,6 +336,25 @@ class MetricsPanelTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(machines.get_row_at(0)[2], "unreachable")
                 self.assertEqual(machines.get_row_at(0)[4], view.EMPTY)
                 self.assertEqual(app.query_one("#container-table").row_count, 0)
+
+    async def test_pressing_s_cycles_the_container_order(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        app = view._make_textual_app(self.prepared_project_root(plan))
+        with patch.object(view, "sample_machine", lambda plan, machine, **kwargs: busy_metrics()):
+            async with app.run_test() as pilot:
+                await self.wait_for_samples(app, pilot)
+                table = app.query_one("#container-table")
+                first = lambda: table.get_row_at(0)[0]
+                self.assertEqual(first(), "fat")
+                await pilot.press("s")
+                self.assertEqual(app.container_order, "cpu")
+                self.assertEqual(first(), "hammer")
+                await pilot.press("s")
+                self.assertEqual(app.container_order, "memory")
+                self.assertEqual(first(), "fat")
+                await pilot.press("s")
+                self.assertEqual(app.container_order, "name")
+                self.assertEqual(first(), "fat")
 
     async def test_resampling_one_machine_does_not_touch_the_others(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")

@@ -129,11 +129,11 @@ named fields instead.
 | File | Lines | Role |
 | --- | --- | --- |
 | `deployment_v3/metrics/collector.py` | 646 | Read-only probe: command construction, execution, parsing. Imports no terminal library. |
-| `deployment_v3/metrics/textual_app.py` | 551 | The panel, plus the pure helpers it renders from. Imports Textual lazily. |
+| `deployment_v3/metrics/textual_app.py` | 599 | The panel, plus the pure helpers it renders from. Imports Textual lazily. |
 | `deployment_v3/metrics/__init__.py` | 42 | Re-exports of the collector's public surface. |
 | `deployment_v3/console.py` | 55 | Toolkit-free deployment/service state shared by both consoles. |
 | `tests/test_metrics.py` | 562 | 47 tests: contract, parser, program, rates. |
-| `tests/test_metrics_view.py` | 305 | 27 tests: view helpers, warning summary, pilot runs. |
+| `tests/test_metrics_view.py` | 376 | 35 tests: view helpers, container order, warning summary, pilot runs. |
 
 Modified, in support of the above: `deployment_v3/cli.py` (import, `metrics`
 subparser, `_run_metrics_console`, dispatch branch), `deployment_v3/executor.py`
@@ -295,8 +295,18 @@ arrive. The results are applied on the UI thread through `call_from_thread`,
 which is the pattern the operations console already used for log reads.
 
 **Keys.** `tab`/`shift+tab` move between panes, `r` re-reads the inventory and
-starts a sampling round, `m` re-samples only the selected machine, `?` explains
-that nothing here can act, `q` quits.
+starts a sampling round, `m` re-samples only the selected machine, `s` cycles the
+container order, `?` explains that nothing here can act, `q` quits.
+
+**Container order.** `s` cycles the container table through three orders: by
+name, by CPU with the busiest first, and by memory with the largest first. The
+current choice is shown in the pane title, and the selection follows the
+container by name so re-ordering never loses your place. Containers the daemon
+cannot measure — a stopped one-shot job, for instance — have no value to compare,
+so they stay last under either metric rather than sorting as zero, and ties fall
+back to the name. Because the order is re-applied on every sample, rows move as
+load moves; that is what "sorted by CPU" means, but it is worth knowing before
+leaving the pane open on a second monitor.
 
 **Detail pane.** Daemon version, API version, driver, cores, memory total, the
 daemon-wide container count, an explicit sentence about the denominators, the
@@ -423,9 +433,9 @@ venv/bin/python -m pip install -r requirements-tui.txt   # Textual, optional
 python -m unittest discover -s tests -p "test_*.py"      # 150 tests
 ```
 
-Result at the time of writing: **156 tests, all passing, `ruff` clean** on the
+Result at the time of writing: **164 tests, all passing, `ruff` clean** on the
 changed and added files. 82 of those tests live in the pre-existing files (one of
-them, in `test_deployment_v3.py`, is new and belongs to this work); 74 are new and
+them, in `test_deployment_v3.py`, is new and belongs to this work); 82 are new and
 split as follows.
 
 | Class | Tests | What it establishes |
@@ -444,10 +454,11 @@ split as follows.
 | `MachineStateTests` | 6 | `sampling`, `unknown`, `unreachable`, `active`, `degraded` (restart loop, unmeasurable container) and `inactive` |
 | `MachineRowTests` | 4 | Row contents, blanked numbers for unreachable machines, explicit `sampling`, every shape matching the table |
 | `ContainerRowTests` | 4 | Stopped containers, rates attached by name, no sample means no rows, no invented percentage |
+| `ContainerOrderTests` | 7 | Name order by default, CPU busiest first, memory largest first, unmeasurable containers last under both metrics, ties by name, an unknown order falls back to the name, the cycle covers both metrics |
 | `MachineDetailTests` | 4 | Unreachable machines explain themselves, denominators are named, a shared daemon is disclosed, a machine without services says so |
 | `WarningSummaryTests` | 3 | Repeated warnings collapse to one line, a single warning keeps its raw evidence, many kinds are capped |
 | `PanelIsReadOnlyTests` | 1 | The view imports no mutating API |
-| `MetricsPanelTests` | 3 | Pilot runs: the panel renders real samples over a rendered bundle, survives an unreachable machine, and re-sampling one machine does not disturb the others |
+| `MetricsPanelTests` | 4 | Pilot runs: the panel renders real samples over a rendered bundle, survives an unreachable machine, re-sampling one machine does not disturb the others, and pressing `s` cycles the container order |
 
 Three of those are worth singling out because they test something a unit test
 cannot. `ProbeProgramTests` puts a fake `docker` executable on `PATH` and lets the

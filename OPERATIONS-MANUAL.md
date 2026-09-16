@@ -243,9 +243,10 @@ lectura sobre el mismo despliegue: muestra una fila por máquina con CPU,
 memoria, contenedores y reinicios, más los contenedores de la máquina
 seleccionada. Cada máquina se muestrea contra su propio daemon Docker, en local
 o por su host SSH configurado, y la edad de cada muestra aparece siempre en
-pantalla. `r` refresca, `m` vuelve a muestrear la máquina seleccionada y `q`
-sale. El panel no tiene botones de ciclo de vida, así que puede quedarse abierto
-junto a la consola de operaciones.
+pantalla. `r` refresca, `m` vuelve a muestrear la máquina seleccionada, `s` cicla
+el orden de los contenedores (nombre, CPU de mayor a menor, memoria de mayor a
+menor) y `q` sale. El panel no tiene botones de ciclo de vida, así que puede
+quedarse abierto junto a la consola de operaciones.
 
 ```bash
 venv/bin/python deploy.py metrics
