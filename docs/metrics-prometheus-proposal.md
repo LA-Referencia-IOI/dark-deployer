@@ -1,444 +1,306 @@
-# A Prometheus probe for dARK: how monitoring works today, and where a probe could live
+# Prometheus integration for dARK: options for discussion
 
-This document first describes the monitoring that exists in this repository today,
-then examines four ways to expose those numbers to Prometheus, for each of them
-saying what can be reused from the current work and what cannot. It is a
-proposal: nothing described in sections 3 to 7 is implemented.
+Status: discussion proposal, revised 2026-09-16. No architecture has been selected.
 
-## Scope of this document
+This document offers ideas to evaluate before extending metrics polling. Its
+purpose is to help the person implementing monitoring compare alternatives,
+identify missing requirements and propose a suitable design. The options and
+possible next steps are suggestions, not an approved implementation plan.
+Alternative or combined approaches are welcome if their tradeoffs are documented.
 
-Date: 2026-09-16, on `main`, on top of `ce7c185`. It covers the two legacy monitor
-scripts, the read-only metrics panel and its collector, and the design space for a
-Prometheus probe. It does not cover application-level metrics inside the dARK
-services themselves (minter, resolver, store), which are a separate question.
+## 1. Starting point and evidence
 
-Method: the description of the current state comes from reading and running the
-code in this repository; the Prometheus-side statements come from the documented
-behaviour of Prometheus, the Pushgateway, and node_exporter, not from a running
-monitoring stack, because no Prometheus exists here to test against. Every claim
-is marked **VERIFIED** (evidence reproducible in this repository) or **INFERRED**
-(reading or documentation, without direct proof). Where a claim only holds in part,
-that is said.
-
-The companion document [`metrics-panel.md`](metrics-panel.md) covers the panel and
-the collector in depth: the probe contract, the parser, the failure semantics, the
-verification, and what remains unproven. This document does not repeat that detail;
-it references it.
-
-## 1. How monitoring works today
-
-### 1.1 The two legacy monitors
-
-`scripts/monitor_dark_runtime.py` and `scripts/monitor_dark_infrastructure.py` are
-long-running loops that print one JSON object per sample and optionally append it
-to a `.jsonl` file (**VERIFIED**).
-
-| | `monitor_dark_runtime.py` | `monitor_dark_infrastructure.py` |
+| Component | Current observations | Limitations |
 | --- | --- | --- |
-| Observes | Docker containers and worker log health | Docker metadata/stats, service health endpoints, IPFS Cluster peers, RPC block height and txpool |
-| Cadence | `--interval` 60 s, `--full-every` 300 s for the expensive worker diagnostic | `--interval` 60 s, `--full-every` 300 s for the full worker diagnostic |
-| Output | One JSONL record per sample, stdout and/or `--output` (default `dark-runtime-monitor.jsonl`) | Same, default `dark-infrastructure-monitor.jsonl` |
-| Reaches | Only the local Docker CLI and `127.0.0.1` | Only the local Docker CLI and `127.0.0.1` |
+| `scripts/monitor_dark_runtime.py` | Local containers and worker log health; JSONL output | Local execution and name-based selection |
+| `scripts/monitor_dark_infrastructure.py` | Docker state/stats, service health, Cluster peers, RPC block height and txpool; JSONL output | Local endpoints and container-name conventions |
+| `deploy.py metrics` and `deployment_v3/metrics/collector.py` | Docker samples per deployment machine, locally or through SSH | Interactive panel; no Prometheus export or discovery integration in this component |
 
-Their docstrings are explicit about the intent — *"one JSON record per sample,
-making the output suitable for `jq`, spreadsheets, or later incident analysis"* —
-and about the constraint they accept: they are *"intentionally independent of the
-application"* and *"never start, stop, recreate, or change a container"*
-(**VERIFIED**).
+The collector executes a non-login `sh -c` program per machine. Its sections cover
+daemon information, Docker version, containers, stats, inspect and optional
+`docker system df`. It supports bounded parallel sampling and reports failures
+and malformed output. The panel derives targets from the managed deployment
+snapshot, including `bundle/shared/deployment-topology.json`.
 
-Three structural limits matter for what follows. They are **local only**: every
-endpoint is hardcoded to `127.0.0.1` and every Docker command runs on the machine
-that starts the loop, so a remote deployment cannot be observed at all. They know
-**nothing about the deployment**: which containers matter is decided by a name
-prefix (`name.startswith("dark-")`), not by the managed inventory, so a renamed
-deployment or a second one on the same host is invisible or ambiguous. And they
-**duplicate the collection** between themselves, since both call `docker ps` and
-`docker stats`.
+These are observations from repository code. The companion
+[metrics-panel.md](metrics-panel.md) records the collector contract, tests and
+previous validation. This revision does not establish end-to-end Prometheus
+behavior or measure production polling costs. External behavior below is based
+on upstream documentation; the chosen approach still needs a pilot.
 
-### 1.2 The metrics panel and its collector
+Application instrumentation in Minter, Resolver and Store is a separate scope.
+However, the legacy scripts include health and application observations that
+the Docker collector does not replace. Their retirement requires a coverage
+comparison, not just a working metrics endpoint.
 
-`deploy.py metrics` opens a read-only terminal panel over one managed deployment
-(**VERIFIED**, see [`metrics-panel.md`](metrics-panel.md)). Its collector is the
-piece that matters here. It samples each machine of a deployment with **one
-non-login `sh -c` program per machine**, executed locally or through the
-deployment's own SSH transport, and parses six sections: daemon denominators,
-docker version, containers, stats, inspect, and optionally `docker system df`.
-The shell is deliberately non-login so that profile files cannot rewrite `PATH`
-or print anything before the first probe marker; the consequence for a supervised
-run is in section 6.
+## 2. Requirements to agree
 
-Four properties of that collector are the reason this document exists:
+The proposed common principle is that **observed targets come from the deployed
+topology**, without maintaining a second manual host list. Editing an inventory
+alone should not imply that the running deployment changed: discovery should
+follow the snapshot actually deployed.
 
-* **The targets come from the deployment, not from configuration.** The panel
-  lists the deployments this controller knows about and derives the machines from
-  the managed plan, which is the topology snapshot that was actually deployed
-  (**VERIFIED**: `managed_plan` reads `bundle/shared/deployment-topology.json`).
-  Adding a host, renaming a group or moving a service changes the inventory, not
-  any monitoring configuration.
-* **It carries semantic labels.** Every container sample is joined to its
-  `service`, and the plan knows the `machine`, the `group`, the `site` and the
-  deployment id, so a series can say *which part of the topology* it belongs to.
-* **It is read-only and issues no lifecycle command.** Allowed Docker subcommands
-  are declared in `READ_ONLY_DOCKER_SUBCOMMANDS` and enforced by tests.
-* **It reports its own failure in detail.** Unreachable machines, failed sections,
-  rejected rows and contract drift all become typed states and counted warnings,
-  which is what makes a scrape safe to export (see section 5).
+Two decisions can be made separately:
 
-### 1.3 What neither of them is
+- **Discovery:** who determines machines, services, sites and deployment labels?
+- **Collection:** who reads each metric, through which connection, and how often?
 
-Neither is scrapeable. The only machine-readable output that exists today is the
-legacy monitors' JSONL, and it is written on the machine that runs it, one file
-per monitor, with no labels beyond the container name and no notion of a
-deployment. There is no HTTP endpoint, no exposition format, and no Prometheus
-anywhere in the repository (**VERIFIED**: no port-binding code and no Prometheus
-text in the tree, outside vendored third-party packages).
+Keeping discovery in the deployer is compatible with either centralized SSH
+collection or direct scraping of exporters. A single controller endpoint is an
+additional constraint to discuss, not a requirement common to every option.
 
-## 2. The principle this proposal must preserve
+Questions for the implementer and operators:
 
-The requirement that shapes every option below: **the probe should happen from or
-towards the machine that runs the deployer, and the deployer should be the single
-place where the targets are resolved, so that a change in the infrastructure does
-not mean reconfiguring the monitoring.**
+1. Is the objective occasional diagnosis, capacity history, continuous alerts,
+   or a combination? Which operational questions should be answered first?
+2. Where will Prometheus and the collector run? Is the controller an always-on
+   server or an operator's laptop?
+3. Which connections are available between controller, sites and Prometheus?
+   Is incoming access allowed, or only outbound traffic?
+4. Are host exporters acceptable? Who installs, upgrades and operates them?
+5. Are Docker figures sufficient, or are remote filesystem capacity, inode usage
+   and host resource pressure required for Besu/IPFS machines?
+6. What detection delay is useful? Include collection duration, sampling interval,
+   scrape interval, rule evaluation and alert waiting periods.
+7. Should monitoring cover one deployment or several? How should it handle shared
+   hosts, removed machines and changes in service placement?
+8. Who owns retention, alert delivery, monitoring availability and credentials?
 
-Today that property already holds for the panel, by accident of its design: the
-fan-out over N machines happens *inside* the deployer's process, and the list of N
-comes from a deployment. Two consequences follow, and they are worth stating
-plainly because they are what the options trade against each other:
+## 3. Candidate architectures
 
-* **One ingress, N targets.** Whatever Prometheus talks to, it talks to one
-  address: the deployer's host. The fleet is behind it. There is no per-host scrape
-  target to declare, and therefore nothing to update when the fleet changes.
-* **One address to trust, and one point to lose.** Prometheus's own `up` metric
-  will tell you that the deployer's endpoint is alive; it will not tell you that
-  the fleet is. Machine health has to be exported as data, not inferred from the
-  scrape. And if the deployer's host is down, the whole fleet goes dark in the
-  metrics path even if the fleet is fine.
+### A. Controller collector with a cached HTTP exporter
 
-The two readings of "from or towards" are the same requirement seen from either
-end: *from* means the deployer's host is where queries originate; *towards* means
-it is where queries arrive. Both are satisfied by a single scrape target or a
-single discovery source, which is what the four options provide in different ways.
+A background process samples machines using the existing collector. An HTTP
+endpoint exposes completed samples from a cache; requests do not trigger SSH
+collection. Prometheus scrapes the endpoint.
 
-Note also what "depend on a deployment" excludes: a Prometheus configuration that
-lists hosts by hand, and equally a monitor that decides what to look at by name
-prefix. The deployment is the source of truth for *what* is observed, and this
-should survive whichever transport is chosen.
+This could suit installations that already permit controller-to-host SSH and
+want to reuse the collector without installing host exporters. It needs a
+supervised process, bounded sampling, freshness rules and endpoint access
+configuration. A slow machine should not block the endpoint or other machines.
 
-## 3. Four shapes for a Prometheus probe
+Prometheus `up` describes this endpoint, not each remote machine. Collection
+success needs separate metrics. Losing the controller interrupts visibility even
+if the deployment remains healthy.
 
-### 3.1 Option A — the deployer collects and exports
+Questions to resolve: process location, deployment scope, sampling budget, cache
+expiry and topology refresh.
 
-The deployer runs a small HTTP endpoint that serves the Prometheus exposition
-format for the whole deployment. A background collector samples the machines on
-its own clock; a scrape reads the cached sample and returns immediately.
+### B. Deployment-derived discovery with host exporters
 
-Prometheus needs to reach one address. Nothing is installed on the fleet, no port
-is opened there, and the read-only probe already exists, so this is the option
-that reuses the most. The cost is that the deployer's process becomes a
-long-running service holding the fleet's SSH keys, and that the SSH fan-out
-(N sessions, each of which has to wait for the daemon to produce a `docker stats`
-sample rather than answering a lookup) has to be decoupled from the scrape
-interval, since a scrape must never trigger a probe.
+The deployer generates discovery metadata; Prometheus scrapes exporters directly.
+For file-based discovery, the generated file must be delivered to a location
+readable by Prometheus and refreshed after deployed topology changes.
+See [Prometheus file-based discovery](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#file_sd_config).
 
-### 3.2 Option B — the deployer publishes discovery, Prometheus scrapes each host
+This could suit continuous monitoring where independent target health and remote
+host visibility matter. `node_exporter` supplies host metrics and cAdvisor can
+supply container metrics. They cover different needs; both and multiple endpoints
+per machine may be necessary.
 
-The deployer writes a Prometheus *file-based service discovery* file — one target
-per machine, with the deployment's labels attached — and Prometheus scrapes each
-host directly, through a node_exporter or cAdvisor installed on it.
+The main reuse is topology and identity mapping. Target labels can carry machine
+and site information, but mapping container series to dARK services still needs
+an explicit Compose-label or relabeling strategy. Shared hosts need a policy
+against duplicate collection or misleading per-deployment host totals.
 
-This is the only option where the deployer **does not collect metrics at all**. It
-keeps the property that matters most — one place decides what is observed, derived
-from a deployment — while removing the SSH fan-out from the metrics path entirely,
-and it gives per-host `up`, per-host scrape health and real per-host resolution. It
-also closes the gap this project cannot close through Docker, because node_exporter
-sees the host filesystem where the chain data and the IPFS repository actually
-live, unlike `docker system df`, which cannot see bind mounts at all
-(**VERIFIED**: all persistent data is bind-mounted from the host).
+This adds exporter installation, network access and upgrade responsibilities.
+The SSH collector can remain useful for interactive diagnosis. If the deployer
+stops, scraping can continue with the last discovery file, although topology
+updates stop. Exporter reachability alone does not prove application health.
 
-The cost is on the fleet: an agent per machine, a port per machine, firewall and
-network decisions per site, and something that must be installed and upgraded on
-hosts the deployer currently only talks to over SSH. The deployer's role changes
-from collector to discovery source, and the labels — which are the deployer's real
-value — have to be carried into the discovery file as target labels.
+### C. Outbound delivery from the collection side
 
-### 3.3 Option C — the deployer pushes
+If inbound access is impractical, consider a supported agent or collector that
+forwards samples using remote write. This requires a compatible receiver and
+decisions about buffering, retries, delivery failures and credentials. Remote
+write is a separate protocol; a text renderer is not a remote-write client.
+Reusing the SSH collector requires an adapter or supported bridge.
 
-The collector samples on its clock and pushes to a Pushgateway, or straight into
-Prometheus through remote write. Nothing has to reach the deployer's host, which
-removes the ingress and the exposure question entirely, and it fits the shape the
-deployer already has: a tool that reaches outwards over SSH.
+Pushgateway is another mechanism but should be evaluated separately. Prometheus
+recommends it for limited cases, primarily service-level batch outcomes, rather
+than general machine monitoring. It retains pushed series until deletion, so a
+design needs freshness alerts and explicit cleanup for removed targets.
+See [when to use Pushgateway](https://prometheus.io/docs/practices/pushing/).
 
-The cost is staleness. A Pushgateway keeps the last pushed value until it is
-deleted, so a fleet that stopped being sampled keeps reporting the same numbers;
-the mitigation is to push a timestamp and a success gauge on every round and to
-alert on their age (the Pushgateway adds its own `push_time_seconds` and
-`push_failure_time_seconds`, which helps but does not solve it). Remote write asks
-for a receiving endpoint and, in most deployments, a Prometheus that is already
-running somewhere reachable.
+Outbound delivery avoids incoming access to the controller but still needs an
+accessible receiver. With Pushgateway, Prometheus scrapes the gateway, so there
+is still a scrape target. A push design does not remove operational dependencies.
 
-### 3.4 Option D — a textfile for a node_exporter on the controller
+### D. Periodic collection with a controller textfile collector
 
-A periodic job — cron, launchd, or a one-shot `deploy.py metrics --textfile` —
-writes the exposition text into the directory that a node_exporter's textfile
-collector reads, and Prometheus scrapes that node_exporter on the controller.
+A scheduled job runs the SSH collector and writes a `.prom` file. A
+`node_exporter` on the controller exposes that file to Prometheus. A command such
+as `deploy.py metrics --textfile` is a possible interface, not an existing command.
 
-It reuses exactly the same pure renderer as options A and C, needs no long-running
-deployer process and no new port in the deployer, and inherits staleness reporting
-for free, because node_exporter records the file's modification time as
-`node_textfile_mtime_seconds`, so a stalled job is visible as a metric rather than
-as an absence. It requires one node_exporter, on the controller only — a much
-smaller ask than an agent on every host — and it brings with it the host
-filesystem metrics that Docker cannot provide. The cost is that the freshest data
-is as old as the job's period, and that a scrape of the textfile is a file read,
-so the probe cadence and the scrape cadence are entirely independent, which is the
-property option A has to work to achieve.
+This could suit modest collection frequencies and installations already operating
+a controller exporter. Write a temporary file and rename atomically to avoid
+partial output. File modification time helps detect a stopped writer, but
+per-machine last-success timestamps are still needed when a job continues writing
+while individual probes fail. The textfile collector does not support explicit
+sample timestamps; expose observation time as an ordinary gauge value.
+See the [textfile collector documentation](https://github.com/prometheus/node_exporter#textfile-collector).
 
-### 3.5 Comparison
+This avoids a custom HTTP server but needs a scheduler, exporter and scrape
+connectivity. Its host filesystem metrics cover the controller only, not remote
+machines storing blockchain and IPFS data. Containerized exporters also require
+appropriate host access to observe host resources.
 
-| | A — exporter | B — discovery | C — push | D — textfile |
+### Comparison
+
+| Question | A: cached exporter | B: direct exporters | C: outbound delivery | D: textfile |
 | --- | --- | --- | --- | --- |
-| Scrape targets | 1 | 1 per machine | none | 1 (the controller) |
-| Prometheus must reach | the deployer's host | every machine | nothing | the controller's node_exporter |
-| Agent needed on hosts | no | yes | no | no |
-| New port anywhere | yes, on the deployer's host | yes, on every host | no | yes, on the controller (node_exporter) |
-| Reuses the probe | fully | not at all | fully | fully |
-| Keeps deployment-derived targets | yes | yes | yes | yes |
-| Per-host `up` and resolution | no | yes | no | no (fleet) / yes (controller host) |
-| Staleness handling | must be built | native | must be built | native |
-| Deployer becomes | a daemon | a file writer | a daemon, or a one-shot | a one-shot |
-| Host disk visibility | no | yes | no | yes, for the controller host |
+| Reuse SSH collector? | Yes | Optional diagnosis | Possible with adapter | Yes |
+| Network requirement | Prometheus to controller; controller to hosts | Prometheus to each exporter | Collector to receiver; SSH if retained | Prometheus to controller exporter; controller to hosts |
+| Additional operation | Collector and HTTP service | Host exporters and discovery delivery | Sender/agent and receiver | Scheduled job and controller exporter |
+| Remote filesystem capacity? | Not from current collector | With host exporter | Depends on source | Not from current collector |
+| Remote collection health | Explicit probe metrics | Exporter scrape and collector health | Collection and delivery health | Explicit probe metrics |
+| Freshness | Per-machine cache age | Scrape timing and source semantics | Collection and delivery age | File age and per-machine age |
+| Controller outage | Collection interrupted | Existing targets can still be scraped | Interrupted if controller collects | File remains but becomes outdated |
 
-**INFERRED**: everything in the Prometheus column above rests on documented
-behaviour rather than on a stack running in this environment.
+No option is ranked as the default here. A hybrid is possible: host exporters
+for capacity and a small dARK-specific collector for deployment checks, for
+example. Its scope should justify any duplicated collection.
 
-## 4. What gets reused, and what does not
+## 4. Reuse and implementation boundaries
 
-Reuse is not all-or-nothing, and the split is the useful part of this analysis.
+Topology mapping and a stable identity policy are useful in every option.
+Failure and freshness semantics are shared concerns, although their code and
+metric names need not be identical across architectures.
 
-**Reusable in every option, because it is not about Docker at all:**
+The parser, SSH transport and `sample_machines` are directly reusable in A and D,
+and potentially C. A renderer from `MachineMetrics` to exposition text can support
+A, D and a Pushgateway variant. It is not a prerequisite for B or remote write.
+Likewise, a persistent cache is an architecture choice, not mandatory groundwork.
 
-* The **topology mapping** from a managed deployment to machines, services, groups
-  and sites. In option B this becomes target labels in the discovery file; it is
-  the piece that makes the numbers answerable questions rather than a soup of
-  container names, and it is the piece a generic exporter cannot provide.
-* The **failure vocabulary**: reachable, section failed, warnings counted. Any
-  exporter needs a way to say "this machine was not measured" that is distinct
-  from "this machine is fine".
-* The **staleness semantics** the panel already implements (keep the last value,
-  show its age, never zero it). Exported to Prometheus this becomes a timestamp
-  and an age metric instead of a greyed-out cell, but the principle is the same
-  and it is what makes a scrape honest.
+A non-interactive JSON mode could help diagnostics and contract inspection
+independently. The implementer could propose it as a small first step if there is
+a consumer; it should not delay a discovery-based design.
 
-**Reusable in A, C and D, and only there:**
+## 5. Candidate metric contract
 
-* The **probe contract** and its parser: one command per machine, tab-separated
-  named fields, marker protocol, the drop-and-report rule, and the tolerance for
-  contract drift. This is the largest single asset and the reason options A, C and
-  D are cheap.
-* The **derived quantities**, except the ones Prometheus should own. Cumulative
-  network and block counters should be exported raw, so that `rate()` handles
-  container restarts; the manual delta logic in `container_rates` exists for the
-  panel, where there is no PromQL to lean on, and stays there.
-* The **per-machine concurrency** of `sample_machines`, which is already bounded
-  and ordered, and the executor routing that gives local and remote machines the
-  same code path.
+Names below are examples for a custom collector, not a committed public API.
+Standard exporters should normally retain their native contracts.
 
-**Reusable in none of them:**
+| Candidate metric | Meaning and decisions needed |
+| --- | --- |
+| `dark_machine_probe_success` | Last attempt met a defined success criterion; distinguish connectivity from complete collection |
+| `dark_probe_section_success{section}` | Optional bounded set of section outcomes |
+| `dark_probe_last_attempt_timestamp_seconds` | Unix time of latest attempt |
+| `dark_probe_last_success_timestamp_seconds` | Unix time of latest successful collection; age is `time() - value` |
+| `dark_probe_duration_seconds` | Collection duration; requires timing instrumentation |
+| `dark_probe_warnings` | Warning count; details belong in logs rather than unbounded labels |
+| `dark_docker_daemon_cores`, `dark_docker_daemon_memory_total_bytes` | Capacity seen by Docker, which may describe a VM |
+| `dark_deployment_container_memory_bytes` | Sum for measured deployment containers, not total host memory use |
+| `dark_deployment_container_cpu_fraction_of_daemon` | Container CPU normalized by daemon core capacity; convert percent to fraction |
+| `dark_container_cpu_percent`, `dark_container_memory_bytes` | Sampled values with documented units and source semantics |
+| `dark_container_network_bytes_total`, `dark_container_block_bytes_total` | Current collector combines directions; directional series require an extension |
+| `dark_container_restart_count_total`, `dark_container_start_time_seconds` | Validate reset and recreation behavior |
+| `dark_container_running`, `dark_container_state{state}` | Bounded states; distinguish stopped containers, completed jobs and missing expected services |
 
-* Nothing, on closer inspection — but it is honest to note that in option B the
-  probe is not merely unused, it is *contradictory*: the point of B is to stop
-  fanning out over SSH, so keeping the probe alive next to it would mean paying
-  for two collection paths. If B is chosen, the probe should be kept for the panel
-  and for the one-shot commands, and treated as a diagnostic tool rather than a
-  metrics source.
+Not every row is available directly from the collector. Timestamps, duration and
+per-section success may need additional fields. Each proposed metric should be
+mapped to its source before its contract is finalized.
 
-There is also a piece of the current work that is useful to all four options but
-does not exist yet, and is cheap because it needs no network: a **pure renderer**
-from `MachineMetrics` to the exposition text, and a **cache** that holds the last
-sample per machine together with its age and health. Everything else — which
-process serves it, over which protocol — becomes a small decision once those two
-exist.
+Contract questions worth resolving:
 
-## 5. The metric mapping, and where the traps are
+- **Partial data:** current aggregates sum available measurements. A smaller sum
+  may mean missing data rather than lower usage. Expose completeness or suppress
+  incomplete aggregates. Unavailable values should not silently become zero.
+- **Freshness:** keep last-attempt health separate from last successful values.
+  Decide when old values are omitted. Re-exporting a cached value gives it a fresh
+  scrape time, not a fresh observation time.
+- **Identity:** use bounded labels such as deployment, machine, site and service.
+  Add a stable discriminator if several containers implement one service. Avoid
+  per-sample timestamps, raw errors and unnecessary container-ID churn in labels.
+- **Counters:** export cumulative values rather than panel-computed rates.
+  Validate restarts, recreations and missing samples. Human-readable CLI units
+  introduce rounding; use a more precise source if the use case requires it.
+- **Lifecycle:** distinguish a failed probe from an intentionally removed target.
+  Define cleanup after deployment removal or placement changes.
+- **Cadence:** faster scrapes may reveal exporter failure sooner but cannot
+  improve slower collection resolution. Sub-minute SSH collection is a
+  benchmarking question, not inherently exclusive to host exporters. Expensive
+  diagnostics may need a separate slower schedule.
 
-The collector already produces everything below. What follows is what each datum
-should become, and the trap attached to it.
+## 6. Operational choices
 
-| Series | Type | Notes |
-| --- | --- | --- |
-| `dark_machine_reachable{machine,execution,site}` | gauge | Must be emitted **always**, including when the machine is unreachable. A series that disappears is an ambiguous alert |
-| `dark_probe_success` | gauge | 1/0 for the probe as a whole |
-| `dark_probe_timestamp_seconds` | gauge | The age of the sample, so staleness is queryable |
-| `dark_probe_warnings` | gauge | The count from the sample. This is the contract-change detector: the separator defect that broke `info` and `inspect` would have been an alert here instead of 22 silent warnings |
-| `dark_machine_cores`, `_memory_total_bytes` | gauge | The denominators; without them the percentages are not comparable between hosts |
-| `dark_machine_memory_used_bytes`, `_cpu_fraction_of_host` | gauge | HELP text must say the fraction is of the daemon's cores. On a controller running Docker Desktop or Lima, that is the virtual machine |
-| `dark_docker_info{version,api_version,driver}` | gauge 1 | Info pattern: metadata as labels, so a change can be correlated with a version change |
-| `dark_container_network_bytes_total`, `_block_bytes_total` | counter | Cumulative per container; export raw and let `rate()` handle restarts. Do not pre-compute deltas |
-| `dark_container_memory_bytes`, `_memory_limit_bytes`, `_memory_percent`, `_pids` | gauge | Straightforward |
-| `dark_container_cpu_percent` | gauge | **Percentage of one core**, not of the host. `docker stats` exposes no cumulative CPU seconds, so `rate()` over CPU is not available from the CLI; the Docker API does expose it (`cpu_stats.cpu_usage.total_usage`) if that ever becomes necessary |
-| `dark_container_restart_count_total` | counter | Per container instance; it resets when the container is recreated |
-| `dark_container_start_time_seconds` | gauge | The clearer way to see restarts and recreations: `time() - start_time < 300` |
-| `dark_container_state{state=...}` | gauge 0/1 | Keeps the set of label values closed and small |
-| `dark_container_running` | gauge | Convenience for the common query |
+For the selected option, document the process owner, restart behavior, logs,
+deployment selection and topology refresh policy. Scheduled jobs should avoid
+overlap; background collectors should bound concurrency and timeouts.
 
-Five traps deserve their own paragraph.
+The probe uses a non-login shell. A supervised environment needs explicit paths,
+access to the deployment store and suitable credentials. Read-only commands do
+not imply that the underlying SSH account or Docker access is read-only.
+Scheduled and outbound collectors also need credential access; their process
+shape alone does not remove that responsibility.
 
-**Counters and restarts.** Network and block totals reset when a container is
-recreated, which Prometheus treats as a counter reset inside `rate()`, provided
-the series identity does not change. That is an argument for labels made of
-*names* (`deployment`, `machine`, `service`) and against container identifiers and
-timestamps in labels, which would both churn and fragment the series.
+Endpoint exposure depends on actual placement: Prometheus may be local, on a
+private network or across sites. Decide binding, firewall rules, authentication
+and transport protection accordingly. Existing exporters and receivers still
+need appropriate access controls. Loopback limits network reachability but does
+not authenticate local processes.
 
-**Absence is not health.** `up{job="dark-deployer"}` says the endpoint answering
-the scrape is alive; it says nothing about the fleet. Alerts about machines must
-be built on `dark_machine_reachable` and on the age metrics, not on the scrape
-result, and the exporter must keep emitting a machine's series even when it cannot
-be sampled.
+For a custom exporter, compare a maintained client library with a small renderer
+rather than assuming one is required. Consider escaping, duplicate series,
+missing values, format validation and dependency cost. Remote write additionally
+needs a compatible protocol implementation.
 
-**Cardinality.** One series per container per metric is a few hundred series for a
-nine-host deployment, which is nothing. Exporting every deployment known to the
-controller multiplies that, and exporting per-container identifiers or per-sample
-timestamps explodes it. The rule is: stable semantic labels only.
+## 7. Suggested way to advance
 
-**Cost.** `docker stats --no-stream` makes each daemon produce a sample rather than
-answering a lookup — the exact delay is unmeasured here, since no Docker was
-available in this environment (**INFERRED**) — and it must run at the probe
-cadence, never at the scrape cadence. `docker system df` walks the filesystem and
-belongs on a much slower clock, or nowhere.
+The implementer could use this sequence, adapting it to the agreed requirements:
 
-**Resolution.** A 60-second probe does not become a 15-second metric by lowering
-`scrape_interval`; it becomes the same number repeated three times. The honest
-configuration is a scrape interval no shorter than the probe period, with the probe
-period configurable, and the probe timestamp exported so that queries can see
-reality.
+1. **Define the first operational questions.** For example: which machine cannot
+   be sampled, which service repeatedly restarts, and which data filesystem is
+   approaching capacity? Identify which sources answer each.
+2. **Propose an architecture.** Record the selected option or combination, why it
+   fits connectivity and ownership, and alternatives considered. Include a small
+   deployment diagram, collection scope and metric contract.
+3. **Build a bounded pilot.** Use one deployment with local and remote machines
+   where applicable. Measure collection duration, resource cost and recovery
+   before choosing production intervals. Build only the adapters needed.
+4. **Review with operators.** Check that missing, partial and old data are
+   understandable and that alert timing meets the intended use.
+5. **Plan adoption.** Document installation, upgrades, removal and responsibility.
+   Compare legacy-monitor coverage before replacing their checks.
 
-## 6. Security and operations
+The proposal can be accepted, revised or rejected during architecture review.
+The discussion issue should record decisions before expanding the work into a
+production monitoring service.
 
-The repository's existing standard for a local HTTP surface is `web-wizard/`, and
-it is stricter than what a Prometheus probe can afford. That workbench binds
-*exclusively to `127.0.0.1`* and requires a per-run token compared with
-`secrets.compare_digest`, "so nothing else on the machine — or another web page —
-can reach it", and its requirements file states the rule that its framework
-dependencies live in `web-wizard/requirements.txt` and **never** in the deployer's
-(**VERIFIED**).
+## 8. Suggested pilot evidence
 
-A scraper is a machine that lives elsewhere, so option A breaks the first half of
-that posture by definition and has to replace it with something explicit: bind to
-a private or VPN interface, or keep the loopback binding and have Prometheus reach
-it through an SSH tunnel, and in either case put `basic_auth` or a bearer token in
-the scrape configuration. Option C needs none of this, because nothing connects
-inwards. Option D needs none either, and inherits whatever protection the
-controller's node_exporter already has.
+Refine these criteria once the design is selected:
 
-One consequence deserves to be stated plainly rather than buried: today the
-fleet's SSH keys are used by an interactive command that someone runs. A daemon
-holding those keys keeps them in memory permanently, on whatever host it runs, and
-that host becomes a control-plane asset rather than a laptop. This is not a reason
-to avoid option A, but it is a reason to decide where it runs deliberately, and it
-is a point in favour of C and D.
+- Targets and labels match deployed topology, including shared hosts and placement
+  changes, without manual host-list edits.
+- Endpoint availability is distinguishable from failed collection, partial data,
+  old samples and intentionally removed targets.
+- One disconnected machine does not block others; recovery restores current
+  measurements without manufacturing zeros.
+- Controller/exporter/scheduler restart and receiver failure have documented
+  effects on freshness, buffering and visibility.
+- Prometheus ingests real samples and representative queries/alerts work.
+  Unit tests alone do not establish end-to-end behavior.
+- Measured cost and detection latency fit an agreed budget.
+- Remote filesystem visibility is demonstrated if required.
+- Service, worker, Cluster and RPC checks remain covered or explicitly deferred
+  when discussing legacy-monitor retirement.
 
-Nothing in this repository supervises a long-running process today — the legacy
-monitors are started by hand, and no service unit exists (**VERIFIED**). Option A
-or C means adding that (launchd or systemd on the deployer's host, or cron for D),
-with the restart, logging and upgrade consequences that follow.
+## Appendix: illustrative freshness query
 
-Whatever supervises it must also provide the environment the probe expects. The
-probe runs in a deliberately **non-login** shell, so it inherits `PATH` as given
-rather than rebuilding it from profile files; that is what stops a profile from
-selecting a different Docker CLI or printing something before the first marker
-(**VERIFIED**: `sample_machine` runs `("sh", "-c", script)`). A terminal session
-already has a usable `PATH`; a launchd agent or a cron job does not, and the
-failure it produces is a clean per-machine *"docker CLI not found"* rather than a
-wrong number — visible, but only if someone looks. Setting `PATH` explicitly in
-the service definition is therefore part of the deployment of any option in this
-document, not an afterthought.
+For a custom collector, expose observation time as an ordinary gauge:
 
-Finally, a note on the second half of the `web-wizard` rule: the deployer's own
-`requirements.txt` is a pinned list in which the only web-capable library
-(`aiohttp`) is imported by nothing under `deployment_v3/` or `scripts/`
-(**VERIFIED**), and the exposition format is about fifty lines of text. Writing it
-with the standard library — the format is `# HELP`, `# TYPE`, `name{labels} value`,
-with escaping in label values — keeps the deployer free of a new dependency, and
-keeps the renderer testable in isolation, which is where the real risk lies: the
-escaping rules, not the transport.
-
-## 7. Where I would start
-
-**Stage 0, no network and no new process.** Write the two pure pieces, because
-every option uses them and both are testable the way the collector already is:
-`exposition.py`, rendering `MachineMetrics` into the exposition text with tests for
-label escaping, metric naming and type declarations; and a cache that holds the
-last sample per machine with its age, reachability and warning count. Add
-`deploy.py metrics --json` on the same collector, which is the non-interactive path
-already identified as the next step in `metrics-panel.md`.
-
-**Stage 1, choose the transport.** My recommendation, in order: **option D** if a
-node_exporter on the controller is acceptable, because it needs no long-lived
-deployer, no new inbound port and no dependency, and it brings the host filesystem
-metrics this project cannot get from Docker; **option A** bound to a private
-interface if not, because it is the most direct reuse and the only one that can
-answer arbitrary questions on demand; **option C** if the deployer's host must not
-be reachable at all; and **option B** as the target to grow into if per-host
-resolution, per-host `up` or host disk capacity become requirements — accepting
-that it means installing an agent on every host, which is exactly what this design
-has avoided so far.
-
-**Stage 2, absorb the legacy monitors.** `monitor_dark_runtime.py` and
-`monitor_dark_infrastructure.py` already emit one record per sample and were
-written for later analysis; once a metric source exists, their job is a subset of
-it, and their local-only, name-prefix-limited collection becomes unnecessary.
-
-The invariant to protect through all of it: **the deployment is what decides what
-is observed**, and the deployer is the one place that resolves it.
-
-## 8. Open decisions
-
-These are questions of policy, not of code, and they change the design more than
-any implementation detail:
-
-1. Where does Prometheus run relative to the deployer's host, and can it reach
-   that host, or must the deployer be the one that reaches out?
-2. Is a node_exporter acceptable on the controller? It is the price of option D,
-   and it also solves host disk visibility.
-3. Is an agent per host ever acceptable? That is the price of option B, and the
-   only route to per-host `up` and real per-host resolution.
-4. What probe cadence is useful, and does anything need to alert within less than
-   a minute of an event? If it does, no option in this document satisfies it, and
-   the answer is per-host exporters with a short scrape interval.
-5. Should the exporter serve every deployment the controller knows about, or one
-   selected deployment? The label `deployment` makes both possible; the cardinality
-   and the failure blast radius differ.
-6. Who owns the running process: a service unit on the controller, cron, or the
-   operator starting it by hand as today?
-
-## Appendix: what the text would look like
-
-A sketch of the exposition for one machine, which is what Stage 0 would render. It
-is illustrative, not implementation output:
-
+```text
+# HELP dark_probe_last_success_timestamp_seconds Unix time of last successful collection
+# TYPE dark_probe_last_success_timestamp_seconds gauge
+dark_probe_last_success_timestamp_seconds{deployment="example",machine="apps",site="site-a"} 1789552800
 ```
-# HELP dark_machine_reachable Whether the machine answered its read-only probe
-# TYPE dark_machine_reachable gauge
-dark_machine_reachable{deployment="dark-operator-local-ha",machine="local",execution="local",site="main"} 1
-# HELP dark_probe_warnings Rows and sections the probe refused, by machine
-# TYPE dark_probe_warnings gauge
-dark_probe_warnings{deployment="dark-operator-local-ha",machine="local"} 0
-# HELP dark_container_cpu_percent Container CPU as a percentage of one core
-# TYPE dark_container_cpu_percent gauge
-dark_container_cpu_percent{deployment="dark-operator-local-ha",machine="local",service="validator01"} 42.5
-# HELP dark_container_network_bytes_total Cumulative container network bytes
-# TYPE dark_container_network_bytes_total counter
-dark_container_network_bytes_total{deployment="dark-operator-local-ha",machine="local",service="validator01"} 3401200
-```
-
-And the two queries this design is aiming at, which are the reason the labels
-matter:
 
 ```promql
-# Fleet memory as a share of each daemon, per machine
-dark_machine_memory_used_bytes / dark_machine_memory_total_bytes
-
-# Anything whose probe is failing or drifting, which is the alert a silent
-# contract change would have tripped
-dark_machine_reachable == 0 or dark_probe_warnings > 0
+# Illustrative threshold; select it from the agreed detection budget.
+time() - dark_probe_last_success_timestamp_seconds > 180
 ```
+
+This detects an aging existing sample. Separate checks are needed for exporter
+failure, targets that never produced a successful sample and series that
+disappear entirely. Include these cases in the chosen alert contract.
