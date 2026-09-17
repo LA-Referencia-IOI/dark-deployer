@@ -10,14 +10,14 @@
     ]
   },
   "deployment": {
-    "id": "dark-operator-aws-active-six-host",
+    "id": "dark2-prod-aws",
     "label": "REPLACE: dARK AWS six-host production deployment"
   },
   "defaults": {
     "ssh": {
-      "user": "dark",
+      "user": "ubuntu",
       "port": 22,
-      "private_key_file": "/etc/dark-deployer/ssh/REPLACE-deploy-ed25519"
+      "private_key_file": "/home/ubuntu/lareferencia-dark.pem"
     },
     "paths": {
       "workspace_root": "/srv/dark",
@@ -28,7 +28,7 @@
   "networks": {
     "aws-lan": {
       "kind": "lan",
-      "cidr": "172.31.0.0/16"
+      "cidr": "10.20.0.0/16"
     }
   },
   "sites": {
@@ -39,50 +39,50 @@
   "machines": {
     "apps": {
       "execution": "ssh",
-      "management_address": "172.31.94.30",
+      "management_address": "10.20.10.10",
       "site": "aws",
       "addresses": {
-        "aws-lan": "172.31.94.30"
+        "aws-lan": "10.20.10.10"
       }
     },
     "resolver": {
       "execution": "ssh",
-      "management_address": "172.31.94.31",
+      "management_address": "10.20.10.11",
       "site": "aws",
       "addresses": {
-        "aws-lan": "172.31.94.31"
+        "aws-lan": "10.20.10.11"
       }
     },
     "blockchain-a": {
       "execution": "ssh",
-      "management_address": "172.31.94.32",
+      "management_address": "10.20.10.12",
       "site": "aws",
       "addresses": {
-        "aws-lan": "172.31.94.32"
+        "aws-lan": "10.20.10.12"
       }
     },
     "blockchain-b": {
       "execution": "ssh",
-      "management_address": "172.31.94.33",
+      "management_address": "10.20.10.13",
       "site": "aws",
       "addresses": {
-        "aws-lan": "172.31.94.33"
+        "aws-lan": "10.20.10.13"
       }
     },
     "storage-1": {
       "execution": "ssh",
-      "management_address": "172.31.94.34",
+      "management_address": "10.20.10.14",
       "site": "aws",
       "addresses": {
-        "aws-lan": "172.31.94.34"
+        "aws-lan": "10.20.10.14"
       }
     },
     "storage-2": {
       "execution": "ssh",
-      "management_address": "172.31.94.35",
+      "management_address": "10.20.10.15",
       "site": "aws",
       "addresses": {
-        "aws-lan": "172.31.94.35"
+        "aws-lan": "10.20.10.15"
       }
     }
   },
@@ -92,8 +92,7 @@
     "blockchain-a": "blockchain-a",
     "blockchain-b": "blockchain-b",
     "storage-1": "storage-1",
-    "storage-2": "storage-2",
-    "explorer": "apps"
+    "storage-2": "storage-2"
   },
   "routing": {
     "blockchain_p2p": "aws-lan",
@@ -133,7 +132,7 @@
     }
   },
   "storage": {
-    "cluster_name": "REPLACE-dark-aws-active-six-host",
+    "cluster_name": "dark2-prod-aws",
     "peers": {
       "storage-a": {
         "group": "storage-1"
@@ -167,9 +166,15 @@
       },
       "sites": [
         {
-          "host": "resolve.replace.example.org",
-          "public_origin": "https://resolve.replace.example.org",
+          "host": "resolver-01.dark-pid.net",
+          "public_origin": "https://resolver-01.dark-pid.net",
           "routes": [
+            {
+              "id": "resolver-health-live",
+              "path": "/health/live",
+              "service": "resolver-api",
+              "upstream_path": "/health/live"
+            },
             {
               "id": "arks",
               "path": "/",
@@ -191,38 +196,20 @@
       },
       "sites": [
         {
-          "host": "apps.replace.example.org",
-          "public_origin": "https://apps.replace.example.org",
+          "host": "minter-01.dark-pid.net",
+          "public_origin": "https://minter-01.dark-pid.net",
           "routes": [
             {
-              "id": "dashboard",
-              "path": "/admin/",
-              "service": "dashboard",
-              "upstream_path": "/"
-            },
-            {
-              "id": "explorer",
-              "path": "/explorer/",
-              "service": "explorer",
-              "upstream_path": "/"
+              "id": "minter-health",
+              "path": "/health",
+              "service": "minter-api",
+              "upstream_path": "/health"
             },
             {
               "id": "minter-v1",
               "path": "/api/v1/",
               "service": "minter-api",
               "upstream_path": "/api/v1/"
-            },
-            {
-              "id": "minter-docs",
-              "path": "/api/docs",
-              "service": "minter-api",
-              "upstream_path": "/docs"
-            },
-            {
-              "id": "minter-openapi",
-              "path": "/api/openapi.json",
-              "service": "minter-api",
-              "upstream_path": "/openapi.json"
             }
           ]
         }
@@ -234,14 +221,14 @@
   },
   "overrides": {
     "explorer": {
-      "group": "apps"
+      "enabled": false
     },
     "resolver": {
       "group": "resolver-observer"
     },
     "settings": {
       "minter": {
-        "shoulder": "200"
+        "shoulder": "201"
       }
     }
   }

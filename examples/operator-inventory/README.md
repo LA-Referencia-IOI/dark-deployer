@@ -23,7 +23,7 @@ Each maintained inventory has a companion guide:
 | `local-two-site.json` | [local-two-site.md](local-two-site.md) |
 | `one-server-aws-sandbox.json` | [one-server-aws-sandbox.md](one-server-aws-sandbox.md) |
 | `aws-active-two-site-nine-host.json` | [aws-active-two-site-nine-host.md](aws-active-two-site-nine-host.md) |
-| `aws-active-six-host.json` | [aws-active-six-host.md](aws-active-six-host.md) |
+| `dark2-prod-aws.json` | [dark2-prod-aws.md](dark2-prod-aws.md) |
 | `lima-five-host.json` | [lima-five-host.md](lima-five-host.md) |
 | `lima-two-site-five-host.json` | [lima-two-site-five-host.md](lima-two-site-five-host.md) |
 | `production-five-host.json` | [production-five-host.md](production-five-host.md) |
@@ -75,7 +75,7 @@ independent Resolver-observer bundle with its own public proxy. It does not
 run Minter, Admin, Dashboard, or Explorer. Its three-peer replication target
 preserves a remote copy while both sites are available.
 
-`aws-active-six-host.json` is the AWS-only variant. It retains the complete
+`dark2-prod-aws.json` is the AWS-only variant. It retains the complete
 application and Resolver stack, five validators, and two storage peers on the
 AWS site. Its storage target is two because no remote peer is present.
 
