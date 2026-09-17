@@ -226,6 +226,46 @@ venv/bin/python deploy.py services --inventory inventory.json
 venv/bin/python deploy.py services --inventory inventory.json --json
 ```
 
+En una terminal interactiva, el mismo inventario operativo está disponible en
+una consola TUI: muestra deployments, servicios, detalle, acciones y un panel
+de logs que se refresca mientras está abierto.
+
+```bash
+venv/bin/python deploy.py tui
+```
+
+Las acciones disponibles aparecen como botones en el panel derecho. Use `l`
+para logs, `r` para refrescar y `q` para salir. Las acciones que interrumpen o
+reconstruyen un servicio piden confirmación explícita.
+
+Para observar sin poder actuar, `deploy.py metrics` abre un panel de solo
+lectura sobre el mismo despliegue: muestra una fila por máquina con CPU,
+memoria, contenedores y reinicios, más los contenedores de la máquina
+seleccionada. Cada máquina se muestrea contra su propio daemon Docker, en local
+o por su host SSH configurado, y la edad de cada muestra aparece siempre en
+pantalla. `r` refresca, `m` vuelve a muestrear la máquina seleccionada, `s` cicla
+el orden de los contenedores (nombre, CPU de mayor a menor, memoria de mayor a
+menor) y `q` sale. El criterio activo aparece en el título del panel, el pie
+muestra el ciclo completo y la línea de estado avisa del orden siguiente antes de
+pulsar, para que el efecto de la tecla nunca sea una sorpresa. El panel no tiene
+botones de ciclo de vida, así que puede quedarse abierto junto a la consola de
+operaciones.
+
+```bash
+venv/bin/python deploy.py metrics
+```
+
+Para imprimir las últimas líneas y seguir el log en tiempo real de un servicio
+del bundle desplegado, use el mismo selector exacto. Termine el seguimiento con
+`Ctrl-C`:
+
+```bash
+venv/bin/python deploy.py logs \
+  --deployment dark-operator-local-ha \
+  --target service:dashboard \
+  --tail 100
+```
+
 To operate one service without touching the rest of its machine, use its exact
 `service:ID` selector:
 
@@ -235,7 +275,8 @@ venv/bin/python deploy.py recreate \
   --target service:dashboard --build
 ```
 
-The supported operations are `stop`, `start`, `restart`, `recreate` and `remove`.
+The supported operations are `build`, `stop`, `start`, `restart`, `recreate` and `remove`.
+`build` builds an image without changing the running container.
 `recreate --build` rebuilds from the current deployed Compose context. `remove`
 removes only the managed container and never deletes volumes, bind-mounted data
 or networks. Operations resolve services from the deployed snapshot and exact

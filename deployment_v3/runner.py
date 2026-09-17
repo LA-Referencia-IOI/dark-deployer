@@ -31,7 +31,7 @@ def persistent_data_inventory(plan: DeploymentPlan) -> list[tuple[str, bool]]:
     inventory = []
     persistent_types = {
         "besu-rpc", "besu-validator", "ipfs-kubo", "ipfs-cluster",
-        "minter-postgres", "dashboard-mysql", "dashboard-redis", "contracts-deploy",
+        "minter-postgres", "dashboard-mysql", "contracts-deploy",
     }
     for service in plan.services:
         if service.type not in persistent_types:
@@ -604,7 +604,7 @@ def recreate_service(plan, project_root: Path, service: str, *, build=False):
 
 
 _ONE_SHOT_SERVICE_TYPES = frozenset({"contracts-deploy", "minter-migrate", "dashboard-migrate"})
-_SERVICE_OPERATIONS = frozenset({"stop", "start", "restart", "recreate", "remove"})
+_SERVICE_OPERATIONS = frozenset({"build", "stop", "start", "restart", "recreate", "remove"})
 _SERVICE_TYPE_DESCRIPTIONS = {
     "admin-api": "Administración de autoridades y configuración de cadena",
     "besu-observer": "Nodo Besu observador sin voto QBFT",
@@ -614,7 +614,7 @@ _SERVICE_TYPE_DESCRIPTIONS = {
     "dashboard": "Panel de administración web",
     "dashboard-migrate": "Job de migración del Dashboard",
     "dashboard-mysql": "Base de datos MySQL del Dashboard",
-    "dashboard-redis": "Redis del Dashboard",
+    "dashboard-redis": "Redis heredado; retirar durante la migración",
     "edge-proxy": "Proxy HTTP/Nginx de entrada",
     "explorer": "Explorador de blockchain",
     "ipfs-cluster": "Controlador de replicación IPFS Cluster",
@@ -656,10 +656,18 @@ def _service_description(plan, service) -> str:
 
 def _lifecycle_actions(service, state: str) -> tuple[str, ...]:
     if service.type in _ONE_SHOT_SERVICE_TYPES:
+        return ("build",)
+    if state in {"unreachable", "ambiguous"}:
         return ()
-    if state in {"missing", "unreachable", "ambiguous"}:
-        return ("recreate",) if state == "missing" else ()
-    return ("stop", "start", "restart", "recreate", "remove")
+    if state == "missing":
+        return ("build", "recreate")
+    if state == "running":
+        return ("build", "stop", "restart", "recreate", "remove")
+    if state in {"created", "exited", "dead"}:
+        return ("build", "start", "recreate", "remove")
+    if state == "paused":
+        return ("restart", "recreate", "remove")
+    return ("build", "start", "stop", "restart", "recreate", "remove")
 
 
 def list_managed_services(plan, project_root: Path) -> list[dict[str, object]]:
@@ -763,7 +771,7 @@ def list_managed_deployments(project_root: Path) -> list[dict[str, object]]:
     return rows
 
 
-def _lifecycle_target(plan, project_root: Path, target: str):
+def _lifecycle_target(plan, project_root: Path, target: str, *, allow_one_shot: bool = False):
     """Resolve a service to its one Compose project and execution host."""
     service_id = _service_id_from_target(target)
     root = run_root(project_root, plan.deployment_id)
@@ -771,9 +779,9 @@ def _lifecycle_target(plan, project_root: Path, target: str):
     effective = _effective_plan(deployed_plan, project_root, root)
     try:
         service = effective.service(service_id)
-    except KeyError as exc:
+    except (KeyError, StopIteration) as exc:
         raise ApplyError(f"target service is not declared by deployment {plan.deployment_id}: {service_id}") from exc
-    if service.type in _ONE_SHOT_SERVICE_TYPES:
+    if service.type in _ONE_SHOT_SERVICE_TYPES and not allow_one_shot:
         raise ApplyError(f"{service_id} is a one-shot {service.type} job and has no lifecycle operation")
     machine = effective.machine(service.machine_id)
     group = _group_for_service(effective, service.id)
@@ -782,6 +790,68 @@ def _lifecycle_target(plan, project_root: Path, target: str):
     directory = _compose_directory(effective, machine, root, service.id)
     project = _compose_project(effective, machine, service.id)
     return root, effective, service, machine, group, directory, project
+
+
+def follow_service_logs(plan, project_root: Path, target: str, *, tail: int = 100) -> dict[str, str | int]:
+    """Follow one managed service's Compose logs on its owning host."""
+    if tail < 0:
+        raise ApplyError("--tail must be zero or greater")
+    root, effective, service, machine, group, directory, project = _lifecycle_target(
+        plan, project_root, target, allow_one_shot=True,
+    )
+    executor = resolve_executor(machine)
+    compose = ("docker", "compose", "--project-name", project, "-f", str(directory / "compose.yaml"))
+    labels = (
+        "docker", "ps", "-aq",
+        "--filter", f"label=com.docker.compose.project={project}",
+        "--filter", f"label=com.docker.compose.service={service.id}",
+    )
+    _require(executor.run(("test", "-f", str(directory / "compose.yaml"))), f"locate managed Compose file for {service.id}")
+    containers = executor.run(labels)
+    _require(containers, f"inspect managed Docker labels for {service.id}")
+    matches = [item for item in containers.stdout.splitlines() if item.strip()]
+    if len(matches) != 1:
+        if len(matches) > 1:
+            raise ApplyError(f"multiple managed containers match {service.id} in Compose project {project}")
+        raise ApplyError(f"no managed container found for {service.id} in Compose project {project}")
+    exit_code = executor.stream((*compose, "logs", "--follow", "--tail", str(tail), service.id))
+    if exit_code:
+        raise ApplyError(f"follow logs for {service.id} exited with status {exit_code}")
+    return {
+        "deployment_id": effective.deployment_id,
+        "service": service.id,
+        "machine": machine.id,
+        "group": group.id,
+        "project": project,
+        "tail": tail,
+    }
+
+
+def read_service_logs(plan, project_root: Path, target: str, *, tail: int = 200) -> dict[str, object]:
+    """Return a bounded log snapshot for one managed service.
+
+    This deliberately does not attach to the terminal.  Interactive clients
+    can refresh it on a timer while the ordinary ``logs`` command remains the
+    direct, Ctrl-C friendly streaming interface.
+    """
+    if tail < 0:
+        raise ApplyError("tail must be zero or greater")
+    root, effective, service, machine, group, directory, project = _lifecycle_target(
+        plan, project_root, target, allow_one_shot=True,
+    )
+    executor = resolve_executor(machine)
+    compose = ("docker", "compose", "--project-name", project, "-f", str(directory / "compose.yaml"))
+    result = executor.run((*compose, "logs", "--tail", str(tail), service.id), timeout=30)
+    _require(result, f"read logs for {service.id}")
+    return {
+        "deployment_id": effective.deployment_id,
+        "service": service.id,
+        "machine": machine.id,
+        "group": group.id,
+        "project": project,
+        "tail": tail,
+        "output": result.stdout + result.stderr,
+    }
 
 
 def _write_lifecycle_state(root: Path, deployment_id: str, service_id: str, action: str, machine_id: str, project: str, *, dry_run: bool) -> None:
@@ -822,7 +892,7 @@ def manage_service(plan, project_root: Path, action: str, target: str, *, build:
             "project": project,
             "compose_file": str(directory / "compose.yaml"),
             "action": action,
-            "build": build,
+            "build": build or action == "build",
             "dry_run": dry_run,
         }
         if dry_run:
@@ -836,6 +906,7 @@ def manage_service(plan, project_root: Path, action: str, target: str, *, build:
         if action in {"stop", "start", "restart", "remove"} and not matches:
             raise ApplyError(f"no managed container found for {service.id} in Compose project {project}")
         commands = {
+            "build": (*compose, "build", service.id),
             "stop": (*compose, "stop", service.id),
             "start": (*compose, "start", service.id),
             "restart": (*compose, "restart", service.id),

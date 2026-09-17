@@ -44,8 +44,8 @@ CONNECTION_CONTRACTS = {
     "minter-migrate": {"database": "minter-postgres"},
     "admin-api": {"rpc": "besu-rpc", "contracts": "contracts-deploy"},
     "resolver-api": {"rpc": "besu-rpc", "store_api": "store-api", "contracts": "contracts-deploy"},
-    "dashboard": {"database": "dashboard-mysql", "redis": "dashboard-redis", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api", "migration": "dashboard-migrate"},
-    "dashboard-migrate": {"database": "dashboard-mysql", "redis": "dashboard-redis", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api"},
+    "dashboard": {"database": "dashboard-mysql", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api", "migration": "dashboard-migrate"},
+    "dashboard-migrate": {"database": "dashboard-mysql", "admin_api": "admin-api", "minter_api": "minter-api", "resolver_api": "resolver-api", "store_api": "store-api"},
     "ipfs-cluster": {"kubo": "ipfs-kubo"},
     # Proxy connections are named by the inventory routes.  Their type and
     # completeness are validated from ``configuration.sites[].routes`` below.
@@ -170,9 +170,11 @@ def validate_inventory(raw: dict[str, Any]) -> tuple[dict[str, Any], tuple[Machi
     _validate_schema(raw)
 
     images = _object(raw["images"], "images")
-    required_images = {"besu", "postgres", "mysql", "redis", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"}
-    _only_keys(images, "images", required_images)
-    if set(images) != required_images:
+    required_images = {"besu", "postgres", "mysql", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"}
+    # ``redis`` is accepted only to operate snapshots rendered before Redis
+    # was removed from the Dashboard baseline. New catalog profiles omit it.
+    _only_keys(images, "images", required_images | {"redis"})
+    if not required_images.issubset(images):
         raise _error("images must declare every managed runtime image")
     for image_id, image in images.items():
         _string(image, f"images.{image_id}")
@@ -677,6 +679,8 @@ def _validate_domain(
                 raise _error(f"services.{service.id}.connections.{name} references unknown service {provider_id}")
     for service in services:
         contract = CONNECTION_CONTRACTS.get(service.type, {})
+        if service.type in {"dashboard", "dashboard-migrate"} and "redis" in service.connections:
+            contract = {**contract, "redis": "dashboard-redis"}
         if service.type == "store-api":
             _only_keys(service.configuration, f"services.{service.id}.configuration", {"mode"})
             mode = service.configuration.get("mode", "read_write")

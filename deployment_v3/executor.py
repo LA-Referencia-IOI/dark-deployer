@@ -29,6 +29,10 @@ class Executor:
     def run(self, argv: Sequence[str], *, timeout: float = 30.0) -> CommandResult:
         raise NotImplementedError
 
+    def stream(self, argv: Sequence[str]) -> int:
+        """Run a long-lived command with output attached to this terminal."""
+        raise NotImplementedError
+
 
 class LocalExecutor(Executor):
     def run(self, argv: Sequence[str], *, timeout: float = 30.0) -> CommandResult:
@@ -38,7 +42,17 @@ class LocalExecutor(Executor):
             stdout = exc.stdout or ""
             stderr = (exc.stderr or "") + f"\ncommand timed out after {timeout:.0f}s"
             return CommandResult(tuple(argv), 124, stdout if isinstance(stdout, str) else stdout.decode(errors="replace"), stderr)
+        except OSError as exc:
+            # A binary missing on this host is a destination failure the callers
+            # already know how to report, not an exception in the controller.
+            return CommandResult(tuple(argv), 127, "", str(exc))
         return CommandResult(tuple(argv), completed.returncode, completed.stdout, completed.stderr)
+
+    def stream(self, argv: Sequence[str]) -> int:
+        try:
+            return subprocess.run(list(argv)).returncode
+        except KeyboardInterrupt:
+            return 0
 
 
 class SshExecutor(Executor):
@@ -54,6 +68,17 @@ class SshExecutor(Executor):
         command.append(shlex.join(argv))
         completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         return CommandResult(tuple(command), completed.returncode, completed.stdout, completed.stderr)
+
+    def stream(self, argv: Sequence[str]) -> int:
+        ssh = self.machine.ssh
+        command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-i", ssh.private_key_file, "-p", str(ssh.port)]
+        if ssh.known_hosts_file:
+            command.extend(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
+        command.extend((f"{ssh.user}@{self.machine.management_address}", shlex.join(argv)))
+        try:
+            return subprocess.run(command).returncode
+        except KeyboardInterrupt:
+            return 0
 
     def transfer(self, source: Path, destination: str, *, excludes: tuple[str, ...] = (), timeout: float = 300.0) -> CommandResult:
         ssh = self.machine.ssh

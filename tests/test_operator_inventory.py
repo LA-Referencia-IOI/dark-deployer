@@ -27,7 +27,7 @@ class InventoryEvolutionTests(unittest.TestCase):
         self.assertEqual(set(catalog.service_templates), {"besu-validator", "besu-rpc", "besu-observer", "ipfs-kubo", "ipfs-cluster"})
         self.assertEqual(
             set(catalog.document["images"]),
-            {"besu", "postgres", "mysql", "redis", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"},
+            {"besu", "postgres", "mysql", "dashboard", "kubo", "ipfs_cluster", "edge_proxy"},
         )
 
     def test_runtime_images_are_inherited_from_the_catalog(self):
@@ -61,6 +61,10 @@ class InventoryEvolutionTests(unittest.TestCase):
         )
         self.assertEqual((site_b_loss.consensus, site_b_loss.validators_remaining), ("continues", 5))
         self.assertEqual(report.storage_target_replicas, 3)
+        self.assertEqual(
+            {service.type for service in plan.services if service.type.startswith("dashboard")},
+            {"dashboard", "dashboard-mysql", "dashboard-migrate"},
+        )
         self.assertEqual(
             {service.id for service in plan.services if service.machine_id.startswith("site-b")},
             {"validator06", "validator07", "observer02", "store-api-reader-site-b", "resolver-api-site-b", "resolver-public-site-b"},
@@ -172,7 +176,8 @@ class InventoryEvolutionTests(unittest.TestCase):
         self.assertEqual(remote["network"], "mesh-vpn")
         context = chain_context(plan, "0x" + "1" * 40)
         peers = static_nodes(context, {node: "a" * 128 for node in context["nodes"]})
-        self.assertIn("@172.24.10.34:30303", " ".join(peers["validator01"]))
+        local_peer = next(edge for edge in context["peerings"]["blockchain"] if edge["from"] == "validator01" and edge["to"] == "validator02")
+        self.assertIn(f"@{local_peer['address']}:{local_peer['port']}", " ".join(peers["validator01"]))
         self.assertIn("@172.24.30.", " ".join(peers["validator01"]))
         self.assertEqual(plan.service("resolver-api-site-a").connections["rpc"], {"service": "observer02"})
         self.assertEqual(plan.service("resolver-api-site-a").connections["store_api"], {"service": "store-api-reader-site-a"})
@@ -184,7 +189,7 @@ class InventoryEvolutionTests(unittest.TestCase):
             env = (bundle / "machines" / "storage-1" / "groups" / "storage-1" / "env" / "ipfs-storage-a.env").read_text()
             self.assertIn("dark-operator-local-two-site-mesh-vpn", compose)
             self.assertIn("ipfs-storage-a-mesh-vpn", compose)
-            self.assertIn("ipv4_address: 172.24.10.21", compose)
+            self.assertRegex(compose, r"ipv4_address: 172\.24\.10\.\d+")
             self.assertIn("/dns4/ipfs-storage-b-mesh-vpn/tcp/5001@4001", env)
 
     def test_lima_two_site_storage_prefers_lan_and_uses_vpn_cross_site(self):

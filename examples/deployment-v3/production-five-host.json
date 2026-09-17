@@ -292,19 +292,12 @@
       "type": "dashboard-mysql",
       "machine": "apps"
     },
-    "dashboard-redis": {
-      "type": "dashboard-redis",
-      "machine": "apps"
-    },
     "dashboard-migrate": {
       "type": "dashboard-migrate",
       "machine": "apps",
       "connections": {
         "database": {
           "service": "dashboard-mysql"
-        },
-        "redis": {
-          "service": "dashboard-redis"
         },
         "admin_api": {
           "service": "admin-api"
@@ -326,9 +319,6 @@
       "connections": {
         "database": {
           "service": "dashboard-mysql"
-        },
-        "redis": {
-          "service": "dashboard-redis"
         },
         "admin_api": {
           "service": "admin-api"

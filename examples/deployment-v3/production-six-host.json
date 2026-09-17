@@ -114,7 +114,6 @@
         "chain-worker",
         "admin-api",
         "dashboard-mysql",
-        "dashboard-redis",
         "dashboard-migrate",
         "dashboard",
         "contracts-deploy",
@@ -519,9 +518,6 @@
         "minter_api": {
           "service": "minter-api"
         },
-        "redis": {
-          "service": "dashboard-redis"
-        },
         "resolver_api": {
           "network": "lan",
           "protocol": "tcp",
@@ -545,9 +541,6 @@
         "minter_api": {
           "service": "minter-api"
         },
-        "redis": {
-          "service": "dashboard-redis"
-        },
         "resolver_api": {
           "network": "lan",
           "protocol": "tcp",
@@ -563,10 +556,6 @@
     "dashboard-mysql": {
       "machine": "apps",
       "type": "dashboard-mysql"
-    },
-    "dashboard-redis": {
-      "machine": "apps",
-      "type": "dashboard-redis"
     },
     "explorer": {
       "connections": {

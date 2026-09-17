@@ -83,6 +83,16 @@ lifecycle operations currently valid for it. `--json` is intended for scripts.
 The legacy `--inventory FILE` form only locates the deployment ID; the deployed
 topology snapshot remains the authority for both listing and mutations.
 
+For an interactive console, run `deploy.py tui`. It presents deployments,
+services, context, lifecycle actions, and a periodically refreshed service-log
+panel. The keyboard shortcuts are shown in its footer; `remove` requires an
+explicit confirmation.
+
+`deploy.py logs --deployment ID --target service:ID` follows the selected
+service's Docker Compose log on its owning local or SSH host. It prints the
+last 100 lines by default; use `--tail N` to change that number and `Ctrl-C` to
+stop following without changing the deployment.
+
 ### Recreate versus apply
 
 Use `recreate` when the deployed topology remains correct and only one
@@ -105,6 +115,14 @@ venv/bin/python deploy.py recreate \
   --deployment dark-operator-local-ha \
   --target service:explorer \
   --build
+```
+
+To build the image first without replacing the running container, use:
+
+```bash
+venv/bin/python deploy.py build \
+  --deployment dark-operator-local-ha \
+  --target service:explorer
 ```
 
 Use `--dry-run` before either command to show the resolved deployment, machine,

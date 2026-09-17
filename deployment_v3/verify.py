@@ -51,6 +51,25 @@ def _proxy_route_probe(plan, machine, url: str, host: str):
     return resolve_executor(machine).run(("sh", "-lc", command), timeout=15)
 
 
+def _compose_states(output: str) -> dict[str, str]:
+    """Parse Docker Compose ``ps --format json`` in list or JSONL form."""
+    text = output.strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+        records = parsed if isinstance(parsed, list) else [parsed]
+    except json.JSONDecodeError:
+        records = [json.loads(line) for line in text.splitlines() if line.strip()]
+    if not all(isinstance(item, dict) for item in records):
+        raise ValueError("invalid compose JSON records")
+    return {
+        item["Service"]: item["State"]
+        for item in records
+        if item.get("Service") is not None and item.get("State") is not None
+    }
+
+
 def verify(plan, project_root: Path) -> dict:
     root = run_root(project_root, plan.deployment_id)
     if not (root / "status.json").exists():
@@ -71,8 +90,8 @@ def verify(plan, project_root: Path) -> dict:
             states = {}
             if result.returncode == 0:
                 try:
-                    states = {json.loads(line).get("Service"): json.loads(line).get("State") for line in result.stdout.splitlines() if line.strip()}
-                except json.JSONDecodeError:
+                    states = _compose_states(result.stdout)
+                except (ValueError, json.JSONDecodeError):
                     result = type(result)(result.argv, 1, result.stdout, "invalid compose JSON")
             for service in assigned:
                 ok = service.type in one_shots or states.get(service.id) == "running"
