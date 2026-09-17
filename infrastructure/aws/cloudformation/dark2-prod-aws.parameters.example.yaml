@@ -1,0 +1,29 @@
+# Copy this file to dark2-prod-aws.parameters.yaml and replace every REPLACE value.
+# Do not commit the copied file when it contains account, DNS or network data.
+Parameters:
+  DeploymentName: dark2-prod-aws
+  ResourceNamePrefix: dark-prod-
+  Environment: production
+  VpcCidr: 10.20.0.0/16
+  AlbSubnetCidr: 10.20.0.0/24
+  WorkloadSubnetCidr: 10.20.10.0/24
+  ImageId: /aws/service/canonical/ubuntu/server/26.04/stable/current/arm64/hvm/ebs-gp3/ami-id
+  KeyName: lareferencia-dark
+  DeployUser: ubuntu
+  AppsInstanceType: c7g.2xlarge
+  ResolverInstanceType: c7g.large
+  BlockchainInstanceType: c7g.xlarge
+  StorageInstanceType: c7g.large
+  AppsDataVolumeGiB: '120'
+  ResolverDataVolumeGiB: '60'
+  BlockchainDataVolumeGiB: '120'
+  StorageDataVolumeGiB: '250'
+  AppsHostname: minter-01.dark-pid.net
+  ResolverHostname: resolver-01.dark-pid.net
+  AcmCertificateArn: REPLACE_ACM_CERTIFICATE_ARN
+  HostedZoneId: REPLACE_ROUTE53_HOSTED_ZONE_ID
+  EnableDeletionProtection: 'true'
+  RetainDataVolumes: 'false'
+Tags:
+  dARKManagedBy: rain
+  dARKProfile: dark2-prod-aws
