@@ -154,6 +154,9 @@ dARK_dapp/compiled/
 
 components/
 
+# Account-specific AWS CloudFormation parameters.
+infrastructure/aws/cloudformation/active-six-host.parameters.yaml
+
 __pycache__/
 
 guide.txt

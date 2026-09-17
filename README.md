@@ -118,7 +118,7 @@ additional synchronized chain copy, but they do not count towards quorum.
 | [`local-ha.json`](examples/operator-inventory/local-ha.md) | `lab` | 1 | Logical HA groups and two storage copies on one Docker host |
 | [`one-server-aws-sandbox.json`](examples/operator-inventory/one-server-aws-sandbox.md) | `lab` | 1 | Single-EC2 sandbox run locally on the server, with the local-ha service layout and public HTTP gateway |
 | [`aws-active-two-site-nine-host.json`](examples/operator-inventory/aws-active-two-site-nine-host.md) | `production` | 9 | AWS-active two-site shape: AWS retains QBFT quorum; the remote site preserves a chain and IPFS copy without application services |
-| [`aws-active-six-host.json`](examples/operator-inventory/aws-active-six-host.md) | `production` | 6 | AWS-only active site with applications, Resolver/observer, five validators, and two storage peers |
+| [`dark2-prod-aws.json`](examples/operator-inventory/dark2-prod-aws.md) | `production` | 6 | AWS-only active site with applications, Resolver/observer, five validators, and two storage peers |
 | [`local-two-site.json`](examples/operator-inventory/local-two-site.md) | `lab` | 6 logical | Two isolated Docker LANs plus an inter-site VPN mesh |
 | [`lima-five-host.json`](examples/operator-inventory/lima-five-host.md) | `production` | 5 | Reproducible SSH distribution across Lima machines |
 | [`lima-two-site-five-host.json`](examples/operator-inventory/lima-two-site-five-host.md) | `lab` | 5 | Separate Lima lab: Apps plus two validators and IPFS in site A; two validators and IPFS in site B, joined through WireGuard |
@@ -490,7 +490,7 @@ venv/bin/python deploy.py services --deployment dark-operator-local-ha --json
 | [Architecture](docs/architecture.md) | dARK components and ARK lifecycle |
 | [Lima testing](docs/lima-five-host-test.md) | Five-host distributed lab |
 | [AWS deployment](docs/aws-single-az-five-host.md) | Private EC2 scenario in one Availability Zone |
-| [AWS CloudFormation active site](infrastructure/aws/cloudformation/README.md) | Isolated VPC, six private EC2 hosts, EBS, ALB, TLS hand-off, and inventory outputs |
+| [AWS CloudFormation active site](infrastructure/aws/cloudformation/README.md) | Isolated VPC, six public-IPv4 EC2 hosts in one workload AZ, EBS, ALB, TLS hand-off, and inventory outputs |
 | [Web wizard](web-wizard/README.md) | Local workbench usage and guarantees |
 | [History](docs/history.md) | Archived decisions and superseded documentation |
 

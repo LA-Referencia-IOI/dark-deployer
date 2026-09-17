@@ -423,9 +423,23 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     overrides = _object(raw.get("overrides", {}), "overrides")
     _only_keys(overrides, "overrides", {"explorer", "resolver", "settings", "components"})
     explorer_override = _object(overrides.get("explorer", {}), "overrides.explorer")
-    _only_keys(explorer_override, "overrides.explorer", {"group"})
+    _only_keys(explorer_override, "overrides.explorer", {"enabled", "group"})
+    explorer_enabled = explorer_override.get("enabled", True)
+    if not isinstance(explorer_enabled, bool):
+        raise _fail("overrides.explorer.enabled must be a boolean")
     explorer_group = explorer_override.get("group", "apps")
-    if explorer_group != "apps":
+    if not explorer_enabled:
+        result["services"].pop("explorer", None)
+        for service in result["services"].values():
+            service["connections"] = {
+                key: connection
+                for key, connection in service.get("connections", {}).items()
+                if connection.get("service") != "explorer"
+            }
+        for group in group_services.values():
+            while "explorer" in group:
+                group.remove("explorer")
+    elif explorer_group != "apps":
         group_services["apps"].remove("explorer")
         group_services.setdefault(explorer_group, []).append("explorer")
         group_members.setdefault(explorer_group, []).append("explorer")

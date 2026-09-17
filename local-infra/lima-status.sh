@@ -5,7 +5,9 @@ STORE="$2"
 STORE="$(cd "$(dirname "$STORE")" && pwd)/$(basename "$STORE")"
 export LIMA_HOME="$STORE/.lima"
 limactl list
-for name in dark-apps dark-blockchain-a dark-blockchain-b dark-storage-1 dark-storage-2; do
+for instance_dir in "$LIMA_HOME"/*; do
+  [[ -d "$instance_dir" && -f "$instance_dir/lima.yaml" ]] || continue
+  name="${instance_dir##*/}"
   echo "--- $name ---"
   limactl shell "$name" docker version --format '{{.Server.Version}}' 2>/dev/null || true
 done
