@@ -147,7 +147,7 @@ to `127.0.0.1` and requires a per-run token.
 Requires Python 3.9 or newer. `run.sh` picks the newest usable interpreter for
 the workbench's own venv, in this order: `DARK_PYTHON` if set, then
 `python3.13…3.10` on your `PATH`, then the deployer's own `venv/bin/python`
-(Homebrew 3.12 on macOS), then the system `python3`. The code itself runs under
+(Python 3.14 on macOS), then the system `python3`. The code itself runs under
 3.9 too, so no annotation or syntax needs a newer interpreter.
 
 If you already have a `web-wizard/.venv` from an older interpreter and want to

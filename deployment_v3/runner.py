@@ -64,7 +64,7 @@ def _reject_existing_chain_data(plan: DeploymentPlan, *, resume: bool, clean: bo
     if existing:
         if clean:
             for item in existing:
-                machine_id, _, _, raw_path = item.split(":", 3)
+                machine_id, _, _, raw_path = item.split(":", maxsplit=3)
                 machine = plan.machine(machine_id)
                 _require(resolve_executor(machine).run(_cleanup_path_command(machine, raw_path)), f"clean Besu data for {machine_id}")
             contract = next((item for item in plan.services if item.type == "contracts-deploy"), None)
@@ -575,7 +575,7 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                         record(root, {"step": step.id, "state": "contract_runtime_distributed", "machines": targets})
                 elif step.action == "readiness":
                     from .readiness import ReadinessError, wait_for_phase
-                    phase = step.id.split(":", 1)[1]
+                    phase = step.id.split(":", maxsplit=1)[1]
                     try:
                         if verbose: print(f"[VERBOSE] waiting for {phase} readiness", flush=True)
                         evidence = wait_for_phase(effective, project_root, phase)
@@ -692,7 +692,7 @@ def list_managed_services(plan, project_root: Path) -> list[dict[str, object]]:
                 observed[service_id] = {"state": "unreachable", "detail": error}
             continue
         for line in result.stdout.splitlines():
-            parts = line.split("\t", 2)
+            parts = line.split("\t", maxsplit=2)
             if len(parts) != 3 or parts[0] not in assigned:
                 continue
             service_id, state, detail = parts

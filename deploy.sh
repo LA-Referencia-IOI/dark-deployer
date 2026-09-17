@@ -29,7 +29,7 @@
 # Uso:
 #   ./deploy.sh status --inventory inventory.json
 #   ./deploy.sh metrics
-#   DARK_PYTHON=/opt/homebrew/bin/python3.12 ./deploy.sh validate --inventory inventory.json
+#   DARK_PYTHON=/opt/homebrew/bin/python3.14 ./deploy.sh validate --inventory inventory.json
 #
 # Compatible con el bash 3.2 de macOS: ni arrays asociativos ni otras
 # construcciones de bash 4+.
@@ -48,11 +48,10 @@ if [ ! -f "$requirements" ] || [ ! -f "$requirements_tui" ]; then
 fi
 
 # Elige el intérprete con el que crear el venv. requirements.txt fija versiones
-# de 2023-2024 (web3 6.20.0, ckzg 1.0.2, cytoolz 0.12.3), así que 3.12 es la
-# apuesta segura y 3.13 queda al final. Un DARK_PYTHON explícito también debe
-# cumplir el mínimo: nunca se crea el entorno con Python menor que 3.10.
+# compatibles con Python 3.14. Un DARK_PYTHON explícito debe seleccionar
+# exactamente CPython 3.14 para que el entorno del controlador sea reproducible.
 is_supported_python() {
-  "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+  "$1" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)' >/dev/null 2>&1
 }
 
 choose_python() {
@@ -62,14 +61,14 @@ choose_python() {
       return 1
     fi
     if ! is_supported_python "$DARK_PYTHON"; then
-      echo "[deploy] DARK_PYTHON debe ser Python 3.10 o superior: $DARK_PYTHON" >&2
+      echo "[deploy] DARK_PYTHON debe ser Python 3.14: $DARK_PYTHON" >&2
       return 1
     fi
     printf '%s\n' "$DARK_PYTHON"
     return
   fi
   local candidate resolved
-  for candidate in python3.12 python3.11 python3.10 python3.13 python3; do
+  for candidate in python3.14 python3; do
     if [ -x "$candidate" ]; then
       resolved="$candidate"
     elif command -v "$candidate" >/dev/null 2>&1; then
@@ -91,7 +90,7 @@ if [ -d "$venv" ] && [ ! -x "$py" ]; then
 fi
 
 if [ -x "$py" ] && ! is_supported_python "$py"; then
-  echo "[deploy] $py usa Python menor que 3.10; no se puede usar este venv." >&2
+  echo "[deploy] $py no usa Python 3.14; no se puede usar este venv." >&2
   echo "[deploy] Elimina venv/ y vuelve a lanzar ./deploy.sh con un Python compatible." >&2
   exit 1
 fi
@@ -100,7 +99,7 @@ fresh=0
 if [ ! -x "$py" ]; then
   base="$(choose_python || true)"
   if [ -z "$base" ]; then
-  echo "[deploy] no hay ningún Python 3.10 o superior; define DARK_PYTHON con la ruta a un intérprete compatible" >&2
+  echo "[deploy] no hay Python 3.14; define DARK_PYTHON con la ruta a un intérprete Python 3.14" >&2
     exit 1
   fi
   echo "[deploy] creando venv en $venv con $base"
@@ -147,11 +146,11 @@ for path in (requirements, requirements_tui):
         raw = handle.read()
     digest.update(raw)
     for line in raw.decode("utf-8", "replace").splitlines():
-        texto = line.split("#", 1)[0].strip()
+        texto = line.split("#", maxsplit=1)[0].strip()
         # Fuera comentarios, opciones de pip (-r, -e, --hash) y continuaciones.
         if not texto or texto.startswith("-") or texto.endswith("\\"):
             continue
-        nombre = re.split(r"[<>=!~;\[ ]", texto, 1)[0].strip().lower().replace("_", "-")
+        nombre = re.split(r"[<>=!~;\[ ]", texto, maxsplit=1)[0].strip().lower().replace("_", "-")
         if nombre:
             declaradas.append((nombre, texto))
 digest.update(sys.version.encode())

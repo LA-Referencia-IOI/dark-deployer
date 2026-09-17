@@ -16,7 +16,6 @@ responsabilidad del controlador y de `deploy.py`.
   `blockchain-b`, `storage-1` y `storage-2`;
 - un Launch Template común para las seis EC2, con Ubuntu 26.04 LTS ARM64,
   root gp3 de 30 GiB, IMDSv2, SSM Agent, Docker Engine, Docker Compose v2,
-  Python 3.12 con `venv` y headers de desarrollo, y
   Tailscale y el bootstrap idempotente del host;
 - seis volúmenes EBS `gp3` cifrados, uno por host. `RetainDataVolumes` decide si
   se conservan al borrar o reemplazar el stack. El bootstrap espera el volumen, lo inicializa solo si
@@ -68,7 +67,21 @@ ALB. No se crea ningún nombre DNS público para el Dashboard.
    `ssh.user` del operator inventory.
 4. Dos nombres DNS y un certificado ACM regional validado.
 
-El `UserData` prepara el host completo, pero no instala dARK ni modifica
+Después de acceder a `apps`, instala allí el intérprete del controlador y crea
+el entorno del repositorio. CloudFormation no instala Python en los hosts:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3.14 python3.14-venv
+cd /home/ubuntu/dark-deployer
+python3.14 -m venv venv
+venv/bin/python -m pip install -r requirements.txt -r requirements-tui.txt
+```
+
+Las demás máquinas solo necesitan la preparación base de Docker, Compose y
+SSM realizada por el bootstrap.
+
+El `UserData` prepara el host completo, pero no instala Python ni dARK, ni modifica
 wallets, contratos o secretos. También deja instalado y activo el daemon de
 Tailscale, pero no ejecuta `tailscale up` ni incluye auth keys. El enrolamiento
 en la tailnet queda para una fase posterior mediante SSM o `deploy.py`. Los

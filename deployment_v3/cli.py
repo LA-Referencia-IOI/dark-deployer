@@ -390,7 +390,7 @@ def _install(args: argparse.Namespace, plan) -> None:
         print("Managed persistent directories:")
         all_data = persistent_data_inventory(effective_for_data)
         for index, (item, present) in enumerate(all_data, start=1):
-            machine, service, service_type, path = item.split(":", 3)
+            machine, service, service_type, path = item.split(":", maxsplit=3)
             state = "EXISTS - will be deleted" if present else "does not exist - nothing to delete"
             print(f"  {index}. {machine} / {service} ({service_type}) [{state}]")
             print(f"     {path}")

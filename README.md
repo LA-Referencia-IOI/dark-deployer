@@ -33,7 +33,7 @@ validate and explain the inventory being designed.
 
 ## Requirements
 
-- Python 3.10 or newer; Python 3.12 is recommended.
+- Python 3.14.
 - Docker Engine and Docker Compose v2 for local execution.
 - SSH access from the controller for remote deployments.
 - Reachable LAN/VPN addresses as declared by the inventory.
@@ -42,7 +42,7 @@ validate and explain the inventory being designed.
 Basic setup:
 
 ```bash
-python3.12 -m venv venv
+python3.14 -m venv venv
 venv/bin/python -m pip install -r requirements.txt
 docker version
 docker compose version

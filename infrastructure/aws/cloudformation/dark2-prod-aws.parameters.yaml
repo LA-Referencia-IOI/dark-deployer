@@ -1,7 +1,7 @@
 # Local parameters for the current AWS account. Do not commit this file.
 Parameters:
   DeploymentName: dark2-prod-aws
-  ResourceNamePrefix: dark-prod-
+  ResourceNamePrefix: dark2-prod-
   Environment: production
   VpcCidr: 10.20.0.0/16
   AlbSubnetCidr: 10.20.0.0/24

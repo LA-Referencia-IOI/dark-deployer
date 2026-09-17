@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "webwizard"
 version = "0.1.0"
 description = "Local, read-only operator workbench for dARK deployment v3"
-requires-python = ">=3.9"
+requires-python = ">=3.14,<3.15"
 # The workbench keeps its own dependency list (mirrored in requirements.txt) so
 # the deployer never has to install anything on its behalf.
 dependencies = [

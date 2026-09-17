@@ -72,7 +72,10 @@ def main() -> None:
     def deploy(abi: list, bytecode: str, args: list, tx_nonce: int) -> str:
         transaction = web3.eth.contract(abi=abi, bytecode=bytecode).constructor(*args).build_transaction({"from": account.address, "nonce": tx_nonce, "chainId": chain_id, "gas": 3_000_000, "gasPrice": web3.eth.gas_price})
         signed = account.sign_transaction(transaction)
-        receipt = web3.eth.wait_for_transaction_receipt(web3.eth.send_raw_transaction(signed.rawTransaction), timeout=180)
+        raw_transaction = getattr(signed, "raw_transaction", getattr(signed, "rawTransaction", None))
+        if raw_transaction is None:
+            raise RuntimeError("eth-account returned a signed transaction without raw bytes")
+        receipt = web3.eth.wait_for_transaction_receipt(web3.eth.send_raw_transaction(raw_transaction), timeout=180)
         if receipt.status != 1 or not receipt.contractAddress:
             raise RuntimeError("contract deployment transaction failed")
         return receipt.contractAddress

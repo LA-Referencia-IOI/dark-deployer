@@ -2,7 +2,7 @@
 
 ## Install
 
-Use Python 3.12, Docker Engine and Compose v2. A maintained compact operator
+Use Python 3.14, Docker Engine and Compose v2. A maintained compact operator
 inventory can be installed directly; copy and offline review commands are
 optional.
 For production, provision

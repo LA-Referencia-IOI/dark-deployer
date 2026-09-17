@@ -243,7 +243,7 @@ def summarise_warnings(warnings: tuple[str, ...], *, limit: int = 5) -> tuple[st
     """
     grouped: dict[str, list[str]] = {}
     for warning in warnings:
-        head = warning.split(WARNING_PAYLOAD_SEPARATOR, 1)[0]
+        head = warning.split(WARNING_PAYLOAD_SEPARATOR, maxsplit=1)[0]
         grouped.setdefault(head, []).append(warning)
     summary: list[str] = []
     for head, items in grouped.items():

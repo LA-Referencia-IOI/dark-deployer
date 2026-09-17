@@ -11,16 +11,15 @@ repo="$(dirname "$here")"
 venv="$here/.venv"
 
 # Pick the newest usable interpreter for the workbench's own venv. Preference
-# order: an explicit DARK_PYTHON, then python3.13..3.10, then the deployer's own
-# venv interpreter (Homebrew 3.12 on macOS), then the system python3.
+# order: an explicit DARK_PYTHON, then Python 3.14, then the deployer's own
+# venv interpreter, then the system python3 if it is Python 3.14.
 choose_python() {
   if [ -n "${DARK_PYTHON:-}" ]; then
     printf '%s\n' "$DARK_PYTHON"
     return
   fi
   local candidate resolved
-  for candidate in python3.13 python3.12 python3.11 python3.10 \
-                   "$repo/venv/bin/python" python3 python3.9; do
+  for candidate in python3.14 "$repo/venv/bin/python" python3; do
     if [ -x "$candidate" ]; then
       resolved="$candidate"
     elif command -v "$candidate" >/dev/null 2>&1; then
@@ -28,13 +27,17 @@ choose_python() {
     else
       continue
     fi
-    # Only accept an interpreter new enough to run the workbench.
-    if "$resolved" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+    if "$resolved" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)' >/dev/null 2>&1; then
       printf '%s\n' "$resolved"
       return
     fi
   done
 }
+
+if [ -x "$venv/bin/python" ] && ! "$venv/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)' >/dev/null 2>&1; then
+  echo "[web-wizard] $venv usa un Python distinto de 3.14; elimina ese entorno y vuelve a ejecutar el launcher." >&2
+  exit 1
+fi
 
 if [ ! -x "$venv/bin/python" ]; then
   base="$(choose_python || true)"

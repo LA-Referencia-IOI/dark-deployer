@@ -59,6 +59,8 @@ def test_active_six_host_profile_has_an_isolated_vpc_and_six_public_workload_hos
     bootstrap = launch_template["UserData"]["Fn::Sub"]
     assert "/srv/dark/data/docker" in bootstrap
     assert "docker-compose-v2" in bootstrap
+    assert "python3.12" not in bootstrap
+    assert "python3.14" not in bootstrap
     assert "tailscale.com/install.sh" in bootstrap
     assert "amazon-ssm-agent" in bootstrap
     for host in hosts.values():

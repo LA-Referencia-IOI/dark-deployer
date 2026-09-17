@@ -32,7 +32,7 @@ Available templates are `operator-local-simple`, `operator-local-observer`, `ope
 
 ```bash
 cd /Users/lmatas/source/dark-deployer
-python3.12 -m venv venv
+python3.14 -m venv venv
 venv/bin/python -m pip install -r requirements.txt
 docker version
 docker compose version

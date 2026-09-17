@@ -1,6 +1,6 @@
-FROM python:3.10-slim
+FROM python:3.14-slim
 
 WORKDIR /runner
-RUN pip install --no-cache-dir 'web3>=6.20,<7'
+RUN pip install --no-cache-dir 'web3>=7.16,<8'
 COPY deployment_v3/contracts.py /runner/contracts.py
 ENTRYPOINT ["python", "/runner/contracts.py"]

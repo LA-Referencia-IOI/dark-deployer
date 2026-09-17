@@ -122,7 +122,7 @@ def _dashboard_public_path(plan: DeploymentPlan, dashboard: ServiceInstance) -> 
 
 def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
     connection = lambda name: _url(plan, service, service.connections[name]["service"], service.connections[name])
-    host = lambda name: connection(name).split("//", 1)[1].rsplit(":", 1)[0]
+    host = lambda name: connection(name).split("//", maxsplit=1)[1].rsplit(":", maxsplit=1)[0]
     values = {"DARK_DEPLOYMENT_ID": plan.deployment_id}
     if service.type in {"minter-api", "minter-worker"}:
         replication = plan.raw["settings"]["minter"]["replication"]
