@@ -79,6 +79,32 @@ class InventoryEvolutionTests(unittest.TestCase):
         self.assertEqual(services["store-api-reader-site-b"]["configuration"], {"mode": "read_only"})
         self.assertEqual(services["resolver-public-site-b"]["connections"]["arks-site-b"], {"service": "resolver-api-site-b"})
 
+    def test_aws_active_six_disables_explorer_and_uses_private_minter_prefix(self):
+        path = ROOT / "examples/operator-inventory/dark2-prod-aws.json"
+        resolution = resolve_inventory(json.loads(path.read_text()), source_path=path)
+        services = resolution.document["services"]
+        self.assertNotIn("explorer", services)
+        self.assertNotIn("dashboard-redis", services)
+        routes = [
+            (proxy, route)
+            for proxy in services.values()
+            if proxy["type"] == "edge-proxy"
+            for site in proxy["configuration"]["sites"]
+            for route in site["routes"]
+        ]
+        resolved_routes = [
+            (route, proxy["connections"][route["connection"]]["service"])
+            for proxy, route in routes
+        ]
+        self.assertEqual(
+            [(route["path"], route["upstream_path"]) for route, service in resolved_routes if service == "minter-api"],
+            [
+                ("/health", "/health"),
+                ("/api/v1/", "/api/v1/"),
+            ],
+        )
+        self.assertFalse(any(route["path"] in {"/api/docs", "/api/openapi.json"} for route, _ in resolved_routes))
+
     def test_resolver_store_replica_uses_only_same_site_clusters(self):
         document = json.loads((ROOT / "examples" / "operator-inventory/aws-active-two-site-nine-host.json").read_text())
         resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
