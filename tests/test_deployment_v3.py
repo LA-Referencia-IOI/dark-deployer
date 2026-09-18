@@ -580,8 +580,8 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertIn("IPFS_CLUSTER_API_URL=http://cluster-storage-a:9094\n", env)
         self.assertIn("WORKER_STATUS_URL=http://minter-api:8001/api/v1/worker/status\n", env)
         self.assertIn("BLOCK_EXPLORER_URL=http://localhost/explorer/\n", env)
-        self.assertIn("GRAFANA_URL=http://localhost:3000\n", env)
-        self.assertIn("PROMETHEUS_URL=http://localhost:9090\n", env)
+        self.assertIn("GRAFANA_URL=http://localhost:3000/dashboards\n", env)
+        self.assertIn("PROMETHEUS_URL=http://localhost:9090/targets\n", env)
 
     def test_proxy_uses_container_listener_and_public_origin(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-five-host.json")

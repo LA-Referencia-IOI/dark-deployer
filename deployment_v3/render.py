@@ -193,8 +193,8 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
             # The bundled monitoring stack publishes these ports on loopback.
             # Remote deployments leave them empty until an authenticated public
             # monitoring endpoint is explicitly configured.
-            "GRAFANA_URL": "http://localhost:3000" if local_monitoring else "",
-            "PROMETHEUS_URL": "http://localhost:9090" if local_monitoring else "",
+            "GRAFANA_URL": "http://localhost:3000/dashboards" if local_monitoring else "",
+            "PROMETHEUS_URL": "http://localhost:9090/targets" if local_monitoring else "",
         }
     elif service.type == "minter-postgres":
         values |= {"POSTGRES_USER": "dark", "POSTGRES_DB": "minter", "POSTGRES_PASSWORD": "dark"}
