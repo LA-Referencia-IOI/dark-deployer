@@ -348,6 +348,25 @@ Resources:
             mountpoint -q /srv/dark/data || mount /srv/dark/data
             install -d -m 0750 -o "$deploy_user" -g "$deploy_user" /srv/dark/data
             install -d -m 0710 -o root -g root /srv/dark/data/docker
+            # Docker's data-root does not move containerd snapshots on Ubuntu.
+            # Relocate them before starting Docker so image layers never fill
+            # the root volume.
+            systemctl stop docker.service containerd.service 2>/dev/null || true
+            if [ ! -L /var/lib/containerd ]; then
+              if [ -e /srv/dark/data/containerd ]; then
+                install -d -m 0710 -o root -g root /srv/dark/data/containerd
+                [ ! -d /var/lib/containerd ] || cp -a /var/lib/containerd/. /srv/dark/data/containerd/
+                rm -rf /var/lib/containerd
+              else
+                install -d -m 0710 -o root -g root /srv/dark/data
+                if [ -d /var/lib/containerd ]; then
+                  mv /var/lib/containerd /srv/dark/data/containerd
+                else
+                  install -d -m 0710 -o root -g root /srv/dark/data/containerd
+                fi
+              fi
+              ln -s /srv/dark/data/containerd /var/lib/containerd
+            fi
             usermod -aG docker "$deploy_user"
 
             install -d -m 0755 /etc/docker /etc/systemd/system/docker.service.d
@@ -366,6 +385,7 @@ Resources:
             systemctl daemon-reload
             systemctl enable --now docker.service
             docker info --format '{{.DockerRootDir}}' | grep -Fx /srv/dark/data/docker
+            test "$(readlink -f /var/lib/containerd)" = /srv/dark/data/containerd
             docker compose version
             systemctl is-active --quiet tailscaled.service
 
