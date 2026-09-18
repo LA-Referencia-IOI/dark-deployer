@@ -1,0 +1,82 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DiscoverDarkInstances",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "StartSessionOnDarkInstances",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": "arn:aws:ec2:us-east-1:524284048780:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/dARKDeployment": "dark2-prod-aws"
+        }
+      }
+    },
+    {
+      "Sid": "UseSessionManagerPortForwardingDocuments",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": [
+        "arn:aws:ssm:us-east-1::document/AWS-StartPortForwardingSession",
+        "arn:aws:ssm:us-east-1::document/AWS-StartPortForwardingSessionToRemoteHost"
+      ]
+    },
+    {
+      "Sid": "ResumeAndTerminateOwnSessions",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:ResumeSession",
+        "ssm:TerminateSession"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:524284048780:session/${aws:userid}-*",
+        "arn:aws:ssm:us-east-1:524284048780:session/${aws:username}-*"
+      ]
+    },
+    {
+      "Sid": "InspectSessionsAndNodes",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:DescribeSessions",
+        "ssm:GetConnectionStatus"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UseRunShellScriptDocument",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ssm:us-east-1::document/AWS-RunShellScript"
+    },
+    {
+      "Sid": "RunCommandsOnDarkInstances",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:us-east-1:524284048780:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/dARKDeployment": "dark2-prod-aws"
+        }
+      }
+    },
+    {
+      "Sid": "ReadCommandResults",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:ListCommands"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
