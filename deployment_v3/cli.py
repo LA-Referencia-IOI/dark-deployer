@@ -33,6 +33,19 @@ from .inventory_resolver import resolve_inventory_path
 from .availability import analyze as analyze_availability
 
 
+def _format_preflight_failure(failed: dict[str, list[dict[str, object]]]) -> str:
+    lines = ["installation preflight failed"]
+    for machine_id, checks in failed.items():
+        lines.append(f"  {machine_id}: FAIL")
+        for item in checks:
+            lines.append(f"    - {item['check']}")
+            detail = str(item.get("stderr") or item.get("stdout") or "").strip()
+            if detail:
+                for line in detail.splitlines():
+                    lines.append(f"      {line}")
+    return "\n".join(lines)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
@@ -273,7 +286,7 @@ def _install(args: argparse.Namespace, plan) -> None:
         if any(not item["ok"] for item in checks)
     }
     if failed:
-        raise ApplyError("installation preflight failed: " + json.dumps(failed, sort_keys=True))
+        raise ApplyError(_format_preflight_failure(failed))
     progress("preflight passed")
     if not args.skip_acquire:
         progress("acquiring component checkouts")
