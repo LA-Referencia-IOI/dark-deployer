@@ -22,6 +22,7 @@ COMPONENT_PATHS = {
     "dark-core-resolver-api": "components/dark-core-resolver-api",
     "dark-store-api": "components/dark-store-api",
     "dark-ipfs": "components/dark-ipfs",
+    "dark-monitoring": "components/dark-monitoring",
 }
 
 
