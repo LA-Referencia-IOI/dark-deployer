@@ -340,7 +340,9 @@ Resources:
             done
             [ -b "$data_device" ] || { echo 'data volume not attached' >&2; exit 1; }
             blkid "$data_device" >/dev/null 2>&1 || mkfs.ext4 -F "$data_device"
-            install -d -m 0750 /srv/dark/data
+            install -d -m 0755 -o "$deploy_user" -g "$deploy_user" /srv/dark
+            install -d -m 0750 -o "$deploy_user" -g "$deploy_user" /srv/dark/data
+            install -d -m 0700 -o "$deploy_user" -g "$deploy_user" /srv/dark/secrets
             uuid="$(blkid -s UUID -o value "$data_device")"
             grep -qsE '[[:space:]]/srv/dark/data[[:space:]]' /etc/fstab || echo "UUID=$uuid /srv/dark/data ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2" >> /etc/fstab
             mountpoint -q /srv/dark/data || mount /srv/dark/data
