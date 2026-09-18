@@ -19,8 +19,9 @@ responsabilidad del controlador y de `deploy.py`.
   Tailscale y el bootstrap idempotente del host;
 - seis volúmenes EBS `gp3` cifrados, uno por host. `RetainDataVolumes` decide si
   se conservan al borrar o reemplazar el stack. El bootstrap espera el volumen, lo inicializa solo si
-  está vacío, lo monta en `/srv/dark/data` y configura Docker para usar
-  `/srv/dark/data/docker` como `data-root`;
+  está vacío, lo monta en `/srv/dark/data`, configura Docker para usar
+  `/srv/dark/data/docker` como `data-root` y redirige los snapshots de
+  `containerd` a `/srv/dark/data/containerd`;
 - un rol de instancia limitado a `AmazonSSMManagedInstanceCore`, IMDSv2
   obligatorio y Security Groups derivados de
   `shared/firewall-suggestion.json` renderizado para el inventario;

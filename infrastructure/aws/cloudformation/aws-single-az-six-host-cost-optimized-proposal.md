@@ -200,10 +200,10 @@ Cada host tendrá dos volúmenes EBS separados:
 - volumen gp3 independiente para los datos persistentes de dARK.
 
 El volumen de datos se montará en `/srv/dark/data`. Además de los datos de
-los servicios, Docker deberá usar `/srv/dark/data/docker` como su
-`data-root`. Esto incluye imágenes, capas, cache de BuildKit, capas
-escribibles y logs gestionados por Docker. El objetivo es que el crecimiento
-normal de Docker no consuma el root de 30 GiB.
+los servicios, Docker usa `/srv/dark/data/docker` como su `data-root` y
+`containerd` usa `/srv/dark/data/containerd` para snapshots y capas. El
+objetivo es que el crecimiento normal de imágenes, capas, cache de BuildKit,
+capas escribibles y logs no consuma el root de 30 GiB.
 
 La distribución prevista es:
 
@@ -214,7 +214,8 @@ root gp3 (30 GiB)
 datos gp3
 └── /srv/dark/data
     ├── <deployment>/...       datos persistentes de dARK
-    └── docker/                data-root de Docker
+    ├── docker/                data-root de Docker
+    └── containerd/            snapshots y capas del runtime
 ```
 
 Los tamaños de datos acordados son:
@@ -237,10 +238,8 @@ alertas y ampliación se definirá posteriormente; como punto de partida se
 recomienda alertar al 70 %, escalar la revisión al 80 % y tratar el 90 % como
 umbral crítico.
 
-La configuración de Docker como `data-root` del volumen de datos queda
-documentada como decisión de diseño, pero se implementará al preparar la
-plantilla Rain/CloudFormation. Hasta esa etapa, el despliegue actual puede
-seguir usando temporalmente `/var/lib/docker` en el root.
+La plantilla Rain/CloudFormation configura tanto el `data-root` de Docker
+como el almacenamiento de snapshots de `containerd` en el volumen de datos.
 
 ## CloudFormation, Rain y deployer
 
