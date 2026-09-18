@@ -74,13 +74,28 @@ def _json_rpc_result(result, method: str):
 
 def _observer_rpc(plan, machine, observer, method: str, params: list | None = None):
     """Query an observer without publishing its RPC port on the host."""
-    payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params or [], "id": 1})
+    payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params or [], "id": 1}, separators=(",", ":"))
     network = f"{plan.deployment_id}-{machine.id}"
     return resolve_executor(machine).run((
         "docker", "run", "--rm", "--network", network,
         "curlimages/curl:8.12.1", "-fsS", "--max-time", "5",
         "-H", "Content-Type: application/json", "--data", payload,
         f"http://{observer.id}:8545",
+    ), timeout=20)
+
+
+def rpc_request(plan, root, rpc, method: str, params: list | None = None):
+    """Call an RPC endpoint without requiring a host-published port."""
+    machine = plan.machine(rpc.machine_id)
+    payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params or [], "id": 1}, separators=(",", ":"))
+    if rpc.exposure and rpc.exposure.get("mode") != "none":
+        return _curl(plan, machine, _host_url(rpc, machine), payload)
+    network = f"{plan.deployment_id}-{machine.id}"
+    return resolve_executor(machine).run((
+        "docker", "run", "--rm", "--network", network,
+        "curlimages/curl:8.12.1", "-fsS", "--max-time", "5",
+        "-H", "Content-Type: application/json", "--data", payload,
+        f"http://{rpc.id}:{internal_port(rpc)}",
     ), timeout=20)
 
 
@@ -97,7 +112,7 @@ def observer_status(plan, root, observer) -> tuple[bool, str, dict]:
             )
         }
         primary = plan.primary_rpc()
-        primary_result = _curl(plan, plan.machine(primary.machine_id), _host_url(primary, plan.machine(primary.machine_id)), '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}')
+        primary_result = rpc_request(plan, root, primary, "eth_blockNumber")
         primary_height = int(_json_rpc_result(primary_result, "primary eth_blockNumber"), 16)
     except (ReadinessError, TypeError, ValueError) as exc:
         return False, f"{observer.id}: {exc}", {}
@@ -133,21 +148,7 @@ def store_health_probe(plan, machine, root, service, *, refresh: bool = False):
 
 def _rpc(plan, root):
     rpc = plan.primary_rpc()
-    machine = plan.machine(rpc.machine_id)
-    payload = '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'
-    if rpc.exposure and rpc.exposure.get("mode") != "none":
-        result = _curl(plan, machine, _host_url(rpc, machine), payload)
-    else:
-        # Besu intentionally has no curl/wget. Keep RPC private and probe it
-        # from a disposable HTTP client on the same Compose network instead
-        # of publishing 8545 solely for readiness.
-        network = f"{_compose_project(plan, machine, rpc.id)}_default"
-        result = resolve_executor(machine).run((
-            "docker", "run", "--rm", "--network", network,
-            "curlimages/curl:8.12.1", "-fsS", "--max-time", "5",
-            "-H", "Content-Type: application/json", "--data", payload,
-            f"http://{rpc.id}:{internal_port(rpc)}",
-        ), timeout=20)
+    result = rpc_request(plan, root, rpc, "net_peerCount")
     if result.returncode:
         return False, result.stderr.strip() or result.stdout.strip()
     try:
