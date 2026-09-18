@@ -13,6 +13,22 @@ class AcquisitionError(RuntimeError):
     """A component could not be cloned or advanced to its inventory branch."""
 
 
+def _repository_urls(url: str) -> tuple[str, ...]:
+    """Return the declared Git URL followed by a public HTTPS equivalent."""
+    candidates = [url]
+    if url.startswith("git@github.com:"):
+        candidates.append("https://github.com/" + url.removeprefix("git@github.com:"))
+    elif url.startswith("ssh://git@github.com/"):
+        candidates.append("https://github.com/" + url.removeprefix("ssh://git@github.com/"))
+    return tuple(dict.fromkeys(candidate.rstrip("/") for candidate in candidates))
+
+
+def _same_repository(left: str, right: str) -> bool:
+    return {url.rstrip("/").removesuffix(".git") for url in _repository_urls(left)}.intersection(
+        {url.rstrip("/").removesuffix(".git") for url in _repository_urls(right)}
+    ) != set()
+
+
 def _run(argv: tuple[str, ...], *, cwd: Path | None = None) -> str:
     result = subprocess.run(argv, cwd=cwd, text=True, capture_output=True)
     if result.returncode:
@@ -29,6 +45,19 @@ def _branch_exists(url: str, branch: str) -> bool:
         return False
     detail = result.stderr.decode(errors="replace").strip() or "remote unavailable"
     raise AcquisitionError(f"cannot inspect branch {branch} at {url}: {detail}")
+
+
+def _reachable_branch_url(url: str, branch: str) -> str:
+    errors: list[str] = []
+    for candidate in _repository_urls(url):
+        try:
+            if _branch_exists(candidate, branch):
+                return candidate
+        except AcquisitionError as exc:
+            errors.append(str(exc))
+    if errors:
+        raise AcquisitionError("repository is unreachable through all configured transports: " + " | ".join(errors))
+    raise AcquisitionError(f"branch '{branch}' does not exist for repository {url}")
 
 
 def acquire_components(plan: DeploymentPlan, project_root: Path, *, update_existing: bool = True) -> dict[str, str]:
@@ -48,15 +77,14 @@ def acquire_components(plan: DeploymentPlan, project_root: Path, *, update_exist
         branch = definition["branch"]
         target = project_root / relative
         if not target.exists():
-            if not _branch_exists(url, branch):
-                raise AcquisitionError(f"branch '{branch}' does not exist for {component_id}")
+            clone_url = _reachable_branch_url(url, branch)
             target.parent.mkdir(parents=True, exist_ok=True)
-            _run(("git", "clone", "--branch", branch, "--single-branch", "--", url, str(target)))
+            _run(("git", "clone", "--branch", branch, "--single-branch", "--", clone_url, str(target)))
         else:
             if not (target / ".git").is_dir():
                 raise AcquisitionError(f"component path is not a Git repository: {target}")
             origin = _run(("git", "remote", "get-url", "origin"), cwd=target)
-            if origin.rstrip("/").removesuffix(".git") != url.rstrip("/").removesuffix(".git"):
+            if not _same_repository(origin, url):
                 raise AcquisitionError(f"component {component_id} origin differs: {origin} != {url}")
             if not update_existing:
                 local = _run(("git", "branch", "--show-current"), cwd=target)
@@ -71,8 +99,9 @@ def acquire_components(plan: DeploymentPlan, project_root: Path, *, update_exist
             dirty = subprocess.run(("git", "status", "--porcelain"), cwd=target, capture_output=True, text=True)
             if dirty.stdout.strip():
                 print(f"[WARNING] {component_id} has local changes; preserving them while updating the branch")
-            if not _branch_exists(url, branch):
-                raise AcquisitionError(f"branch '{branch}' does not exist for {component_id}")
+            fetch_url = _reachable_branch_url(url, branch)
+            if not _same_repository(origin, fetch_url):
+                _run(("git", "remote", "set-url", "origin", fetch_url), cwd=target)
             _run(("git", "fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"), cwd=target)
             local = _run(("git", "branch", "--show-current"), cwd=target)
             if local != branch:
