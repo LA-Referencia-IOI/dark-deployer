@@ -196,7 +196,10 @@ def _private_plan(plan, *, secret_root: Path, wallet_file: Path, signer_file: Pa
                         runtime.chmod(0o600)
     for secret_id, definition in raw.get("secrets", {}).items():
         candidate = secret_root / definition["path"]
-        if candidate.is_file() and not definition.get("source"):
+        # Managed greenfield secrets take precedence over catalog/operator
+        # placeholder sources such as REPLACE/secrets.  Explicit private
+        # inputs remain supported through the generated secret directory.
+        if candidate.is_file():
             definition["source"] = str(candidate)
     raw["blockchain"]["artifact"]["source"] = str(artifact_root)
     return replace(plan, raw=raw)
