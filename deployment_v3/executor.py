@@ -78,7 +78,7 @@ class SshExecutor(Executor):
 
     def run(self, argv: Sequence[str], *, timeout: float = 30.0) -> CommandResult:
         ssh = self.machine.ssh
-        command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-i", ssh.private_key_file, "-p", str(ssh.port)]
+        command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-i", ssh.private_key_file, "-p", str(ssh.port)]
         if ssh.known_hosts_file:
             command.extend(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
         command.append(f"{ssh.user}@{self.machine.management_address}")
@@ -88,7 +88,7 @@ class SshExecutor(Executor):
 
     def stream(self, argv: Sequence[str]) -> int:
         ssh = self.machine.ssh
-        command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-i", ssh.private_key_file, "-p", str(ssh.port)]
+        command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-i", ssh.private_key_file, "-p", str(ssh.port)]
         if ssh.known_hosts_file:
             command.extend(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
         command.extend((f"{ssh.user}@{self.machine.management_address}", shlex.join(argv)))
@@ -99,7 +99,7 @@ class SshExecutor(Executor):
 
     def transfer(self, source: Path, destination: str, *, excludes: tuple[str, ...] = (), timeout: float = 300.0) -> CommandResult:
         ssh = self.machine.ssh
-        command = ["rsync", "-az", "-e", shlex.join(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-i", ssh.private_key_file, "-p", str(ssh.port)])]
+        command = ["rsync", "-az", "-e", shlex.join(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-i", ssh.private_key_file, "-p", str(ssh.port)])]
         if ssh.known_hosts_file:
             command[-1] += " " + shlex.join(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
         for pattern in excludes:

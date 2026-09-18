@@ -21,7 +21,7 @@ Parameters:
   ResolverHostname: resolver-01.dark-pid.net
   AcmCertificateArn: arn:aws:acm:us-east-1:524284048780:certificate/8e88e4cc-8765-48ec-8af7-5fb705dc7401
   HostedZoneId: Z05395502DJG3KJD1RXP2
-  EnableDeletionProtection: 'true'
+  EnableDeletionProtection: 'false'
   RetainDataVolumes: 'false'
 Tags:
   dARKManagedBy: rain
