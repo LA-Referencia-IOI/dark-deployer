@@ -100,6 +100,17 @@ session-manager-plugin
 
 Obtén el ID de la instancia `apps` y abre una sesión:
 
+También puede hacerse con el wrapper del repositorio:
+
+```bash
+infrastructure/aws/cloudformation/connect_ssm_apps.sh
+```
+
+Acepta `--region`, `--profile` y `--deployment` si se usan valores distintos
+de los del stack activo.
+
+La forma equivalente, útil para diagnosticar el descubrimiento, es:
+
 ```bash
 INSTANCE_ID=$(aws ec2 describe-instances \
   --region us-east-1 \

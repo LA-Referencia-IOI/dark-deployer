@@ -42,10 +42,16 @@ validate and explain the inventory being designed.
 Basic setup:
 
 ```bash
-python3.14 -m venv venv
-venv/bin/python -m pip install -r requirements.txt
+./create_venv.sh
 docker version
 docker compose version
+```
+
+El script usa Python 3.14 y crea `venv/`. Para incluir las dependencias
+opcionales de la interfaz Textual:
+
+```bash
+./create_venv.sh --with-tui
 ```
 
 To use `inventory-edit` or `metrics`:
