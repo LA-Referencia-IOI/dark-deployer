@@ -108,6 +108,18 @@ def _service_public_url(plan: DeploymentPlan, service_id: str) -> str | None:
     return None
 
 
+def _service_public_path(plan: DeploymentPlan, service_id: str) -> str:
+    """Return the normalized public mount path declared for a service."""
+    for proxy in (item for item in plan.services if item.type == "edge-proxy"):
+        for site in proxy.configuration.get("sites", []):
+            for route in site.get("routes", []):
+                connection = proxy.connections.get(route.get("connection", ""), {})
+                if connection.get("service") == service_id:
+                    route_path = route["path"].strip("/")
+                    return f"/{route_path}" if route_path else "/"
+    return "/"
+
+
 def _dashboard_public_url(plan: DeploymentPlan, dashboard: ServiceInstance) -> str:
     """Return the declared gateway URL used for Laravel absolute URLs."""
     dashboard_id = dashboard.id
@@ -251,7 +263,10 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
             announces = [f"/ip4/{address}/tcp/{port}"]
         values |= {"CLUSTER_PEERNAME": str(service.configuration["peer_name"]), "IPFS_DARK_NET_ALIAS": service.connections["kubo"]["service"], "CLUSTER_SECRET_FILE": "/run/secrets/ipfs-cluster-secret", "CLUSTER_BOOTSTRAP_ENDPOINTS": " ".join(bootstrap), "CLUSTER_BOOTSTRAP_P2P_PORT": str(plan.raw["infrastructure"]["cluster"]["p2p_port"]), "CLUSTER_ANNOUNCE_MULTIADDRESSES": json.dumps(announces, separators=(",", ":")), "CLUSTER_SEED": "true" if is_seed else "false"}
     elif service.type == "explorer":
-        values |= {"RPC_HTTP_URL": connection("rpc")}
+        values |= {
+            "RPC_HTTP_URL": connection("rpc"),
+            "EXPLORER_BASE_PATH": _service_public_path(plan, service.id),
+        }
     elif service.type == "contracts-deploy":
         values |= {"DARK_RPC_URL": connection("rpc"), "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]), "CONTRACT_ARTIFACTS_DIR": "/contracts", "CONTRACT_HANDOFF_FILE": "/runtime/contracts.json", "CONTRACT_RUNTIME_ENV_FILE": "/runtime/contracts.env", "CONTRACT_SIGNER_FILE": "/run/secrets/contract-signer"}
     return values

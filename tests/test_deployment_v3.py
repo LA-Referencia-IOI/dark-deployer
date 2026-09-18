@@ -583,6 +583,15 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertIn("GRAFANA_URL=http://localhost:3000/dashboards\n", env)
         self.assertIn("PROMETHEUS_URL=http://localhost:9090/targets\n", env)
 
+    def test_explorer_public_path_is_generated_from_gateway_route(self):
+        plan = build_plan(ROOT / "examples" / "deployment-v3" / "local-ha.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "bundle"
+            render_plan(plan, output)
+            env = (output / "machines" / "local" / "groups" / "apps" / "env" / "explorer.env").read_text()
+        self.assertIn("EXPLORER_BASE_PATH=/explorer\n", env)
+        self.assertIn("RPC_HTTP_URL=http://rpc01:8545\n", env)
+
     def test_proxy_uses_container_listener_and_public_origin(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "production-five-host.json")
         with tempfile.TemporaryDirectory() as temporary:

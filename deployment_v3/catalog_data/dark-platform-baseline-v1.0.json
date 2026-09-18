@@ -365,7 +365,7 @@
       },
       "dark-explorador": {
         "repository_url": "git@github.com:LA-Referencia-IOI/dark-explorer.git",
-        "branch": "main"
+        "branch": "monitoriing"
       },
       "dark-core-lib": {
         "repository_url": "git@github.com:LA-Referencia-IOI/dark-core-lib.git",
