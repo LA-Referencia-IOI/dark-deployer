@@ -345,6 +345,7 @@ Resources:
             grep -qsE '[[:space:]]/srv/dark/data[[:space:]]' /etc/fstab || echo "UUID=$uuid /srv/dark/data ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2" >> /etc/fstab
             mountpoint -q /srv/dark/data || mount /srv/dark/data
             install -d -m 0750 -o "$deploy_user" -g "$deploy_user" /srv/dark/data
+            chown "$deploy_user:$deploy_user" /srv/dark/data
             install -d -m 0710 -o root -g root /srv/dark/data/docker
             usermod -aG docker "$deploy_user"
 
