@@ -93,20 +93,29 @@ def _p2p_multiaddress(plan: DeploymentPlan, edge: dict, port: int) -> str:
     return f"/ip4/{edge['address']}/tcp/{port}"
 
 
+def _service_public_url(plan: DeploymentPlan, service_id: str) -> str | None:
+    """Return the public gateway route for a service, when one is declared."""
+    for proxy in (item for item in plan.services if item.type == "edge-proxy"):
+        for site in proxy.configuration.get("sites", []):
+            for route in site.get("routes", []):
+                connection = proxy.connections.get(route.get("connection", ""), {})
+                if connection.get("service") != service_id:
+                    continue
+                origin = site.get("public_origin")
+                if origin:
+                    route_path = route["path"].strip("/")
+                    return origin.rstrip("/") + (f"/{route_path}/" if route_path else "/")
+    return None
+
+
 def _dashboard_public_url(plan: DeploymentPlan, dashboard: ServiceInstance) -> str:
     """Return the declared gateway URL used for Laravel absolute URLs."""
     dashboard_id = dashboard.id
     if dashboard.type == "dashboard-migrate":
         dashboard_id = next(item.id for item in plan.services if item.type == "dashboard")
-    for proxy in (item for item in plan.services if item.type == "edge-proxy"):
-        for site in proxy.configuration.get("sites", []):
-            for route in site.get("routes", []):
-                connection = proxy.connections.get(route.get("connection", ""), {})
-                if connection.get("service") != dashboard_id:
-                    continue
-                origin = site.get("public_origin")
-                if origin:
-                    return origin.rstrip("/") + route["path"].rstrip("/")
+    public_url = _service_public_url(plan, dashboard_id)
+    if public_url:
+        return public_url.rstrip("/")
     # An empty-host Lima listener intentionally follows the browser Host
     # header.  Relative links still work through X-Forwarded-Prefix.
     return "http://localhost:8081"
@@ -164,6 +173,8 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
         rpc = plan.primary_rpc()
         kubo = next(item for item in plan.services if item.type == "ipfs-kubo")
         cluster = next(item for item in plan.services if item.type == "ipfs-cluster")
+        explorer = next((item for item in plan.services if item.type == "explorer"), None)
+        local_monitoring = plan.machine(service.machine_id).execution == "local"
         rpc_url = _url(plan, service, rpc.id)
         values |= {
             "APP_ENV": "production", "APP_DEBUG": "false", "APP_URL": _dashboard_public_url(plan, service),
@@ -178,6 +189,12 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
             "LIVENESS": rpc_url + "/liveness",
             "IPFS_API_BASE_URL": _url(plan, service, kubo.id),
             "IPFS_CLUSTER_API_URL": _url(plan, service, cluster.id),
+            "BLOCK_EXPLORER_URL": (_service_public_url(plan, explorer.id) or "") if explorer else "",
+            # The bundled monitoring stack publishes these ports on loopback.
+            # Remote deployments leave them empty until an authenticated public
+            # monitoring endpoint is explicitly configured.
+            "GRAFANA_URL": "http://localhost:3000" if local_monitoring else "",
+            "PROMETHEUS_URL": "http://localhost:9090" if local_monitoring else "",
         }
     elif service.type == "minter-postgres":
         values |= {"POSTGRES_USER": "dark", "POSTGRES_DB": "minter", "POSTGRES_PASSWORD": "dark"}
