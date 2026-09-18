@@ -135,7 +135,19 @@ def _rpc(plan, root):
     rpc = plan.primary_rpc()
     machine = plan.machine(rpc.machine_id)
     payload = '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'
-    result = _curl(plan, machine, _host_url(rpc, machine), payload)
+    if rpc.exposure and rpc.exposure.get("mode") != "none":
+        result = _curl(plan, machine, _host_url(rpc, machine), payload)
+    else:
+        # Besu intentionally has no curl/wget. Keep RPC private and probe it
+        # from a disposable HTTP client on the same Compose network instead
+        # of publishing 8545 solely for readiness.
+        network = f"{_compose_project(plan, machine, rpc.id)}_default"
+        result = resolve_executor(machine).run((
+            "docker", "run", "--rm", "--network", network,
+            "curlimages/curl:8.12.1", "-fsS", "--max-time", "5",
+            "-H", "Content-Type: application/json", "--data", payload,
+            f"http://{rpc.id}:{internal_port(rpc)}",
+        ), timeout=20)
     if result.returncode:
         return False, result.stderr.strip() or result.stdout.strip()
     try:
