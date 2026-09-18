@@ -154,8 +154,11 @@ def run_preflight(machine: Machine) -> list[dict[str, str | bool]]:
             # data_root is intentionally created by apply; measure the
             # existing parent during this read-only preflight instead.
             "disk_space": ("sh", "-lc", f"test $(df -Pk {shlex.quote(str(Path(machine.data_root).parent))} | awk 'NR==2 {{print $4}}') -gt 1048576"),
-            "workspace_parent": ("test", "-d", str(Path(machine.workspace_root).parent)),
-            "workspace_parent_writable": ("test", "-w", str(Path(machine.workspace_root).parent)),
+            # The bootstrap creates workspace_root itself.  Validate that
+            # directory when present; only its parent must be writable before
+            # the first bootstrap creates it.
+            "workspace_parent": ("sh", "-lc", f"test -d {shlex.quote(machine.workspace_root)} || test -d {shlex.quote(str(Path(machine.workspace_root).parent))}"),
+            "workspace_parent_writable": ("sh", "-lc", f"(test -d {shlex.quote(machine.workspace_root)} && test -w {shlex.quote(machine.workspace_root)}) || (test -d {shlex.quote(str(Path(machine.workspace_root).parent))} && test -w {shlex.quote(str(Path(machine.workspace_root).parent))})"),
             "data_parent": ("test", "-d", str(Path(machine.data_root).parent)),
             "data_parent_writable": ("test", "-w", str(Path(machine.data_root).parent)),
             "secrets_parent": ("test", "-d", str(Path(machine.secrets_root).parent)),
