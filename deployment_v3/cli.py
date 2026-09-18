@@ -27,6 +27,7 @@ from .acquire import AcquisitionError, acquire_components
 from .inventory_editor import InventoryDocument, InventoryDocumentError, create_from_template, template_names
 from .inventory_editor.textual_app import run_textual_editor
 from .metrics.textual_app import run_metrics_tui
+from .metrics.prometheus import collect_to_textfile
 from .operations_tui import run_operations_tui
 from .inventory_resolver import resolve_inventory_path
 from .availability import analyze as analyze_availability
@@ -118,6 +119,10 @@ def _parser() -> argparse.ArgumentParser:
     deployments.add_argument("--json", action="store_true", help="emit deployment summaries as JSON")
     actions.add_parser("tui", help="open the interactive deployment operations console")
     actions.add_parser("metrics", help="open the read-only Docker metrics panel")
+    metrics_export = actions.add_parser("metrics-export", help="write managed Docker metrics for node-exporter's textfile collector")
+    metrics_export.add_argument("--deployment", required=True, help="managed deployment ID")
+    metrics_export.add_argument("--output", required=True, type=Path, help="destination .prom file")
+    metrics_export.add_argument("--include-disk", action="store_true", help="also run docker system df (host filesystems still require node-exporter)")
     create = actions.add_parser("inventory-create", help="create an inventory from a maintained template")
     create.add_argument("--template", required=True, choices=template_names())
     create.add_argument("--output", required=True, type=Path)
@@ -586,6 +591,12 @@ def main() -> None:
             return
         if args.action == "metrics":
             _run_metrics_console(project_root)
+            return
+        if args.action == "metrics-export":
+            plan = managed_plan(project_root, args.deployment)
+            samples = collect_to_textfile(plan, args.output, include_disk=args.include_disk)
+            reachable = sum(item.reachable for item in samples)
+            print(f"[OK] Wrote {args.output}: {reachable}/{len(samples)} machine probe(s) reachable.")
             return
         if args.action == "deployments":
             deployments = list_managed_deployments(project_root)

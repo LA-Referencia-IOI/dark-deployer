@@ -23,6 +23,7 @@ from .collector import (
     sample_machine,
     sample_machines,
 )
+from .prometheus import collect_to_textfile, render_prometheus
 
 __all__ = [
     "DEFAULT_CONCURRENCY",
@@ -39,4 +40,6 @@ __all__ = [
     "probe_script",
     "sample_machine",
     "sample_machines",
+    "collect_to_textfile",
+    "render_prometheus",
 ]
