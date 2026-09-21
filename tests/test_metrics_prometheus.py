@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from deployment_v3.metrics.collector import ContainerSample, MachineMetrics
+from deployment_v3.metrics.collector import ContainerSample, DiskFootprint, MachineMetrics
 from deployment_v3.metrics.prometheus import collect_to_textfile, render_prometheus
 
 
@@ -38,6 +38,7 @@ class PrometheusMetricsTests(unittest.TestCase):
         self.assertIn('dark_metrics_export_timestamp_seconds{deployment="dark-example"} 123.000000', text)
         self.assertIn('service="admin-api"', text)
         self.assertIn('container="dark-\\"api"', text)
+        self.assertNotIn('state="running"', text)
         self.assertIn("dark_machine_probe_warnings", text)
         self.assertNotIn("dark_container_cpu_percent{", text)
 
@@ -46,6 +47,24 @@ class PrometheusMetricsTests(unittest.TestCase):
         text = render_prometheus(PLAN, (sample,), collected_at=123.0)
         self.assertIn("dark_machine_probe_success", text)
         self.assertNotIn("dark_docker_daemon_cores{", text)
+
+    def test_renderer_exports_disk_footprint_when_collected(self):
+        sample = MachineMetrics(
+            machine_id="apps",
+            execution="local",
+            reachable=True,
+            disk_footprint=(
+                DiskFootprint("Images", 1024, 512, 3),
+                DiskFootprint("Build Cache", None, None, 7),
+            ),
+        )
+        text = render_prometheus(PLAN, (sample,), collected_at=123.0)
+        labels = 'deployment="dark-example",machine="apps",site="site-a",type="Images"'
+        self.assertIn(f"dark_docker_disk_size_bytes{{{labels}}} 1024", text)
+        self.assertIn(f"dark_docker_disk_reclaimable_bytes{{{labels}}} 512", text)
+        self.assertIn(f"dark_docker_disk_objects{{{labels}}} 3", text)
+        self.assertNotIn('dark_docker_disk_size_bytes{deployment="dark-example",machine="apps",site="site-a",type="Build Cache"}', text)
+        self.assertIn('dark_docker_disk_objects{deployment="dark-example",machine="apps",site="site-a",type="Build Cache"} 7', text)
 
     def test_textfile_replacement_is_atomic_and_complete(self):
         sample = MachineMetrics(machine_id="apps", execution="local", reachable=True)

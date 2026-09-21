@@ -46,6 +46,12 @@ def render_prometheus(plan, samples: tuple[MachineMetrics, ...], *, collected_at
         "# TYPE dark_container_block_bytes_total counter",
         "# HELP dark_container_pids Number of processes or threads reported by docker stats.",
         "# TYPE dark_container_pids gauge",
+        "# HELP dark_docker_disk_size_bytes Docker disk footprint reported by docker system df.",
+        "# TYPE dark_docker_disk_size_bytes gauge",
+        "# HELP dark_docker_disk_reclaimable_bytes Docker disk footprint that docker system df reports as reclaimable.",
+        "# TYPE dark_docker_disk_reclaimable_bytes gauge",
+        "# HELP dark_docker_disk_objects Docker objects counted by docker system df.",
+        "# TYPE dark_docker_disk_objects gauge",
     ]
     machine_sites = {machine.id: machine.site or "default" for machine in plan.machines}
     for sample in samples:
@@ -60,12 +66,19 @@ def render_prometheus(plan, samples: tuple[MachineMetrics, ...], *, collected_at
             lines.append(f"dark_docker_daemon_cores{_labels(**machine_labels)} {sample.cores}")
         if sample.memory_total_bytes is not None:
             lines.append(f"dark_docker_daemon_memory_total_bytes{_labels(**machine_labels)} {sample.memory_total_bytes}")
+        for footprint in sample.disk_footprint:
+            disk_labels = {**machine_labels, "type": footprint.type}
+            if footprint.size_bytes is not None:
+                lines.append(f"dark_docker_disk_size_bytes{_labels(**disk_labels)} {footprint.size_bytes}")
+            if footprint.reclaimable_bytes is not None:
+                lines.append(f"dark_docker_disk_reclaimable_bytes{_labels(**disk_labels)} {footprint.reclaimable_bytes}")
+            if footprint.total_count is not None:
+                lines.append(f"dark_docker_disk_objects{_labels(**disk_labels)} {footprint.total_count}")
         for container in sample.containers:
             labels = {
                 **machine_labels,
                 "container": container.name,
                 "service": container.service_id or "unknown",
-                "state": container.state,
             }
             lines.append(f"dark_container_running{_labels(**labels)} {1 if container.running else 0}")
             for metric, value in (
