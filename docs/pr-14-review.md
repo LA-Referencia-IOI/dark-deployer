@@ -126,6 +126,23 @@ No se presupone que requiera cambios, pero debe confirmarse lo siguiente:
 6. Las credenciales iniciales de Grafana y el archivo `.env` permanecen fuera
    de Git y el acceso anónimo, si se conserva, es estrictamente de lectura.
 
+La revisión estática actual encontró una inconsistencia: `install.py` ejecuta
+`metrics-export` sin `--include-disk`. Por eso, aunque `dark-deployer` ya sabe
+exportar `dark_docker_disk_size_bytes`,
+`dark_docker_disk_reclaimable_bytes` y `dark_docker_disk_objects`, la
+instalación automática de monitoring no las publica en `generated/dark.prom`.
+La corrección recomendada en `dark-monitoring` es:
+
+1. pasar `--include-disk` al invocar `metrics-export` desde `install.py`;
+2. añadir al dashboard de recursos paneles para esas métricas Docker;
+3. probar que la instalación genera el archivo con dichas series cuando Docker
+   entrega los datos;
+4. mantener separadas esas métricas de Docker de las métricas de filesystem y
+   EBS proporcionadas por `node-exporter`.
+
+Esto es un ajuste del componente `dark-monitoring`, no un cambio adicional del
+modelo ni del contrato de inventarios de `dark-deployer`.
+
 La revisión debe hacerse tanto sobre `main` como sobre `monitoriing` si esa
 rama contiene dashboards o instaladores modificados.
 
