@@ -57,6 +57,11 @@ venv/bin/python -m pip install -r requirements-tui.txt
 
 ## The two inventory formats
 
+For component development and per-inventory branch testing, see
+[docs/development.md](docs/development.md).
+For the review status and validation plan for PR #14, see
+[docs/pr-14-review.md](docs/pr-14-review.md).
+
 ### Operator inventory v2 and v3
 
 This is the recommended format for new installations that follow the

@@ -162,3 +162,5 @@ __pycache__/
 guide.txt
 
 .claude
+# AWS IAM credentials
+dark2-prod-operator-access-key.txt
