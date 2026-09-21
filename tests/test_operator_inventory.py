@@ -14,12 +14,28 @@ from deployment_v3.planner import build_plan
 from deployment_v3.render import render_plan
 from deployment_v3.catalogs import get_catalog
 from deployment_v3.executor import run_network_preflight
+from deployment_v3.sources import COMPONENT_PATHS
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class InventoryEvolutionTests(unittest.TestCase):
+    def test_monitoring_component_is_a_stable_catalog_source(self):
+        catalog = get_catalog("dark-platform-baseline-v1.0")
+        component = catalog.document["components"]["dark-monitoring"]
+        self.assertEqual(component["branch"], "main")
+        self.assertEqual(component["repository_url"], "git@github.com:LA-Referencia-IOI/dark-monitoring.git")
+        self.assertEqual(COMPONENT_PATHS["dark-monitoring"], "components/dark-monitoring")
+
+    def test_monitoring_inventory_overrides_only_experimental_branches(self):
+        source = ROOT / "examples" / "operator-inventory" / "local-ha-monitoring.json"
+        resolved = resolve_inventory(json.loads(source.read_text()), source_path=source).document
+        components = resolved["components"]
+        self.assertEqual(components["dark-monitoring"]["branch"], "monitoriing")
+        self.assertEqual(components["dashboard-web"]["branch"], "monitoriing")
+        self.assertEqual(components["dark-explorador"]["branch"], "monitoriing")
+
     def test_catalog_is_a_topology_free_versioned_recipe(self):
         catalog = get_catalog("dark-platform-baseline-v1.0")
         self.assertEqual(catalog.document["machines"], {})
