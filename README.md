@@ -334,6 +334,7 @@ node-exporter's textfile collector:
 ```bash
 venv/bin/python deploy.py metrics-export \
   --deployment dark-operator-local-ha \
+  --include-disk \
   --output components/dark-monitoring/generated/dark.prom
 ```
 
