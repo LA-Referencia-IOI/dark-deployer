@@ -34,7 +34,19 @@ while (($#)); do
   esac
 done
 
-command -v aws >/dev/null || { echo 'aws is required in PATH' >&2; exit 1; }
+aws_bin=''
+for candidate in "${AWS_CLI:-}" /opt/homebrew/bin/aws "$(command -v aws 2>/dev/null || true)" /usr/local/bin/aws; do
+  [[ -n "$candidate" && -x "$candidate" ]] || continue
+  description="$(file -b "$candidate" 2>/dev/null || true)"
+  case "$description" in
+    *arm64*|*"universal binary"*|*"Universal"*) aws_bin="$candidate"; break ;;
+  esac
+  if [[ "$candidate" == "/opt/homebrew/bin/aws" ]] && "$candidate" --version >/dev/null 2>&1; then
+    aws_bin="$candidate"
+    break
+  fi
+done
+[[ -n "$aws_bin" ]] || { echo 'a native AWS CLI is required (on Apple Silicon: brew install awscli)' >&2; exit 1; }
 command -v base64 >/dev/null || { echo 'base64 is required in PATH' >&2; exit 1; }
 [ -n "$SOURCE" ] || { echo '--source FILE is required' >&2; usage; }
 [ -r "$SOURCE" ] || { echo "PEM is not readable: $SOURCE" >&2; exit 1; }
@@ -48,7 +60,7 @@ while IFS= read -r instance_id; do
   [ -n "$instance_id" ] || continue
   [ "$instance_id" = 'None' ] && continue
   instances[${#instances[@]}]="$instance_id"
-done < <(aws "${aws_args[@]}" ec2 describe-instances \
+done < <("$aws_bin" "${aws_args[@]}" ec2 describe-instances \
   --filters \
     "Name=tag:dARKDeployment,Values=$DEPLOYMENT" \
     "Name=tag:dARKRole,Values=$ROLE" \
@@ -74,7 +86,7 @@ parameters_json='{"commands":["'
 parameters_json+="$remote_command"
 parameters_json+='"]}'
 
-command_id=$(aws "${aws_args[@]}" ssm send-command \
+command_id=$("$aws_bin" "${aws_args[@]}" ssm send-command \
   --instance-ids "${instances[0]}" \
   --document-name AWS-RunShellScript \
   --comment 'upload dark deployer SSH key' \
