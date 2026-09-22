@@ -9,7 +9,7 @@ from pathlib import Path
 from .executor import resolve_executor
 from .runner import _compose_directory, _compose_project, _effective_plan, _machine_directory
 from .state import record, run_root, write_status
-from .readiness import _host_url, _curl, store_health_probe, observer_status, ReadinessError
+from .readiness import _host_url, _curl, rpc_request, store_health_probe, observer_status, ReadinessError
 from .network import internal_port
 
 
@@ -99,16 +99,14 @@ def verify(plan, project_root: Path) -> dict:
                 report["ok"] = bool(report["ok"] and ok and result.returncode == 0)
 
     rpc = effective.primary_rpc()
-    rpc_machine = effective.machine(rpc.machine_id)
     chain_id = effective.raw["blockchain"]["chain_id"]
-    rpc_url = _host_url(rpc, rpc_machine)
-    result = _curl(effective, rpc_machine, rpc_url, '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}')
+    result = rpc_request(effective, root, rpc, "eth_chainId")
     _append(report, rpc, "chain_id", result)
     if result.returncode == 0 and f'"0x{chain_id:x}"' not in result.stdout.lower():
         report["services"][rpc.id]["chain_id"]["ok"] = False
         report["services"][rpc.id]["chain_id"]["error"] = f"unexpected chain ID; expected {chain_id}"
         report["ok"] = False
-    _append(report, rpc, "validator_peers", _curl(effective, rpc_machine, rpc_url, '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'))
+    _append(report, rpc, "validator_peers", rpc_request(effective, root, rpc, "net_peerCount"))
     for observer in (item for item in effective.services if item.type == "besu-observer"):
         ok, message, details = observer_status(effective, root, observer)
         entry = report["services"].setdefault(observer.id, {"machine": observer.machine_id, "ok": True})
