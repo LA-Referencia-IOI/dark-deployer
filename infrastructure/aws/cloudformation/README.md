@@ -100,6 +100,67 @@ session-manager-plugin
 
 Obtén el ID de la instancia `apps` y abre una sesión:
 
+También puede hacerse con el wrapper del repositorio:
+
+```bash
+infrastructure/aws/cloudformation/connect_ssm_apps.sh
+```
+
+Para volver a subir la clave privada al host `apps` mediante SSM:
+
+```bash
+infrastructure/aws/cloudformation/upload_pem_ssm_apps.sh \
+  --source /path/to/lareferencia-dark.pem
+```
+
+`--source` es obligatorio. Si no se indica `--target`, la instala en
+`/home/ubuntu/<nombre-de-la-PEM>`, con propietario `ubuntu` y permisos `600`. Se puede usar
+`--target`, `--region`, `--profile` o `--deployment` para modificar esos
+valores.
+
+Para acceder temporalmente al Dashboard por un túnel SSM local:
+
+```bash
+infrastructure/aws/cloudformation/forward_admin_ssm_apps.sh
+```
+
+Esto descubre la IP interna del contenedor Dashboard y reenvía su puerto
+`8080` a `localhost:8081` del Mac, que coincide con `APP_URL` y `ASSET_URL`
+del Dashboard. Mantén la sesión abierta y accede a `http://localhost:8081`.
+El puerto remoto se puede cambiar con
+`--remote-port` y el local con `--local-port`.
+
+## Operador IAM limitado al deployment
+
+La política [`dark2-prod-aws-operator-policy.json`](dark2-prod-aws-operator-policy.json)
+permite descubrir las instancias, abrir sesiones SSM, usar port forwarding y
+ejecutar diagnósticos únicamente sobre recursos etiquetados con
+`dARKDeployment=dark2-prod-aws`. No concede permisos para crear, eliminar o
+etiquetar recursos.
+
+Crear el grupo y asociar la política administrada desde AWS CLI:
+
+```bash
+aws iam create-group --group-name dark2-prod-aws-operators
+aws iam create-policy \
+  --policy-name dark2-prod-aws-operator \
+  --policy-document file://infrastructure/aws/cloudformation/dark2-prod-aws-operator-policy.json
+aws iam attach-group-policy \
+  --group-name dark2-prod-aws-operators \
+  --policy-arn arn:aws:iam::524284048780:policy/dark2-prod-aws-operator
+```
+
+Después se crea el usuario o rol operativo y se añade al grupo. No se debe
+conceder a ese usuario `ec2:CreateTags`, `ec2:DeleteTags` ni permisos IAM,
+porque podría modificar las etiquetas y eludir la restricción. La política
+usa el identificador de cuenta actualmente configurado (`524284048780`) y la
+región `us-east-1`; si se reutiliza en otra cuenta o región, deben cambiarse
+los ARN correspondientes.
+
+Acepta `--region`, `--profile` y `--deployment` si se usan valores distintos
+de los del stack activo.
+
+La forma equivalente, útil para diagnosticar el descubrimiento, es:
 ```bash
 INSTANCE_ID=$(aws ec2 describe-instances \
   --region us-east-1 \
@@ -115,13 +176,7 @@ aws ssm start-session \
   --target "$INSTANCE_ID"
 ```
 
-El mismo acceso puede abrirse con el helper del directorio:
-
-```bash
-./connect_ssm_apps.sh --region us-east-1
-```
-
-El script busca la única instancia `running` con los tags
+El wrapper busca la única instancia `running` con los tags
 `dARKDeployment=dark2-prod-aws` y `dARKRole=apps`, valida el AWS CLI nativo y
 abre la sesión con Session Manager.
 
