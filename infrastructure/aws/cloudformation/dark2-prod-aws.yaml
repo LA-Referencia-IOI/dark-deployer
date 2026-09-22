@@ -101,7 +101,7 @@ Parameters:
     Description: Route 53 hosted-zone ID where Rain creates or updates the ALB aliases.
   EnableDeletionProtection:
     Type: String
-    Default: 'true'
+    Default: 'false'
     AllowedValues: ['true', 'false']
   RetainDataVolumes:
     Type: String

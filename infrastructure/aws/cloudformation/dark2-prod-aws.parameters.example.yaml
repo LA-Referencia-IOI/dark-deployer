@@ -22,7 +22,7 @@ Parameters:
   ResolverHostname: resolver-01.dark-pid.net
   AcmCertificateArn: REPLACE_ACM_CERTIFICATE_ARN
   HostedZoneId: REPLACE_ROUTE53_HOSTED_ZONE_ID
-  EnableDeletionProtection: 'true'
+  EnableDeletionProtection: 'false'
   RetainDataVolumes: 'false'
 Tags:
   dARKManagedBy: rain
