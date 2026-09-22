@@ -36,7 +36,19 @@ done
 
 CONTAINER="${DEPLOYMENT}-apps-apps-dashboard-1"
 
-command -v aws >/dev/null || { echo 'aws is required in PATH' >&2; exit 1; }
+aws_bin=''
+for candidate in "${AWS_CLI:-}" /opt/homebrew/bin/aws "$(command -v aws 2>/dev/null || true)" /usr/local/bin/aws; do
+  [[ -n "$candidate" && -x "$candidate" ]] || continue
+  description="$(file -b "$candidate" 2>/dev/null || true)"
+  case "$description" in
+    *arm64*|*"universal binary"*|*"Universal"*) aws_bin="$candidate"; break ;;
+  esac
+  if [[ "$candidate" == "/opt/homebrew/bin/aws" ]] && "$candidate" --version >/dev/null 2>&1; then
+    aws_bin="$candidate"
+    break
+  fi
+done
+[[ -n "$aws_bin" ]] || { echo 'a native AWS CLI is required (on Apple Silicon: brew install awscli)' >&2; exit 1; }
 
 aws_args=(--region "$REGION")
 [[ -n "$PROFILE" ]] && aws_args+=(--profile "$PROFILE")
@@ -46,7 +58,7 @@ while IFS= read -r instance_id; do
   [ -n "$instance_id" ] || continue
   [ "$instance_id" = 'None' ] && continue
   instances[${#instances[@]}]="$instance_id"
-done < <(aws "${aws_args[@]}" ec2 describe-instances \
+done < <("$aws_bin" "${aws_args[@]}" ec2 describe-instances \
   --filters \
     "Name=tag:dARKDeployment,Values=$DEPLOYMENT" \
     'Name=tag:dARKRole,Values=apps' \
@@ -63,7 +75,7 @@ if ((${#instances[@]} != 1)); then
   exit 1
 fi
 
-command_id=$(aws "${aws_args[@]}" ssm send-command \
+command_id=$("$aws_bin" "${aws_args[@]}" ssm send-command \
   --instance-ids "${instances[0]}" \
   --document-name AWS-RunShellScript \
   --comment 'discover dashboard container address' \
@@ -72,7 +84,7 @@ command_id=$(aws "${aws_args[@]}" ssm send-command \
 
 remote_host=''
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  remote_host=$(aws "${aws_args[@]}" ssm get-command-invocation \
+  remote_host=$("$aws_bin" "${aws_args[@]}" ssm get-command-invocation \
     --command-id "$command_id" --instance-id "${instances[0]}" \
     --query 'StandardOutputContent' --output text 2>/dev/null | tr -d '[:space:]' || true)
   case "$remote_host" in
@@ -88,7 +100,7 @@ done
 }
 
 echo "forwarding localhost:$LOCAL_PORT -> $remote_host:$REMOTE_PORT"
-exec aws "${aws_args[@]}" ssm start-session \
+exec "$aws_bin" "${aws_args[@]}" ssm start-session \
   --target "${instances[0]}" \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters "{\"host\":[\"$remote_host\"],\"portNumber\":[\"$REMOTE_PORT\"],\"localPortNumber\":[\"$LOCAL_PORT\"]}"
