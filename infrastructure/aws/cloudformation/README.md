@@ -114,6 +114,16 @@ aws ssm start-session \
   --target "$INSTANCE_ID"
 ```
 
+El mismo acceso puede abrirse con el helper del directorio:
+
+```bash
+./connect_ssm_apps.sh --region us-east-1
+```
+
+El script busca la única instancia `running` con los tags
+`dARKDeployment=dark2-prod-aws` y `dARKRole=apps`, valida el AWS CLI nativo y
+abre la sesión con Session Manager.
+
 Ya dentro de `apps`, el repositorio del deployer debe estar en
 `/home/ubuntu/dark-deployer` y la clave privada en
 `/home/ubuntu/lareferencia-dark.pem`:

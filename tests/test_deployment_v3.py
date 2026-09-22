@@ -23,6 +23,7 @@ from deployment_v3 import runner as runner_module
 from deployment_v3 import cli as cli_module
 from deployment_v3.secrets import initialize_greenfield_secrets
 from deployment_v3.services import compose_document
+from deployment_v3.staging_manifest import StagingManifestError, machine_components, materialize_machine_inputs, verify_machine_manifest, write_machine_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -180,15 +181,152 @@ class DeploymentV3Tests(unittest.TestCase):
         service = plan.service("cluster-storage-a")
         with tempfile.TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
-            project = Path(temporary) / "project"
-            entrypoint = project / "components" / "dark-ipfs" / "scripts" / "cluster-entrypoint.sh"
-            entrypoint.parent.mkdir(parents=True)
-            entrypoint.write_text("first")
             render_plan(plan, bundle)
-            first = runner_module._service_fingerprint(plan, service, bundle, project)
+            machine = plan.machine(service.machine_id)
+            materialize_machine_inputs(plan, machine, ROOT, bundle / "machines" / machine.id)
+            entrypoint = bundle / "machines" / machine.id / "sources" / "components" / "dark-ipfs" / "scripts" / "cluster-entrypoint.sh"
+            first = runner_module._service_fingerprint(plan, service, bundle, ROOT)
             entrypoint.write_text("second")
-            second = runner_module._service_fingerprint(plan, service, bundle, project)
+            second = runner_module._service_fingerprint(plan, service, bundle, ROOT)
         self.assertNotEqual(first, second)
+
+    def test_local_ha_component_change_only_invalidates_its_service(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        store = plan.service("store-api")
+        resolver = plan.service("resolver-api")
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            render_plan(plan, bundle)
+            machine = plan.machine("local")
+            materialize_machine_inputs(plan, machine, ROOT, bundle / "machines" / machine.id)
+            store_before = runner_module._service_fingerprint(plan, store, bundle, ROOT)
+            resolver_before = runner_module._service_fingerprint(plan, resolver, bundle, ROOT)
+            source = bundle / "machines" / "local" / "sources" / "components" / "dark-store-api"
+            candidate = next(path for path in source.rglob("*") if path.is_file())
+            candidate.write_bytes(candidate.read_bytes() + b"\npartial-update\n")
+            store_after = runner_module._service_fingerprint(plan, store, bundle, ROOT)
+            resolver_after = runner_module._service_fingerprint(plan, resolver, bundle, ROOT)
+        self.assertNotEqual(store_before, store_after)
+        self.assertEqual(resolver_before, resolver_after)
+
+    def test_local_ha_configuration_change_only_invalidates_its_service(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        store = plan.service("store-api")
+        resolver = plan.service("resolver-api")
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            render_plan(plan, bundle)
+            machine = plan.machine("local")
+            materialize_machine_inputs(plan, machine, ROOT, bundle / "machines" / machine.id)
+            store_before = runner_module._service_fingerprint(plan, store, bundle, ROOT)
+            resolver_before = runner_module._service_fingerprint(plan, resolver, bundle, ROOT)
+            env = bundle / "machines" / "local" / "groups" / "apps" / "env" / "store-api.env"
+            env.write_text(env.read_text() + "TEST_CONFIGURATION_CHANGE=1\n")
+            store_after = runner_module._service_fingerprint(plan, store, bundle, ROOT)
+            resolver_after = runner_module._service_fingerprint(plan, resolver, bundle, ROOT)
+        self.assertNotEqual(store_before, store_after)
+        self.assertEqual(resolver_before, resolver_after)
+
+    def test_local_ha_addition_is_scoped_to_the_new_service_machine(self):
+        source_plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        document = json.loads(json.dumps(source_plan.raw))
+        document["services"]["store-api-new"] = json.loads(json.dumps(document["services"]["store-api"]))
+        document["services"]["store-api-new"]["connections"] = {
+            key: value for key, value in document["services"]["store-api"]["connections"].items()
+        }
+        document["groups"]["apps"]["services"].append("store-api-new")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "local-ha-added.json"
+            path.write_text(json.dumps(document))
+            updated = build_plan(path)
+        self.assertEqual(updated.service("store-api-new").machine_id, "local")
+        self.assertEqual(updated.service("store-api").machine_id, "local")
+        self.assertEqual(
+            {service.id for service in updated.services} - {service.id for service in source_plan.services},
+            {"store-api-new"},
+        )
+
+    def test_machine_bundle_selects_only_required_components_and_uses_relative_paths(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
+        machine = plan.machine("storage-1")
+        self.assertEqual(machine_components(plan, machine), {"dark-ipfs"})
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            render_plan(plan, bundle)
+            target = bundle / "machines" / machine.id
+            materialize_machine_inputs(plan, machine, ROOT, target)
+            components = target / "sources" / "components"
+            self.assertEqual([item.name for item in components.iterdir()], ["dark-ipfs"])
+            compose = (target / "groups" / "storage-1" / "compose.yaml").read_text()
+        self.assertIn("../../sources/components/dark-ipfs/scripts", compose)
+        self.assertNotIn(f"{machine.workspace_root}/components", compose)
+        self.assertNotIn(f"{machine.workspace_root}/blockchain", compose)
+
+    def test_machine_manifest_rejects_an_altered_bundle(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
+        machine = plan.machine("storage-1")
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            render_plan(plan, bundle)
+            target = bundle / "machines" / machine.id
+            materialize_machine_inputs(plan, machine, ROOT, target)
+            write_machine_manifest(plan, machine, target)
+            verify_machine_manifest(plan, machine, target)
+            (target / "sources" / "components" / "dark-ipfs" / "scripts" / "ipfs-entrypoint.sh").write_text("altered")
+            with self.assertRaisesRegex(StagingManifestError, "does not match"):
+                verify_machine_manifest(plan, machine, target)
+
+    def test_prepared_revision_records_topology_evidence_and_machine_manifests(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            bundle = root / "bundle"
+            render_plan(plan, bundle)
+            for machine in plan.machines:
+                target = bundle / "machines" / machine.id
+                materialize_machine_inputs(plan, machine, ROOT, target)
+                write_machine_manifest(plan, machine, target)
+            evidence = {"components": {"example": {"content_sha256": "abc"}}}
+            revision_id = runner_module._write_revision(plan, plan, root, bundle, evidence)
+            revision = root / "revisions" / revision_id
+            document = json.loads((revision / "revision.json").read_text())
+            self.assertEqual(document["revision_id"], revision_id)
+            self.assertEqual(set(document["machine_manifests"]), {machine.id for machine in plan.machines})
+            self.assertEqual(json.loads((root / "current-revision.json").read_text())["revision_id"], revision_id)
+
+    def test_dashboard_bundle_omits_broken_framework_symlink(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "lima-five-host.json")
+        machine = plan.machine("apps")
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "machine"
+            materialize_machine_inputs(plan, machine, ROOT, target)
+            dashboard = target / "sources" / "components" / "dashboard-web"
+            self.assertTrue((dashboard / "composer.phar").is_file())
+            self.assertFalse((dashboard / "public" / "storage").exists())
+
+    def test_prepare_is_available_as_a_standard_inventory_action(self):
+        args = cli_module._parser().parse_args((
+            "prepare", "--inventory", "examples/operator-inventory/local-ha.json",
+        ))
+        self.assertEqual(args.action, "prepare")
+
+    def test_push_accepts_a_prepared_revision_selector(self):
+        args = cli_module._parser().parse_args((
+            "push", "--inventory", "examples/operator-inventory/local-ha.json", "--revision", "abc",
+        ))
+        self.assertEqual(args.revision, "abc")
+
+    def test_apply_accepts_a_prepared_revision_selector(self):
+        args = cli_module._parser().parse_args((
+            "apply", "--inventory", "examples/operator-inventory/local-ha.json", "--revision", "abc",
+        ))
+        self.assertEqual(args.revision, "abc")
+
+    def test_push_requires_a_prepared_bundle(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(runner_module.ApplyError, "run prepare before pushing"):
+                runner_module.push(plan, Path(temporary))
 
     def test_managed_private_inputs_attach_sources_without_leaking_key_to_state(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")

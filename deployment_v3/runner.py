@@ -13,6 +13,8 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+import yaml
+
 from .executor import ExecutionError, LocalExecutor, SshExecutor, resolve_executor, run_network_preflight, run_preflight
 from .model import DeploymentPlan
 from .planner import build_plan_document
@@ -20,6 +22,7 @@ from .render import render_plan
 from .secrets import SecretError, distribute_secrets
 from .state import StateLockError, deployment_lock, record, run_root, write_status
 from .sources import SourceError, source_evidence
+from .staging_manifest import StagingManifestError, machine_components, materialize_machine_inputs, service_components, service_runtime_assets, verify_machine_manifest, write_machine_manifest
 from .artifacts import ArtifactError, verify_artifact_compatibility, verify_artifact_manifest
 
 
@@ -223,19 +226,61 @@ def _ignore_source_entries(directory: str, names: list[str]) -> set[str]:
     return ignored
 
 
+_REMOTE_MANIFEST_CHECK = """import hashlib,json,os,stat,sys
+r=sys.argv[1]
+m=json.load(open(os.path.join(r,'manifest.json')))
+expected={e['path']:e for e in m['files']}
+actual=set()
+for base,dirs,files in os.walk(r,followlinks=False):
+    for name in dirs+files:
+        p=os.path.join(base,name); rel=os.path.relpath(p,r)
+        if rel != 'manifest.json': actual.add(rel)
+if actual != set(expected): raise SystemExit('bundle entries differ from manifest')
+for rel,e in expected.items():
+    p=os.path.join(r,rel); kind=e['type']
+    if kind == 'file':
+        if not os.path.isfile(p) or os.path.islink(p): raise SystemExit('file mismatch: '+rel)
+        h=hashlib.sha256(open(p,'rb').read()).hexdigest()
+        if h != e['sha256']: raise SystemExit('hash mismatch: '+rel)
+    elif kind == 'directory':
+        if not os.path.isdir(p) or os.path.islink(p): raise SystemExit('directory mismatch: '+rel)
+    elif kind == 'symlink':
+        if not os.path.islink(p) or os.readlink(p) != e['target']: raise SystemExit('symlink mismatch: '+rel)
+    else: raise SystemExit('unsupported manifest type: '+rel)
+"""
+
+
+def _verify_remote_manifest(executor, directory: Path, description: str) -> None:
+    encoded = base64.b64encode(_REMOTE_MANIFEST_CHECK.encode()).decode()
+    result = executor.run(("python3", "-c", f"import base64;exec(base64.b64decode('{encoded}'))", str(directory)), timeout=120)
+    _require(result, description)
+
+
 def _stage(machine, project_root, root, directory):
     if isinstance(resolve_executor(machine), SshExecutor):
-        remote = Path(machine.workspace_root) / ".generated" / "deployment-v3" / root.name / "machines" / machine.id
+        revision = "current"
+        current = root / "current-revision.json"
+        if current.is_file():
+            try:
+                revision = json.loads(current.read_text(encoding="utf-8")).get("revision_id") or revision
+            except json.JSONDecodeError:
+                pass
+        base = Path(machine.workspace_root) / ".generated" / "deployment-v3" / root.name / "machines" / machine.id
+        remote = base / "bundles" / revision
         executor = resolve_executor(machine); _require(executor.run(("mkdir", "-p", str(remote))), f"prepare {machine.id}")
-        for source in (project_root / "components", project_root / "blockchain", project_root / "deployment_v3"):
-            if source.exists(): _require(executor.transfer(source, str(Path(machine.workspace_root) / source.name), excludes=(".git", ".env", ".generated", "venv", ".venv")), f"transfer {source.name}")
         _require(executor.transfer(directory, str(remote)), f"transfer deployment for {machine.id}")
-        return remote
+        _verify_remote_manifest(executor, remote, f"verify transferred bundle for {machine.id}")
+        current_link = base / "current"
+        temporary_link = base / f".current-{revision}.tmp"
+        activate = (
+            "rm -f " + shlex.quote(str(temporary_link)) + "; "
+            "ln -s " + shlex.quote(str(remote)) + " " + shlex.quote(str(temporary_link)) + "; "
+            "mv -Tf " + shlex.quote(str(temporary_link)) + " " + shlex.quote(str(current_link))
+        )
+        _require(executor.run(("sh", "-lc", activate)), f"activate {machine.id} revision {revision}")
+        return current_link
     destination = root / "local" / machine.id / "machine"; destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(directory, destination, dirs_exist_ok=True)
-    source_root = root / "local" / machine.id / "sources"
-    for source in (project_root / "components", project_root / "blockchain", project_root / "deployment_v3"):
-        if source.exists(): shutil.copytree(source, source_root / source.name, dirs_exist_ok=True, ignore=_ignore_source_entries)
     return destination
 
 
@@ -252,11 +297,17 @@ def _compile_contract_artifacts(project_root: Path, root: Path) -> Path:
             ("docker", "build", "--tag", image, "--file", str(project_root / "deployment_v3" / "Dockerfile.solc-js"), str(project_root / "deployment_v3")),
             check=True,
             timeout=600,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
         subprocess.run(
             ("docker", "run", "--rm", "--mount", f"type=bind,src={project_root / 'components' / 'dark-dapp' / 'dARK_dapp' / 'contracts'},dst=/src,readonly", "--mount", f"type=bind,src={output},dst=/out", image),
             check=True,
             timeout=600,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise ApplyError(f"compile Solidity contracts with portable solc-js: {exc}") from exc
@@ -278,34 +329,157 @@ def _attach_contract_artifacts(plan, bundle: Path, artifacts: Path) -> None:
             shutil.copy2(source, destination / source.name)
 
 
+def _materialize_bundle_inputs(plan, project_root: Path, bundle: Path) -> None:
+    """Place selected public sources beside each machine Compose project."""
+    try:
+        for machine in plan.machines:
+            directory = bundle / "machines" / machine.id
+            materialize_machine_inputs(plan, machine, project_root, directory)
+            write_machine_manifest(plan, machine, directory)
+    except StagingManifestError as exc:
+        raise ApplyError(f"materialize machine bundle failed: {exc}") from exc
+
+
+def _required_source_components(plan) -> set[str]:
+    selected = set()
+    for machine in plan.machines:
+        selected.update(machine_components(plan, machine))
+    if any(service.type == "contracts-deploy" for service in plan.services):
+        selected.add("dark-dapp")
+    return selected
+
+
+def _write_revision(plan, effective, root: Path, bundle: Path, sources: dict) -> str:
+    """Record the prepared topology and machine bundle identities once."""
+    manifest_hashes = {}
+    for machine in effective.machines:
+        manifest = bundle / "machines" / machine.id / "manifest.json"
+        manifest_hashes[machine.id] = _file_digest(manifest)
+    topology_hash = hashlib.sha256(json.dumps(effective.raw, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    index = {
+        "version": 1,
+        "deployment_id": plan.deployment_id,
+        "topology_sha256": topology_hash,
+        "source_evidence_sha256": hashlib.sha256(json.dumps(sources, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        "machine_manifests": manifest_hashes,
+    }
+    revision_id = hashlib.sha256(json.dumps(index, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    revision = root / "revisions" / revision_id
+    if not revision.exists():
+        pending = root / "revisions" / f".{revision_id}.prepare"
+        pending.mkdir(parents=True, exist_ok=False)
+        (pending / "revision.json").write_text(json.dumps(index | {"revision_id": revision_id}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (pending / "deployment-topology.json").write_text(json.dumps(effective.raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (pending / "source-evidence.json").write_text(json.dumps(sources, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        pending.replace(revision)
+    current = root / "current-revision.json"
+    temporary = root / ".current-revision.json.tmp"
+    temporary.write_text(json.dumps({"revision_id": revision_id}, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(current)
+    return revision_id
+
+
+def _prepare_bundle(plan, project_root: Path, root: Path) -> tuple[object, Path, dict, str]:
+    """Build a complete public bundle, then replace the previous one atomically."""
+    effective = _effective_plan(plan, project_root, root)
+    bundle = root / "bundle"
+    pending = root / "bundle.prepare"
+    previous = root / "bundle.previous"
+    if pending.exists():
+        shutil.rmtree(pending)
+    if previous.exists():
+        shutil.rmtree(previous)
+    try:
+        artifacts = _compile_contract_artifacts(project_root, root)
+        render_plan(effective, pending)
+        _attach_contract_artifacts(effective, pending, artifacts)
+        try:
+            sources = source_evidence(effective, project_root, _required_source_components(effective))
+        except SourceError as exc:
+            raise ApplyError(f"source evidence failed: {exc}") from exc
+        _materialize_bundle_inputs(effective, project_root, pending)
+        (pending / "shared" / "source-evidence.json").write_text(
+            json.dumps(sources, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if bundle.exists():
+            bundle.replace(previous)
+        pending.replace(bundle)
+        if previous.exists():
+            shutil.rmtree(previous)
+        revision_id = _write_revision(plan, effective, root, bundle, sources)
+        return effective, bundle, sources, revision_id
+    except Exception:
+        if pending.exists():
+            shutil.rmtree(pending)
+        if not bundle.exists() and previous.exists():
+            previous.replace(bundle)
+        raise
+
+
+def prepare(plan, project_root: Path) -> Path:
+    """Prepare and validate the public machine bundles without contacting hosts."""
+    root = run_root(project_root, plan.deployment_id)
+    try:
+        with deployment_lock(root):
+            _, _, _, revision_id = _prepare_bundle(plan, project_root, root)
+            record(root, {"state": "prepared", "revision": revision_id})
+            return root
+    except (StateLockError, ExecutionError) as exc:
+        raise ApplyError(str(exc)) from exc
+
+
 def _file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _tree_digest(path: Path) -> str:
+    """Digest one selected public tree without depending on controller files."""
+    if path.is_file():
+        return _file_digest(path)
+    digest = hashlib.sha256()
+    for item in sorted(path.rglob("*"), key=lambda candidate: candidate.relative_to(path).as_posix()):
+        relative = item.relative_to(path).as_posix().encode()
+        digest.update(relative + b"\0")
+        if item.is_file():
+            digest.update(_file_digest(item).encode())
+    return digest.hexdigest()
+
+
 def _service_fingerprint(plan, service, bundle: Path, project_root: Path) -> str:
-    """Hash rendered input and mounted/build sources that affect one service."""
+    """Hash only the rendered inputs and selected files of one service."""
+    inputs = _service_fingerprint_inputs(plan, service, bundle)
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
+def _service_fingerprint_inputs(plan, service, bundle: Path) -> dict:
+    """Return the comparable inputs behind one service fingerprint."""
     group = _group_for_service(plan, service.id)
     if group is None:
         raise ApplyError(f"service {service.id} is not assigned to a deployment group")
     directory = bundle / "machines" / service.machine_id / "groups" / group.id
+    document = yaml.safe_load((directory / "compose.yaml").read_text(encoding="utf-8"))
+    item = document["services"][service.id]
+    machine_directory = bundle / "machines" / service.machine_id
     inputs = {
-        "compose": _file_digest(directory / "compose.yaml"),
+        "compose_service": item,
         "environment": _file_digest(directory / "env" / f"{service.id}.env"),
+        "components": {
+            component_id: _tree_digest(machine_directory / "sources" / "components" / component_id)
+            for component_id in sorted(service_components(service.type))
+        },
+        "runtime_assets": {
+            relative: _file_digest(machine_directory / "runtime" / relative)
+            for relative in sorted(service_runtime_assets(service.type))
+        },
     }
-    mounted_entrypoints = {
-        "ipfs-kubo": project_root / "components" / "dark-ipfs" / "scripts" / "ipfs-entrypoint.sh",
-        "ipfs-cluster": project_root / "components" / "dark-ipfs" / "scripts" / "cluster-entrypoint.sh",
-        "besu-rpc": project_root / "blockchain" / "scripts" / "besu-entrypoint.sh",
-        "besu-validator": project_root / "blockchain" / "scripts" / "besu-entrypoint.sh",
-        "besu-observer": project_root / "blockchain" / "scripts" / "besu-entrypoint.sh",
-    }
-    source = mounted_entrypoints.get(service.type)
-    if source and source.is_file():
-        inputs["entrypoint"] = _file_digest(source)
-    artifacts = directory / "artifacts" / "contracts"
-    if service.type == "contracts-deploy" and artifacts.is_dir():
-        inputs["artifacts"] = {item.name: _file_digest(item) for item in sorted(artifacts.iterdir()) if item.is_file()}
-    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+    for volume in item.get("volumes", []):
+        host_path = str(volume).split(":", maxsplit=1)[0]
+        if host_path.startswith("."):
+            candidate = (directory / host_path).resolve()
+            if candidate.exists():
+                inputs.setdefault("mounted_files", {})[host_path] = _tree_digest(candidate)
+    return inputs
 
 
 def _effective_plan(plan, project_root, root):
@@ -319,7 +493,7 @@ def _effective_plan(plan, project_root, root):
 
 
 def _machine_directory(plan, machine, root):
-    if isinstance(resolve_executor(machine), SshExecutor): return Path(machine.workspace_root) / ".generated" / "deployment-v3" / root.name / "machines" / machine.id
+    if isinstance(resolve_executor(machine), SshExecutor): return Path(machine.workspace_root) / ".generated" / "deployment-v3" / root.name / "machines" / machine.id / "current"
     return root / "local" / machine.id / "machine"
 
 
@@ -499,42 +673,103 @@ def _apply_service(plan, machine, service, root, bundle, *, verbose=False, force
         _require(executor.run((*compose, "up", "-d", "--build", *recreate, service.id), timeout=1800), f"start {service.id}")
 
 
-def apply(plan, project_root: Path, *, resume=False, defer_verification=False, clean_chain_data=False, clean_empty_network_conflicts=False, prompt_cleanup_empty_network_conflicts=False, verbose=False):
+def apply(plan, project_root: Path, *, resume=False, revision=None, defer_verification=False, clean_chain_data=False, clean_empty_network_conflicts=False, prompt_cleanup_empty_network_conflicts=False, verbose=False):
     root=run_root(project_root, plan.deployment_id)
     try:
         with deployment_lock(root):
             bundle=root / "bundle"
             effective=_effective_plan(plan, project_root, root)
+            if revision:
+                revision_path = root / "revisions" / revision / "revision.json"
+                current_path = root / "current-revision.json"
+                if not revision_path.is_file():
+                    raise ApplyError(f"prepared revision not found: {revision}")
+                if not current_path.is_file() or json.loads(current_path.read_text(encoding="utf-8")).get("revision_id") != revision:
+                    raise ApplyError(f"revision {revision} is not the current prepared bundle; run prepare for it first")
+                resume = True
             # A normal install must reflect the current source and generated
             # runtime env files.  Only an explicit resume reuses the previous
             # immutable bundle.
             if not resume:
-                if bundle.exists(): shutil.rmtree(bundle)
-                artifacts = _compile_contract_artifacts(project_root, root)
-                render_plan(effective, bundle)
-                _attach_contract_artifacts(effective, bundle, artifacts)
+                effective, bundle, sources, revision_id = _prepare_bundle(plan, project_root, root)
             elif not bundle.exists():
-                artifacts = _compile_contract_artifacts(project_root, root)
-                render_plan(effective, bundle)
-                _attach_contract_artifacts(effective, bundle, artifacts)
-            try:
-                sources = source_evidence(effective, project_root)
-            except SourceError as exc:
-                raise ApplyError(f"source evidence failed: {exc}") from exc
+                effective, bundle, sources, revision_id = _prepare_bundle(plan, project_root, root)
+            else:
+                revision_id = None
+                try:
+                    sources = json.loads((bundle / "shared" / "source-evidence.json").read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ApplyError("prepared bundle is missing valid source evidence; run prepare again") from exc
             try:
                 secret_hashes = distribute_secrets(effective, project_root)
             except SecretError as exc:
                 raise ApplyError(f"secret distribution failed: {exc}") from exc
-            previous_status = json.loads((root / "status.json").read_text()) if resume and (root / "status.json").exists() else {}
+            previous_status = json.loads((root / "status.json").read_text()) if (root / "status.json").exists() else {}
             previous_fingerprints = previous_status.get("service_fingerprints", {})
-            status={"deployment_id": plan.deployment_id, "state": "running", "services": previous_status.get("services", {}), "service_fingerprints": {}, "sources": sources, "secret_hashes": secret_hashes, "readiness": previous_status.get("readiness", {})}
+            previous_services = previous_status.get("services", {})
+            removed = sorted(service_id for service_id, state in previous_services.items() if state == "applied" and service_id not in {item.id for item in effective.services})
+            if removed:
+                raise ApplyError("removing managed services is not implemented yet; use an inventory without: " + ", ".join(removed))
+            desired_fingerprints = {
+                service.id: _service_fingerprint(effective, service, bundle, project_root)
+                for service in effective.services
+            }
+            desired_inputs = {
+                service.id: _service_fingerprint_inputs(effective, service, bundle)
+                for service in effective.services
+            }
+            changes = {
+                "added": sorted(
+                    service.id for service in effective.services
+                    if previous_services.get(service.id) != "applied"
+                ),
+                "changed": sorted(
+                    service.id for service in effective.services
+                    if previous_services.get(service.id) == "applied"
+                    and previous_fingerprints.get(service.id) != desired_fingerprints[service.id]
+                ),
+                "unchanged": sorted(
+                    service.id for service in effective.services
+                    if previous_services.get(service.id) == "applied"
+                    and previous_fingerprints.get(service.id) == desired_fingerprints[service.id]
+                ),
+                "components": sorted(
+                    service.id for service in effective.services
+                    if previous_services.get(service.id) == "applied"
+                    and previous_fingerprints.get(service.id) != desired_fingerprints[service.id]
+                    and any(previous_status.get("service_inputs", {}).get(service.id, {}).get(key) != desired_inputs[service.id].get(key) for key in ("components", "runtime_assets"))
+                ),
+                "configuration": sorted(
+                    service.id for service in effective.services
+                    if previous_services.get(service.id) == "applied"
+                    and previous_fingerprints.get(service.id) != desired_fingerprints[service.id]
+                    and not any(previous_status.get("service_inputs", {}).get(service.id, {}).get(key) != desired_inputs[service.id].get(key) for key in ("components", "runtime_assets"))
+                ),
+            }
+            changed_services = set(changes["added"]) | set(changes["changed"])
+            changed_machines = {
+                effective.service(service_id).machine_id
+                for service_id in changed_services
+            }
+            status={"deployment_id": plan.deployment_id, "state": "running", "services": previous_status.get("services", {}), "service_fingerprints": {}, "service_inputs": desired_inputs, "secret_hashes": secret_hashes, "readiness": previous_status.get("readiness", {})}
+            status["changes"] = changes
+            if revision_id:
+                status["target_revision"] = revision_id
+            elif previous_status.get("target_revision"):
+                status["target_revision"] = previous_status["target_revision"]
             record(root, {"state": "secrets_distributed", "machines": sorted(secret_hashes)})
             artifacts = _distribute_chain_artifact(effective, project_root)
             status["chain_artifacts"] = artifacts
             record(root, {"state": "chain_artifacts_distributed", "machines": sorted(artifacts)})
-            _reject_existing_chain_data(effective, resume=resume, clean=clean_chain_data)
+            _reject_existing_chain_data(effective, resume=resume or bool(previous_status), clean=clean_chain_data)
             write_status(root, status)
             for machine in effective.machines:
+                if machine.id not in changed_machines:
+                    continue
+                try:
+                    verify_machine_manifest(effective, machine, bundle / "machines" / machine.id)
+                except StagingManifestError as exc:
+                    raise ApplyError(f"prepared bundle verification failed: {exc}") from exc
                 if verbose: print(f"[VERBOSE] staging bundle on {machine.id}", flush=True)
                 _stage(machine, project_root, root, bundle / "machines" / machine.id)
             for step in effective.steps:
@@ -553,9 +788,10 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                     record(root, {"step": step.id, "state": "succeeded", "checks": len(checks)})
                 elif step.action == "service_apply":
                     service=effective.service(step.service_id)
-                    fingerprint = _service_fingerprint(effective, service, bundle, project_root)
+                    fingerprint = desired_fingerprints[service.id]
                     status["service_fingerprints"][service.id] = fingerprint
-                    if resume and status["services"].get(service.id) == "applied" and previous_fingerprints.get(service.id) == fingerprint:
+                    reused = service.id not in changed_services
+                    if reused:
                         record(root,{"step":step.id,"state":"reused","service":service.id})
                     else:
                         _apply_service(
@@ -570,7 +806,7 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
                             prompt_cleanup_empty_network_conflicts=prompt_cleanup_empty_network_conflicts,
                         )
                         status["services"][service.id]="applied"; record(root,{"step":step.id,"state":"succeeded","service":service.id})
-                    if service.type == "contracts-deploy":
+                    if service.type == "contracts-deploy" and not reused:
                         targets = _distribute_contract_runtime(effective, service)
                         record(root, {"step": step.id, "state": "contract_runtime_distributed", "machines": targets})
                 elif step.action == "readiness":
@@ -588,15 +824,54 @@ def apply(plan, project_root: Path, *, resume=False, defer_verification=False, c
     except (StateLockError, ExecutionError) as exc: raise ApplyError(str(exc)) from exc
 
 
-def push(plan, project_root: Path):
-    root=run_root(project_root, plan.deployment_id); effective=_effective_plan(plan, project_root, root); bundle=root / "bundle"; render_plan(effective,bundle)
-    try:
-        sources = source_evidence(effective, project_root)
-    except SourceError as exc:
-        raise ApplyError(f"source evidence failed: {exc}") from exc
-    (bundle / "shared" / "source-evidence.json").write_text(json.dumps(sources, indent=2, sort_keys=True) + "\n")
-    for machine in effective.machines: _stage(machine, project_root, root, bundle / "machines" / machine.id)
-    write_status(root,{"deployment_id":plan.deployment_id,"state":"pushed","services":{},"sources":sources}); return root
+def push(plan, project_root: Path, *, revision: str | None = None):
+    root=run_root(project_root, plan.deployment_id); effective=_effective_plan(plan, project_root, root); bundle=root / "bundle"
+    manifests = [bundle / "machines" / machine.id / "manifest.json" for machine in effective.machines]
+    evidence_path = bundle / "shared" / "source-evidence.json"
+    if bundle.exists() and all(path.is_file() for path in manifests) and evidence_path.is_file():
+        sources = json.loads(evidence_path.read_text(encoding="utf-8"))
+    elif bundle.exists():
+        raise ApplyError("existing bundle is incomplete; run prepare before pushing")
+    else:
+        raise ApplyError("no prepared bundle found; run prepare before pushing")
+    current_revision = root / "current-revision.json"
+    if revision:
+        revision_path = root / "revisions" / revision / "revision.json"
+        if not revision_path.is_file():
+            raise ApplyError(f"prepared revision not found: {revision}")
+        try:
+            revision_document = json.loads(revision_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ApplyError(f"invalid prepared revision: {revision}") from exc
+        if revision_document.get("revision_id") != revision or revision_document.get("deployment_id") != plan.deployment_id:
+            raise ApplyError(f"prepared revision does not belong to deployment: {revision}")
+        evidence_hash = hashlib.sha256(json.dumps(sources, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if revision_document.get("source_evidence_sha256") != evidence_hash:
+            raise ApplyError(f"current source evidence does not match prepared revision {revision}")
+        for machine in effective.machines:
+            manifest = bundle / "machines" / machine.id / "manifest.json"
+            expected = revision_document.get("machine_manifests", {}).get(machine.id)
+            if expected != _file_digest(manifest):
+                raise ApplyError(f"current bundle does not match prepared revision {revision} on machine {machine.id}")
+    elif current_revision.is_file():
+        try:
+            revision = json.loads(current_revision.read_text(encoding="utf-8")).get("revision_id")
+        except json.JSONDecodeError:
+            revision = None
+    for machine in effective.machines:
+        try:
+            verify_machine_manifest(effective, machine, bundle / "machines" / machine.id)
+        except StagingManifestError as exc:
+            raise ApplyError(f"prepared bundle verification failed: {exc}") from exc
+        _stage(machine, project_root, root, bundle / "machines" / machine.id)
+    revision_id = revision
+    current_revision = root / "current-revision.json"
+    if revision_id is None and current_revision.is_file():
+        revision_id = json.loads(current_revision.read_text(encoding="utf-8")).get("revision_id")
+    pushed = {"deployment_id":plan.deployment_id,"state":"pushed","services":{}}
+    if revision_id:
+        pushed["target_revision"] = revision_id
+    write_status(root, pushed); return root
 
 
 def recreate_service(plan, project_root: Path, service: str, *, build=False):

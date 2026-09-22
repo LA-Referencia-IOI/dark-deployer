@@ -37,13 +37,29 @@ while (($#)); do
   esac
 done
 
-command -v aws >/dev/null || { echo 'aws is required in PATH' >&2; exit 1; }
+aws_bin=''
+for candidate in "${AWS_CLI:-}" /opt/homebrew/bin/aws "$(command -v aws 2>/dev/null || true)" /usr/local/bin/aws; do
+  [[ -n "$candidate" && -x "$candidate" ]] || continue
+  description="$(file -b "$candidate" 2>/dev/null || true)"
+  case "$description" in
+    *arm64*|*"universal binary"*|*"Universal"*) aws_bin="$candidate"; break ;;
+  esac
+  # Homebrew's aws command is a portable Python launcher rather than a Mach-O.
+  if [[ "$candidate" == "/opt/homebrew/bin/aws" ]] && "$candidate" --version >/dev/null 2>&1; then
+    aws_bin="$candidate"
+    break
+  fi
+done
+if [[ -z "$aws_bin" ]]; then
+  echo 'a native AWS CLI for this machine is required (on Apple Silicon: brew install awscli)' >&2
+  exit 1
+fi
 
 aws_args=()
 [[ -n "$REGION" ]] && aws_args+=(--region "$REGION")
 [[ -n "$PROFILE" ]] && aws_args+=(--profile "$PROFILE")
 
-instances="$(aws ${aws_args[@]+"${aws_args[@]}"} ec2 describe-instances \
+instances="$("$aws_bin" ${aws_args[@]+"${aws_args[@]}"} ec2 describe-instances \
   --filters "Name=tag:dARKDeployment,Values=$DEPLOYMENT" \
             'Name=instance-state-name,Values=running' \
   --query 'Reservations[].Instances[].InstanceId' --output text)" || exit 1
@@ -57,7 +73,7 @@ if [ "$count" -ne "$EXPECT" ]; then
 fi
 echo "checking $count host(s) of $DEPLOYMENT"
 
-command_id="$(aws ${aws_args[@]+"${aws_args[@]}"} ssm send-command \
+command_id="$("$aws_bin" ${aws_args[@]+"${aws_args[@]}"} ssm send-command \
   --document-name AWS-RunShellScript \
   --instance-ids ${ids[@]+"${ids[@]}"} \
   --comment 'dark bootstrap stamp check' \
@@ -70,7 +86,7 @@ for id in "${ids[@]}"; do
   status='Pending'
   waited=0
   while :; do
-    status="$(aws ${aws_args[@]+"${aws_args[@]}"} ssm get-command-invocation \
+    status="$("$aws_bin" ${aws_args[@]+"${aws_args[@]}"} ssm get-command-invocation \
       --command-id "$command_id" --instance-id "$id" \
       --query 'Status' --output text 2>/dev/null || echo Unknown)"
     case "$status" in
@@ -83,7 +99,7 @@ for id in "${ids[@]}"; do
     sleep 5
     waited=$((waited + 5))
   done
-  out="$(aws ${aws_args[@]+"${aws_args[@]}"} ssm get-command-invocation \
+  out="$("$aws_bin" ${aws_args[@]+"${aws_args[@]}"} ssm get-command-invocation \
     --command-id "$command_id" --instance-id "$id" \
     --query 'StandardOutputContent' --output text 2>/dev/null || true)"
   if [ "$status" = 'Success' ]; then

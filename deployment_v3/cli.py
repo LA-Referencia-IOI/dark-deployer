@@ -18,7 +18,7 @@ from .inventory import InventoryError, load_inventory
 from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
-from .runner import ApplyError, _effective_plan, apply, existing_chain_data, follow_service_logs, list_managed_deployments, list_managed_services, manage_service, managed_plan, persistent_data_inventory, push
+from .runner import ApplyError, _effective_plan, apply, existing_chain_data, follow_service_logs, list_managed_deployments, list_managed_services, manage_service, managed_plan, persistent_data_inventory, prepare, push
 from .artifacts import ArtifactError, export_chain_group, initialize_chain, verify_artifact_compatibility, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
@@ -37,7 +37,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
     operational = {"services", "logs", "build", "stop", "start", "restart", "recreate", "remove"}
-    for name in ("validate", "plan", "render", "preflight", "push", "apply", "resume", "status", "verify", "install", "services", "logs", "build", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
+    for name in ("validate", "plan", "render", "preflight", "prepare", "push", "apply", "resume", "status", "verify", "install", "services", "logs", "build", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
         command = actions.add_parser(name)
         if name in operational:
             source = command.add_mutually_exclusive_group(required=True)
@@ -54,6 +54,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--tail", type=int, default=100, help="number of existing log lines to print before following (default: 100)")
         if name == "render":
             command.add_argument("--output", required=True, type=Path)
+        if name == "push":
+            command.add_argument("--revision", help="prepared revision to transfer")
         if name == "inventory-resolve":
             command.add_argument("--output", required=True, type=Path)
         if name == "inventory-explain":
@@ -61,6 +63,7 @@ def _parser() -> argparse.ArgumentParser:
         if name == "inventory-network-matrix":
             command.add_argument("--traffic", choices=("blockchain", "ipfs", "cluster"), help="limit output to one P2P family")
         if name == "install":
+            command.add_argument("--json", action="store_true", help="print the complete verification JSON")
             command.add_argument("--non-interactive", action="store_true")
             command.add_argument("--yes", action="store_true")
             command.add_argument("--resume", action="store_true")
@@ -87,6 +90,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--clean-empty-network-conflicts", action="store_true",
                                  help="remove only empty Docker bridge networks that overlap the requested deployment subnet")
         if name in {"apply", "resume"}:
+            command.add_argument("--revision", help="prepared revision to apply")
             command.add_argument("--clean-empty-network-conflicts", action="store_true",
                                  help="remove only empty Docker bridge networks that overlap the requested deployment subnet")
         if name in {"build", "stop", "start", "restart", "recreate", "remove"}:
@@ -386,7 +390,12 @@ def _install(args: argparse.Namespace, plan) -> None:
     # public Compose/config bundle is rebuilt.
     bundle = root / "bundle"
     if bundle.exists() and (not args.resume or args.refresh_bundle):
-        shutil.rmtree(bundle)
+        # Move the generated bundle out of the active path before removing it.
+        # Finder can recreate .DS_Store while rmtree walks a live checkout;
+        # the rename keeps the next render independent from that race.
+        stale = root / f".bundle-old-{time.time_ns()}"
+        bundle.replace(stale)
+        shutil.rmtree(stale, ignore_errors=True)
     effective_for_data = _effective_plan(plan, project_root, root)
     existing = existing_chain_data(effective_for_data)
     clean_chain_data = False
@@ -405,6 +414,8 @@ def _install(args: argparse.Namespace, plan) -> None:
             raise ApplyError("installation cancelled: existing Besu data was preserved")
         clean_chain_data = True
     progress("applying rendered deployment")
+    if args.verbose and not args.resume:
+        print("[VERBOSE] compiling contract artifacts (Solidity / solc-js)", flush=True)
     output = apply(
         plan,
         project_root,
@@ -417,11 +428,44 @@ def _install(args: argparse.Namespace, plan) -> None:
     )
     progress("running final verification")
     report = _verify_with_retries(plan, project_root, verbose=args.verbose)
-    _write_install_report(root, report, resumed=args.resume)
-    print(json.dumps(report, indent=2, sort_keys=True))
+    report_path = _write_install_report(root, report, resumed=args.resume)
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _print_verification_summary(report, report_path)
     if not report.get("ok"):
         raise SystemExit(2)
     print(f"[OK] {'Installation resumed' if args.resume else 'Installation complete'} from {output}")
+
+
+def _print_verification_summary(report: dict, report_path: Path) -> None:
+    """Show verification in a compact operator view; keep full JSON on disk."""
+    services = report.get("services", {})
+    counts = {}
+    for item in services.values():
+        state = item.get("state", "unknown")
+        counts[state] = counts.get(state, 0) + 1
+    failed = [name for name, item in services.items() if not item.get("ok", False)]
+    result = "OK" if report.get("ok") else "FAILED"
+    print(f"Verification: {result} — {report.get('deployment_id', 'unknown')}")
+    print(f"Services: {len(services)} total; " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())))
+    if failed:
+        print("Failed services: " + ", ".join(sorted(failed)))
+    else:
+        print("Checks: all reported services passed")
+    by_machine = {}
+    for name, item in sorted(services.items()):
+        by_machine.setdefault(item.get("machine", "unknown"), []).append((name, item))
+    print("Verification details:")
+    for machine, entries in sorted(by_machine.items()):
+        print(f"  {machine}/")
+        for name, item in entries:
+            mark = "OK" if item.get("ok") else "FAIL"
+            state = item.get("state", "unknown")
+            checks = sorted(key for key in item if key not in {"group", "machine", "ok", "state"})
+            suffix = f" checks={','.join(checks)}" if checks else ""
+            print(f"    [{mark}] {name}: {state}{suffix}")
+    print(f"Full JSON report: {report_path}")
 
 
 def _verify_with_retries(plan, project_root: Path, attempts: int = 120, *, verbose: bool = False) -> dict:
@@ -668,9 +712,14 @@ def main() -> None:
             result = manage_service(plan, project_root, args.action, target, build=getattr(args, "build", False), dry_run=args.dry_run)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
+        if args.action == "prepare":
+            project_root = Path(__file__).resolve().parents[1]
+            output = prepare(plan, project_root)
+            print(f"[OK] Prepared public deployment bundle at {output}")
+            return
         if args.action == "push":
             project_root = Path(__file__).resolve().parents[1]
-            output = push(plan, project_root)
+            output = push(plan, project_root, revision=args.revision)
             print(f"[OK] Pushed public deployment bundle from {output}")
             return
         if args.action in {"apply", "resume"}:
@@ -679,6 +728,7 @@ def main() -> None:
                 plan,
                 project_root,
                 resume=args.action == "resume",
+                revision=args.revision,
                 clean_empty_network_conflicts=args.clean_empty_network_conflicts,
             )
             print(f"[OK] {'Resumed' if args.action == 'resume' else 'Applied'} deployment from {output}")
