@@ -157,6 +157,39 @@ Resources:
             mountpoint -q /srv/dark/data || mount /srv/dark/data
             install -d -m 0750 -o "$deploy_user" -g "$deploy_user" /srv/dark/data
             chown "$deploy_user:$deploy_user" /srv/dark/data
+            install -d -m 0700 -o "$deploy_user" -g "$deploy_user" /srv/dark/secrets
+            cat >/usr/local/sbin/dark-storage-permissions <<'EOF'
+            #!/bin/sh
+            set -eu
+            deploy_user='${DeployUser}'
+            mountpoint -q /srv/dark/data
+            install -d -m 0755 -o "$deploy_user" -g "$deploy_user" /srv/dark
+            install -d -m 0750 -o "$deploy_user" -g "$deploy_user" /srv/dark/data
+            install -d -m 0700 -o "$deploy_user" -g "$deploy_user" /srv/dark/secrets
+            probe="$(runuser -u "$deploy_user" -- mktemp -d /srv/dark/.dark-permission-check.XXXXXX)"
+            rmdir "$probe"
+            probe="$(runuser -u "$deploy_user" -- mktemp -d /srv/dark/data/.dark-permission-check.XXXXXX)"
+            rmdir "$probe"
+            probe="$(runuser -u "$deploy_user" -- mktemp -d /srv/dark/secrets/.dark-permission-check.XXXXXX)"
+            rmdir "$probe"
+            EOF
+            chmod 0755 /usr/local/sbin/dark-storage-permissions
+            cat >/etc/systemd/system/dark-storage-permissions.service <<'EOF'
+            [Unit]
+            Description=Validate dARK data and secrets permissions after the data mount
+            RequiresMountsFor=/srv/dark/data
+            After=local-fs.target
+            Before=docker.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/dark-storage-permissions
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            systemctl daemon-reload
+            systemctl enable --now dark-storage-permissions.service
             install -d -m 0710 -o root -g root /srv/dark/data/docker
             systemctl stop docker.service containerd.service 2>/dev/null || true
             if [ ! -L /var/lib/containerd ]; then
@@ -165,7 +198,6 @@ Resources:
                 [ ! -d /var/lib/containerd ] || cp -a /var/lib/containerd/. /srv/dark/data/containerd/
                 rm -rf /var/lib/containerd
               else
-                install -d -m 0710 -o root -g root /srv/dark/data
                 if [ -d /var/lib/containerd ]; then mv /var/lib/containerd /srv/dark/data/containerd; else install -d -m 0710 -o root -g root /srv/dark/data/containerd; fi
               fi
               ln -s /srv/dark/data/containerd /var/lib/containerd
