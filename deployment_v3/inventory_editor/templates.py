@@ -20,7 +20,6 @@ _TEMPLATES = {
     "operator-one-server-aws-sandbox": "../operator-inventory/one-server-aws-sandbox.json",
     "operator-local-two-site": "../operator-inventory/local-two-site.json",
     "operator-aws-active-two-site-nine-host": "../operator-inventory/aws-active-two-site-nine-host.json",
-    "operator-aws-active-six-host": "../operator-inventory/aws-active-six-host.json",
     "operator-production-five-host": "../operator-inventory/production-five-host.json",
     "operator-production-six-host": "../operator-inventory/production-six-host.json",
 }

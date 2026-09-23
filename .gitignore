@@ -154,8 +154,9 @@ dARK_dapp/compiled/
 
 components/
 
-# Account-specific AWS CloudFormation parameters.
-infrastructure/aws/cloudformation/active-six-host.parameters.yaml
+# Account-specific AWS CloudFormation parameters (account ID, ACM ARN,
+# hosted zone): never commit the real parameters file.
+infrastructure/aws/cloudformation/dark2-prod-aws.parameters.yaml
 
 __pycache__/
 
