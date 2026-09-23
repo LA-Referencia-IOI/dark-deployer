@@ -83,7 +83,14 @@ class SshExecutor(Executor):
             command.extend(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
         command.append(f"{ssh.user}@{self.machine.management_address}")
         command.append(shlex.join(argv))
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = (exc.stderr or "") + f"\nSSH command to {ssh.user}@{self.machine.management_address}:{ssh.port} timed out after {timeout:.0f}s"
+            return CommandResult(tuple(command), 124, stdout if isinstance(stdout, str) else stdout.decode(errors="replace"), stderr)
+        except OSError as exc:
+            return CommandResult(tuple(command), 127, "", str(exc))
         return CommandResult(tuple(command), completed.returncode, completed.stdout, completed.stderr)
 
     def stream(self, argv: Sequence[str]) -> int:
