@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1672" height="941" viewBox="0 0 1672 941">
+  <defs>
+    <linearGradient id="title" x1="0" x2="1"><stop stop-color="#123d73"/><stop offset="1" stop-color="#1e5a9f"/></linearGradient>
+    <linearGradient id="node" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#f8fbff"/><stop offset="1" stop-color="#dbe9f6"/></linearGradient>
+    <marker id="blueArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#146dcc"/></marker>
+    <marker id="greenArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#148a45"/></marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#12345d} .title{font-size:26px;font-weight:700;fill:white} .head{font-size:18px;font-weight:700;fill:white}
+      .label{font-size:17px;font-weight:700} .small{font-size:15px} .tiny{font-size:13px} .service{font-size:16px;font-weight:700;fill:white}
+      .box{fill:url(#node);stroke:#1671c8;stroke-width:2} .servicebox{fill:#2e8b47;rx:10} .proxy{fill:#ffd59c;stroke:#f27b1a;stroke-width:2;rx:10}
+    </style>
+  </defs>
+  <rect width="1672" height="941" fill="white"/>
+  <rect x="10" y="10" width="1010" height="52" rx="12" fill="url(#title)"/>
+  <text x="30" y="45" class="title">Operator inventory: dark-operator-local-ha | local HA simulation | chain_id 2025</text>
+
+  <rect x="32" y="82" width="1280" height="780" rx="18" fill="#fff" stroke="#1671c8" stroke-width="2" stroke-dasharray="8 5"/>
+  <text x="54" y="116" class="label">Local Docker host: local</text>
+  <text x="54" y="141" class="small">Network lab · 10.99.0.0/24 · execution: local · all logical groups share one Docker daemon</text>
+
+  <rect x="480" y="170" width="380" height="72" class="proxy"/>
+  <text x="670" y="199" text-anchor="middle" class="label">gateway :80 (localhost)</text>
+  <text x="670" y="223" text-anchor="middle" class="small">/ → resolver · /api/v1/ → minter-api</text>
+  <line x1="670" y1="242" x2="670" y2="282" stroke="#f27b1a" stroke-width="4" marker-end="url(#blueArrow)"/>
+
+  <rect x="70" y="282" width="350" height="285" rx="14" class="box"/>
+  <rect x="70" y="282" width="350" height="45" rx="12" fill="#123d73"/>
+  <text x="92" y="311" class="head">apps · local</text><text x="398" y="311" text-anchor="end" class="head">Docker</text>
+  <rect x="92" y="350" width="140" height="42" class="servicebox"/><text x="162" y="377" text-anchor="middle" class="service">rpc01</text>
+  <rect x="250" y="350" width="140" height="42" class="servicebox"/><text x="320" y="377" text-anchor="middle" class="service">admin-api</text>
+  <rect x="92" y="405" width="140" height="42" class="servicebox"/><text x="162" y="432" text-anchor="middle" class="service">dashboard</text>
+  <rect x="250" y="405" width="140" height="42" class="servicebox"/><text x="320" y="432" text-anchor="middle" class="service">minter-api</text>
+  <rect x="92" y="460" width="298" height="42" class="servicebox"/><text x="241" y="487" text-anchor="middle" class="service">minter-worker</text>
+  <text x="245" y="540" text-anchor="middle" class="tiny">gateway routes: dashboard · explorer · minter · resolver</text>
+
+  <rect x="470" y="282" width="350" height="285" rx="14" class="box"/>
+  <rect x="470" y="282" width="350" height="45" rx="12" fill="#123d73"/>
+  <text x="492" y="311" class="head">blockchain-a · local</text>
+  <rect x="492" y="350" width="140" height="42" class="servicebox"/><text x="562" y="377" text-anchor="middle" class="service">validator01</text>
+  <rect x="650" y="350" width="140" height="42" class="servicebox"/><text x="720" y="377" text-anchor="middle" class="service">validator02</text>
+  <rect x="492" y="405" width="140" height="42" class="servicebox"/><text x="562" y="432" text-anchor="middle" class="service">validator03</text>
+  <rect x="650" y="405" width="140" height="42" class="servicebox"/><text x="720" y="432" text-anchor="middle" class="service">observer01</text>
+  <text x="645" y="505" text-anchor="middle" class="tiny">QBFT validator group</text>
+
+  <rect x="870" y="282" width="350" height="285" rx="14" class="box"/>
+  <rect x="870" y="282" width="350" height="45" rx="12" fill="#123d73"/>
+  <text x="892" y="311" class="head">blockchain-b · local</text>
+  <rect x="892" y="350" width="140" height="42" class="servicebox"/><text x="962" y="377" text-anchor="middle" class="service">validator04</text>
+  <rect x="1050" y="350" width="140" height="42" class="servicebox"/><text x="1120" y="377" text-anchor="middle" class="service">validator05</text>
+  <text x="1045" y="435" text-anchor="middle" class="tiny">QBFT validator group</text>
+
+  <line x1="420" y1="425" x2="470" y2="425" stroke="#146dcc" stroke-width="4" marker-end="url(#blueArrow)"/>
+  <text x="445" y="410" text-anchor="middle" class="tiny">RPC</text>
+  <line x1="820" y1="425" x2="870" y2="425" stroke="#146dcc" stroke-width="4" stroke-dasharray="10 7" marker-end="url(#blueArrow)"/>
+  <text x="845" y="410" text-anchor="middle" class="tiny">Blockchain P2P</text>
+
+  <line x1="645" y1="567" x2="645" y2="620" stroke="#146dcc" stroke-width="4" marker-end="url(#blueArrow)"/>
+  <line x1="1045" y1="567" x2="1045" y2="620" stroke="#146dcc" stroke-width="4" marker-end="url(#blueArrow)"/>
+  <rect x="70" y="620" width="1150" height="42" rx="8" fill="#b8dcff" stroke="#1671c8" stroke-width="2"/>
+  <text x="645" y="647" text-anchor="middle" class="label">Application / Blockchain API · lab 10.99.0.0/24</text>
+
+  <rect x="230" y="710" width="350" height="125" rx="14" class="box"/>
+  <rect x="230" y="710" width="350" height="40" rx="12" fill="#123d73"/><text x="252" y="737" class="head">storage-1 · local</text>
+  <rect x="252" y="770" width="140" height="42" class="servicebox"/><text x="322" y="797" text-anchor="middle" class="service">IPFS</text>
+  <rect x="410" y="770" width="140" height="42" class="servicebox"/><text x="480" y="797" text-anchor="middle" class="service">Cluster</text>
+  <rect x="690" y="710" width="350" height="125" rx="14" class="box"/>
+  <rect x="690" y="710" width="350" height="40" rx="12" fill="#123d73"/><text x="712" y="737" class="head">storage-2 · local</text>
+  <rect x="712" y="770" width="140" height="42" class="servicebox"/><text x="782" y="797" text-anchor="middle" class="service">IPFS</text>
+  <rect x="870" y="770" width="140" height="42" class="servicebox"/><text x="940" y="797" text-anchor="middle" class="service">Cluster</text>
+  <line x1="580" y1="790" x2="690" y2="790" stroke="#148a45" stroke-width="4" stroke-dasharray="10 7" marker-end="url(#greenArrow)"/>
+  <text x="635" y="775" text-anchor="middle" class="tiny">Storage P2P · replication 1 → 2</text>
+  <line x1="320" y1="662" x2="320" y2="710" stroke="#148a45" stroke-width="4" marker-end="url(#greenArrow)"/>
+  <line x1="940" y1="662" x2="940" y2="710" stroke="#148a45" stroke-width="4" marker-end="url(#greenArrow)"/>
+
+  <rect x="1335" y="82" width="305" height="295" rx="14" fill="#edf6ff" stroke="#9ab8d6" stroke-width="2"/>
+  <text x="1355" y="116" class="label">Inventory details</text>
+  <text x="1355" y="148" class="small">Cluster: dark-local</text><text x="1355" y="174" class="small">Environment: local</text><text x="1355" y="200" class="small">Network: lab 10.99.0.0/24</text><text x="1355" y="226" class="small">Format: operator inventory v3</text><text x="1355" y="252" class="small">Machines: 1 Docker host</text><text x="1355" y="278" class="small">Storage replicas: 2</text><text x="1355" y="304" class="small">Gateway: localhost:80</text>
+  <rect x="1335" y="400" width="305" height="210" rx="14" fill="#edf6ff" stroke="#9ab8d6" stroke-width="2"/>
+  <text x="1355" y="434" class="label">Operational settings</text><text x="1355" y="466" class="small">Execution: local</text><text x="1355" y="492" class="small">SSH: not required</text><text x="1355" y="518" class="small">Shared daemon: yes</text><text x="1355" y="544" class="small">Replication target: 2</text><text x="1355" y="570" class="small">Publish after replicas: 1</text>
+  <rect x="1335" y="634" width="305" height="227" rx="14" fill="#edf6ff" stroke="#9ab8d6" stroke-width="2"/>
+  <text x="1355" y="668" class="label">Legend</text><rect x="1355" y="690" width="42" height="22" class="proxy"/><text x="1412" y="707" class="small">Local gateway / proxy</text><rect x="1355" y="728" width="42" height="22" class="servicebox"/><text x="1412" y="745" class="small">Service / component</text><line x1="1355" y1="775" x2="1397" y2="775" stroke="#146dcc" stroke-width="4" marker-end="url(#blueArrow)"/><text x="1412" y="781" class="small">Service interaction</text><line x1="1355" y1="815" x2="1397" y2="815" stroke="#148a45" stroke-width="4" stroke-dasharray="8 5" marker-end="url(#greenArrow)"/><text x="1412" y="821" class="small">Storage / replication P2P</text>
+</svg>
