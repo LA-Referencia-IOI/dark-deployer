@@ -332,6 +332,7 @@ def _install(args: argparse.Namespace, plan) -> None:
             except (OSError, subprocess.CalledProcessError) as exc:
                 raise ApplyError(f"master wallet creation failed: {exc}") from exc
             args.master_wallet_file = project_root / "blockchain" / "master-wallet.txt"
+            print(f"[OK] Master wallet credentials saved at {args.master_wallet_file} (permissions: 600)")
         if not args.master_wallet_file or not Path(args.master_wallet_file).is_file():
             raise ApplyError("installation needs a master wallet; select one or use --create-master-wallet")
         signer_file = args.contract_signer_file
@@ -359,6 +360,7 @@ def _install(args: argparse.Namespace, plan) -> None:
             secret_root.mkdir(parents=True, exist_ok=True)
             initialize_greenfield_secrets(plan, secret_root)
             print(f"[OK] Generated managed secrets under {secret_root}")
+            print("     These files are deployment inputs; keep them private and back them up securely.")
         supplied_artifact = args.chain_artifact.resolve() if args.chain_artifact else None
         if supplied_artifact and args.new_chain:
             raise ApplyError("--new-chain cannot be combined with --chain-artifact; choose a supplied artifact or generate a new one")
@@ -387,6 +389,7 @@ def _install(args: argparse.Namespace, plan) -> None:
                 shutil.rmtree(artifact_root)
             initialize_chain(plan, artifact_root, address)
             print(f"[OK] Initialized managed chain artifact under {artifact_root}")
+            print("     This directory contains the genesis and node material used by this deployment.")
     # Site-aware peer maps are operational configuration, not new chain
     # identity. Refresh static nodes from existing public keys before the
     # manifest check/distribution; no genesis or private key is regenerated.
