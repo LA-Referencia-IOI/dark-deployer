@@ -1,8 +1,8 @@
 # Deployment Inventory, Artifacts, and Connectivity
 
 This reference describes the implemented v3 execution path. It complements the
-[operator-inventory design](deployment-v3-operator-inventory-proposal.md) and
-the practical [operations manual](../OPERATIONS-MANUAL.md). Code under
+[operator-inventory design](old/deployment-v3-operator-inventory-proposal.md)
+(archived) and the practical [operations runbook](operations.md). Code under
 `deployment_v3/` and the maintained templates are authoritative.
 
 ## Mental model
@@ -10,6 +10,9 @@ the practical [operations manual](../OPERATIONS-MANUAL.md). Code under
 An inventory is a typed, declarative graph rather than a collection of Docker
 environment variables. The compact operator format is resolved first; the
 resulting v3 inventory follows the same path as a directly authored v3 file.
+The input inventory describes desired intent; the resolved inventory is the
+deployment contract; and the applied topology snapshot is the authority for
+runtime service operations.
 
 ```text
 inventory -> load and validate -> groups -> plan -> render
@@ -17,13 +20,24 @@ inventory -> load and validate -> groups -> plan -> render
                          secrets / chain artifact / sources
                                               |
                                               v
-                            preflight -> push/apply/install -> verify
+                  preflight -> prepare -> push/apply/install -> verify
 ```
 
 The inventory captures intent and the plan turns it into ordered work. The
 renderer produces reproducible public artifacts. The runner combines those
 artifacts with selectively provisioned secrets and executes them locally or
 over SSH.
+
+For compact operator inventories, the inspection path is:
+
+```text
+compact inventory -> resolve -> explain / network matrix -> validate -> plan
+```
+
+`inventory-resolve` writes the complete v3 inventory, `inventory-explain`
+summarizes derived placement and service decisions, and
+`inventory-network-matrix` shows the selected paths between machines. These
+commands are offline inspection operations; they do not apply changes.
 
 ## Inventory model
 
@@ -76,7 +90,7 @@ The planner allocates a Docker subnet per daemon from the configured pool,
 rejecting overlap with declared LAN/VPN networks. It builds dependency phases:
 
 ```text
-preflight -> validators -> rpc -> contracts -> storage -> data
+preflight -> validators -> rpc -> observers -> contracts -> storage -> data
           -> applications -> verify
 ```
 
@@ -127,6 +141,34 @@ The firewall suggestion lists declared service exposures and derived Besu,
 Kubo, and Cluster P2P ports. It is an auditable input to firewall automation,
 not a command that changes a host firewall.
 
+## Bundles and revisions
+
+`prepare` materializes the rendered bundle into an immutable run root
+(`.generated/deployment-v3/<deployment-id>/`) and records a revision whose id
+is the SHA-256 of the topology, source evidence, and per-machine manifests.
+`push` validates and transfers every machine bundle, switching each machine's
+`current` symlink atomically; `apply` activates the currently prepared
+revision and service fingerprints make re-applies idempotent. The complete
+reference is [deployment-v3-revisions.md](deployment-v3-revisions.md).
+
+The operational sequence is:
+
+```text
+prepare -> push -> apply
+```
+
+`prepare` renders and stages an immutable bundle, records source evidence and
+machine manifests, and creates a topology-derived revision ID. `push` validates
+and transfers every machine bundle; it never performs a partial transfer.
+`apply` distributes secrets and chain artifacts, activates the prepared
+revision, and runs the dependency phases. For local deployments, `install`
+performs the complete cycle. `resume` reuses the reviewed immutable bundle;
+it does not silently resolve a new inventory.
+
+The revision identity covers the resolved topology, source evidence, and all
+machine manifests. Therefore a named revision cannot be pushed when its source
+evidence or machine bundle digests no longer match the prepared record.
+
 ## Source, secrets, and chain artifacts
 
 Before apply, source acquisition records branch, resolved commit, origin, and
@@ -157,12 +199,23 @@ catalogue defaults.
 
 ```bash
 venv/bin/python deploy.py validate --inventory inventory.json
+venv/bin/python deploy.py inventory-resolve --inventory inventory.json \
+  --output /tmp/dark-resolved.json
+venv/bin/python deploy.py inventory-explain --inventory inventory.json
+venv/bin/python deploy.py inventory-network-matrix --inventory inventory.json
 venv/bin/python deploy.py plan --inventory inventory.json --json
 venv/bin/python deploy.py render --inventory inventory.json --output /tmp/dark-render
 venv/bin/python deploy.py preflight --inventory inventory.json
+venv/bin/python deploy.py prepare --inventory inventory.json
+venv/bin/python deploy.py push --inventory inventory.json
+venv/bin/python deploy.py apply --inventory inventory.json
 venv/bin/python deploy.py install --inventory inventory.json
 venv/bin/python deploy.py verify --inventory inventory.json
 ```
+
+For an already deployed installation, use the applied topology snapshot to
+select exact `service:ID` targets. The source inventory locates a deployment,
+but it does not redefine the active revision.
 
 ## Verification expectations
 

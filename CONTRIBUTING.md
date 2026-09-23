@@ -1,21 +1,73 @@
 # Contributing to dARK
 
-Thank you for your interest in contributing to dARK! dARK is designed as **public, federated digital infrastructure**, and your contributions help ensure it remains sustainable and accessible.
+Thank you for your interest in contributing to dARK! dARK is designed as
+**public, federated digital infrastructure**, and your contributions help
+ensure it remains sustainable and accessible.
 
-## Licensing of Contributions
+By submitting a pull request or other contribution, you agree to license your
+contribution under the **GNU Affero General Public License v3.0 (AGPLv3)**.
 
-By submitting a pull request or other contribution, you agree to license your contribution under the **GNU Affero General Public License v3.0 (AGPLv3)**.
+## Environment
 
-### What this means for you
-*   Your code remains open source and credited to you.
-*   The project can continue to be used by public and academic institutions freely.
+- CPython **3.14** (exact), Docker Engine, Compose v2.
+- `./create_venv.sh [--python PYTHON] [--venv PATH] [--with-tui]` creates the
+  virtual environment; add `--with-tui` for the Textual editor/TUI extras.
+- `./deploy.sh` is the daily launcher: it keeps the venv healthy
+  (self-repairing from a requirements stamp) and forwards every
+  `deploy.py` subcommand.
 
-## How to Contribute
+## Repository layout for contributors
 
-1.  **Fork** the repository.
-2.  **Create** a feature branch (`git checkout -b feature/amazing-feature`).
-3.  **Commit** your changes (`git commit -m 'Add amazing feature'`).
-4.  **Push** to the branch (`git push origin feature/amazing-feature`).
-5.  **Open** a Pull Request.
+- `deployment_v3/` — the deployer core: inventory resolver, planner,
+  renderer, runner, metrics.
+- `examples/operator-inventory/` — maintained compact inventories (preferred
+  format); `examples/deployment-v3/` — legacy full-inventory examples.
+- `components/` — component checkouts (acquired at runtime, not tracked here;
+  each component has its own repository).
+- `tests/` — deployer test suites.
 
-Please ensure your code follows the project's coding standards and includes appropriate tests.
+## Tests
+
+The deployer uses **unittest**. The eight suites in `tests/` cover
+availability, the AWS CloudFormation profile, deployment v3 end to end,
+metrics (collector, Prometheus export, TUI view), the operations TUI, and the
+operator-inventory format:
+
+```bash
+venv/bin/python -m unittest discover -s tests -v
+# or a single suite
+venv/bin/python -m unittest tests.test_operator_inventory -v
+```
+
+The web inventory wizard has its own suite under `web-wizard/tests`,
+run with pytest (`web-wizard` requires exactly CPython 3.14 — see
+`web-wizard/README.md`).
+
+New features and bug fixes come with a focused test; run the full suite before
+opening a pull request.
+
+## Linting
+
+`requirements-dev.txt` pins `ruff` and `pytest`:
+
+```bash
+venv/bin/python -m pip install -r requirements-dev.txt
+venv/bin/python -m ruff check deployment_v3
+```
+
+## Component branches and catalog changes
+
+The catalog (`deployment_v3/catalog_data/dark-platform-baseline-v1.0.json`)
+pins default component branches — normally `main`. A development branch is
+declared in the inventory that needs it (`overrides.components`), never by
+editing the global catalog. See
+[docs/development.md](docs/development.md) for the component-development
+workflow, and `docs/known-issues.md` for the open items a change may touch.
+
+## Commits and documentation
+
+Keep commits short and thematic ("Add per-machine bundles and deployment
+verification"). Documentation follows one rule: when text and code disagree,
+the code wins — fix the text, or record a genuine code defect in
+[docs/known-issues.md](docs/known-issues.md). New and rewritten documentation
+is written in English.

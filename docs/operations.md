@@ -2,9 +2,10 @@
 
 ## Install
 
-Use Python 3.14, Docker Engine and Compose v2. A maintained compact operator
-inventory can be installed directly; copy and offline review commands are
-optional.
+Use Python 3.14, Docker Engine and Compose v2 — or simply use the
+`./deploy.sh` launcher, which keeps the virtual environment healthy on its own.
+A maintained compact operator inventory can be installed directly; copy and
+offline review commands are optional.
 For production, provision
 SSH access, VPN addresses, secret files, chain artifacts and storage paths
 before `preflight`. The generated plan applies every declared validator group,
@@ -30,6 +31,18 @@ venv/bin/python deploy.py plan --inventory inventory.json --json
 
 The compact Minter shoulder is set under
 `overrides.settings.minter.shoulder`; the maintained examples show `200`.
+
+### Runtime image versions
+
+All managed runtime image versions have one source of truth: the `base.images`
+block in `deployment_v3/catalog_data/dark-platform-baseline-v1.0.json` (Besu,
+Kubo, IPFS Cluster, PostgreSQL, MySQL, the Dashboard runtime and the edge
+proxy). Neither the Compose renderer nor its auxiliary tasks contain fallback
+image versions; a missing catalogue key fails inventory validation. Compact
+operator inventories inherit this block automatically. To upgrade a runtime
+image, change the catalogue entry, run the focused tests, render the target
+inventory and review every resulting `image:` field before applying; use an
+immutable digest for development/canary images.
 
 ## Verification
 
@@ -135,6 +148,48 @@ full `install` workflow). In short, `recreate` replaces one runtime container;
 `recreate --build` also rebuilds its code image; `apply` creates a new deployed
 configuration revision.
 
+## Remote deployments and revisions
+
+For remote hosts, the deployer works with prepared revisions instead of
+re-rendering on every machine:
+
+```bash
+./deploy.sh prepare --inventory examples/operator-inventory/dark2-prod-aws.json
+./deploy.sh push   --inventory examples/operator-inventory/dark2-prod-aws.json
+./deploy.sh apply  --inventory examples/operator-inventory/dark2-prod-aws.json
+```
+
+`prepare` renders and stages an immutable per-machine bundle and records a
+revision; `push` validates and transfers it to every machine (activating a
+`current` symlink per machine); `apply --revision <id>` consumes the currently
+prepared revision, while a plain `apply`/`install` re-prepares from current
+source. Service fingerprints in `status.json` make re-applies idempotent:
+unchanged services are reused instead of recreated. The full reference —
+including what `push` refuses to do with a stale bundle — is in
+[deployment-v3-revisions.md](deployment-v3-revisions.md).
+
+For AWS, the provisioned path is the CloudFormation stack
+`infrastructure/aws/cloudformation/` (see its README for the `dark2-prod-aws`
+runbook, parameters, and SSM access helpers); the resulting operator inventory
+is instantiated with `local-infra/instantiate-inventory.py`.
+
+## Metrics and monitoring
+
+Beyond the logs, the deployer offers a read-only `metrics` TUI and a
+Prometheus textfile export:
+
+```bash
+venv/bin/python deploy.py metrics-export \
+  --deployment dark-operator-local-ha \
+  --include-disk \
+  --output components/dark-monitoring/generated/dark.prom
+```
+
+The `components/dark-monitoring` stack (Prometheus, blackbox, node-exporter,
+cAdvisor, Grafana) derives its targets from the applied deployment snapshot;
+installation and the decision record are in
+[monitoring.md](monitoring.md).
+
 ## Production layout
 
 The normal five-host deployment has apps, blockchain-a, blockchain-b and two
@@ -161,9 +216,10 @@ policy-derived Besu, Kubo and Cluster P2P ports.
 ## Routine lifecycle and security
 
 Before an upgrade, record `status`, review the inventory and inspect `plan`.
-Acquire sources, render, preflight and apply; afterward run `verify` and retain
-the manifest. Use `recreate` for one service and `resume` after a corrected
-failure. Keep RPC, Kubo, Cluster administration and secret files private.
+Run the revision cycle — `prepare`, `push` (remote), `apply` — or `install`
+locally; afterward run `verify` and retain the manifest. Use `recreate` for one
+service and `resume` after a corrected failure. Keep RPC, Kubo, Cluster
+administration and secret files private.
 
 Metadata and Chain process bounded pages. Replication batches unique CIDs and
 prioritizes first pins before durability. Diagnose queue age and rates, not

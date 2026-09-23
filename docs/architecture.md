@@ -20,6 +20,13 @@ nodes run Kubo and IPFS Cluster peers. Cluster provides a
 global pinset; Store API talks to the local endpoint pool and does not coordinate
 replication between sites.
 
+Two placement features refine this base shape. `resolver.instances` can place
+additional Resolver instances in other groups (each one bound to its own
+read-only Store API reader), and `storage.readers` places read-only Store API
+readers next to a Resolver so content retrieval keeps working when the `apps`
+host is unavailable — a reader only receives its own site's endpoints and
+cannot publish or change pin allocations.
+
 ## Minter pipeline
 
 The external flow is reserve → complete metadata → persist → publish → resolve.
@@ -96,3 +103,11 @@ Placement, branches, network addresses and secret references belong to the
 inventory. Component `.env` files are generated runtime projections. The
 replication policy is declared once as publication and target replica counts;
 operational tuning is derived into service environments.
+
+Deployments are materialized as per-machine immutable bundles with recorded
+revisions — the operator renders once, transfers, and applies; service
+fingerprints decide what a re-apply recreates
+(see [deployment-v3-revisions.md](deployment-v3-revisions.md)). Monitoring is
+external to the platform: the deployer exports metrics as a Prometheus
+textfile and the `dark-monitoring` stack scrapes from the applied deployment
+snapshot (see [monitoring.md](monitoring.md)).

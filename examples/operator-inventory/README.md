@@ -135,4 +135,4 @@ dependency. `p2p_advertise_port` is available only to Besu, Kubo and Cluster;
 the rendered Compose port mapping and Besu chain artifact use the same value.
 
 For the complete workflow and examples of local, HA, remote, storage, routing,
-and override configuration, see [the operations manual](../../OPERATIONS-MANUAL.md).
+and override configuration, see [the operations runbook](../../docs/operations.md).

@@ -1,5 +1,12 @@
 # Instalación de dARK en AWS: cinco hosts en una zona
 
+> **Posición de esta guía:** es el runbook *manual* de aprovisionamiento. La vía
+> hoy recomendada para AWS es la automatizada con CloudFormation
+> (`infrastructure/aws/cloudformation/`, inventario `dark2-prod-aws`, seis
+> hosts), que sustituye el aprovisionamiento manual de esta guía. Esta guía
+> sigue siendo útil como referencia del modelo de cinco hosts y de los pasos
+> manuales que la pila CloudFormation automatiza.
+
 Esta guía describe una sede dARK estándar sobre cinco instancias EC2 privadas
 en la misma zona de disponibilidad. Usa el inventario operator soportado
 `dark-platform-baseline-v1.0` y conserva la misma distribución probada por Lima:

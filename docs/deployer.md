@@ -20,7 +20,7 @@ compatibility and is not the name of the inventory model.
 venv/bin/python deploy.py inventory-create --template local-ha --output inventory.json
 venv/bin/python deploy.py validate --inventory inventory.json
 venv/bin/python deploy.py plan --inventory inventory.json
-venv/bin/python deploy.py render --inventory inventory.json
+venv/bin/python deploy.py render --inventory inventory.json --output rendered/
 venv/bin/python deploy.py preflight --inventory inventory.json
 venv/bin/python deploy.py install --inventory inventory.json
 venv/bin/python deploy.py status --inventory inventory.json
@@ -55,8 +55,10 @@ venv/bin/python deploy.py plan --inventory inventory.json --json
 These inspection commands are offline. They do not access Docker, SSH, Git or
 secret contents. `inventory-resolve` refuses to overwrite its output.
 
-Remote deployments use `push`, then `apply`; `resume` continues an interrupted
-run. `deployments` lists locally known managed deployments and `services` lists
+Remote deployments use the revision cycle `prepare` → `push [--revision]` →
+`apply [--revision]` (see
+[deployment-v3-revisions.md](deployment-v3-revisions.md)); `resume` continues an
+interrupted run. `deployments` lists locally known managed deployments and `services` lists
 runtime state and valid actions for one `--deployment ID`. Lifecycle commands
 use `--target service:ID`: `stop`, `start`, `restart`, `recreate` and `remove`.
 `recreate --build` rebuilds one service from its current Compose context without
@@ -72,8 +74,10 @@ or secrets. Those changes require a reviewed `apply` or `install`.
 ## Acquisition and safety
 
 Acquisition clones missing components, fetches the configured branch, and uses
-`merge --ff-only`. Divergent or locally modified checkouts stop instead of being
-overwritten. Rendering creates public bundles and manifests; private keys and
+`merge --ff-only`; component sources may be given as SSH (`git@github.com:…`,
+`ssh://git@github.com/…`) or HTTPS URLs — both forms are accepted
+(`deployment_v3/acquire.py`). Divergent or locally modified checkouts stop
+instead of being overwritten. Rendering creates public bundles and manifests; private keys and
 secret contents are never copied into them. Apply validates host role, artifact
 hashes, paths and required Docker capabilities before mutation.
 
@@ -131,7 +135,8 @@ machines. The group boundary is retained in the rendered plan.
 ## Compact operator inventory
 
 The compact format uses `format: "dark-operator-inventory"` and
-`format_version: 2`. It selects the parameterized `dark-platform-baseline-v1.0` catalogue and
+`format_version` `2` (single-site) or `3` (multi-site, with a `sites` section
+for two-site VPN deployments). It selects the parameterized `dark-platform-baseline-v1.0` catalogue and
 records the decisions that normally change between installations:
 
 - `deployment`: stable ID and label;
@@ -207,8 +212,13 @@ sections for placement, storage, routing, proxies, legacy access and overrides. 
 the expansion when changing a section or saving, and keeps atomic saves and
 timestamped backups.
 
-Available compact templates are `operator-local-simple`, `operator-local-observer`, `operator-local-ha`, `operator-local-two-site`,
-`operator-production-five-host` and `operator-production-six-host`. Production
+`inventory-create` ships 12 maintained templates: 8 compact operator
+inventories (`operator-local-simple`, `operator-local-observer`,
+`operator-local-ha`, `operator-one-server-aws-sandbox`,
+`operator-local-two-site`, `operator-aws-active-two-site-nine-host`,
+`operator-production-five-host`, `operator-production-six-host`) and 4 full v3
+documents (`local-simple`, `local-ha`, `one-server-aws-sandbox`,
+`production-five-host`). Production
 templates use documentation network ranges and `REPLACE` paths; replace them
 before preflight.
 
