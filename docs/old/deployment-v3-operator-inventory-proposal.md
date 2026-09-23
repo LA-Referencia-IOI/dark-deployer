@@ -3,7 +3,7 @@
 Status: the compact format, resolver, catalogue, templates, inspection
 commands, and editor support are implemented. This document explains the
 design boundary and the remaining constraints. For day-to-day use, read the
-[operations manual](../OPERATIONS-MANUAL.md).
+[operations manual](../../OPERATIONS-MANUAL.md).
 
 ## Problem and outcome
 
