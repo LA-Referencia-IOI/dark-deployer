@@ -121,6 +121,41 @@ venv/bin/python deploy.py inventory-resolve \
   --output /tmp/dark-lima-v3.json
 ```
 
+## Instantiate a maintained inventory for a real site
+
+`instantiate-inventory.py` turns any supported inventory (compact operator
+inventory or v3) into a site-specific file for a real deployment. Unlike the
+Lima generator it discovers nothing and assumes no topology: it derives its
+questions from the input document, asks only for the site facts the deployer
+consumes, and writes a new file validated through the same code path the CLI
+uses. The input is never modified, and nothing is written unless the result
+validates.
+
+```bash
+venv/bin/python local-infra/instantiate-inventory.py \
+  --input examples/operator-inventory/dark2-prod-aws.json \
+  --output deployment-aws-active-six.json
+```
+
+Required arguments:
+
+- `--input PATH`: source inventory (compact operator inventory or v3).
+- `--output PATH`: instantiated inventory to write; it refuses to replace an
+  existing file unless `--overwrite` is passed.
+
+Optional flags:
+
+- `--known-hosts PATH`: where to write the collected SSH host keys (default:
+  a `<output>-known_hosts` sibling of the output).
+- `--skip-keyscan`: do not collect host keys over SSH.
+- `--defaults-only`: accept every proposed value without asking; implies
+  `--skip-keyscan`.
+- `--overwrite`: allow writing over an existing output file.
+- `--dry-run`: rehearse the questionnaire and validate, but write neither the
+  inventory nor the known-hosts file; implies `--skip-keyscan`.
+- `--json`: emit a machine-readable summary on stdout (prompts and progress
+  go to stderr).
+
 ## Preflight, install, and verify
 
 Preflight proves SSH access, Docker availability, architecture, free disk, and

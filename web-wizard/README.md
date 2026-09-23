@@ -79,7 +79,7 @@ names, and a site needs at least one route.
 
 ### Operations
 
-34 named operations are exposed through `POST /api/session/<id>/op` (see
+46 named operations are exposed through `POST /api/session/<id>/op` (see
 `webwizard/operations.py`, and `GET /api/operations` for the list): placement,
 machines and their addresses, networks and the routes between them,
 validator/observer groups and their counts, RPC nodes, the primary RPC and
@@ -144,11 +144,13 @@ On first run `run.sh` creates `web-wizard/.venv` and installs
 Then it prints a `http://127.0.0.1:<port>/?token=...` URL. The server binds only
 to `127.0.0.1` and requires a per-run token.
 
-Requires Python 3.9 or newer. `run.sh` picks the newest usable interpreter for
-the workbench's own venv, in this order: `DARK_PYTHON` if set, then
-`python3.13…3.10` on your `PATH`, then the deployer's own `venv/bin/python`
-(Python 3.14 on macOS), then the system `python3`. The code itself runs under
-3.9 too, so no annotation or syntax needs a newer interpreter.
+Requires exactly CPython 3.14 (`pyproject.toml` pins
+`requires-python = ">=3.14,<3.15"`). `run.sh` picks the interpreter for the
+workbench's own venv in this order: `DARK_PYTHON` if set (honoured as given,
+with no version check), then `python3.14` on your `PATH`, then the deployer's
+own `venv/bin/python`, then the system `python3` — each automatic candidate is
+accepted only if it reports Python 3.14, and an existing `web-wizard/.venv`
+built with any other Python is refused at startup.
 
 If you already have a `web-wizard/.venv` from an older interpreter and want to
 rebuild it on a newer one, remove it first:

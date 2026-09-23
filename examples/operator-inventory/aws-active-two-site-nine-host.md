@@ -19,8 +19,10 @@ Do not install this file unchanged. The AWS and Site B addresses, SSH settings, 
 - Storage: three Kubo/IPFS Cluster peers, two in AWS and one in Site B, with `publish_after_replicas: 1` and `target_replicas: 3`.
 - Public services: both sites publish independent Resolver gateways; AWS also
   publishes the application gateway.
-- Explorer: runs with the AWS application stack and is published at
-  `/explorer/` by `apps-public`.
+- Explorer: the catalogue deploys it with the AWS application stack, but no
+  gateway publishes it. `apps-public` routes exactly `/admin/` (dashboard),
+  `/api/v1/` (Minter API), `/api/docs` and `/api/openapi.json` (Minter
+  documentation); there is no `/explorer/` route.
 
 ## Failure behavior
 

@@ -10,6 +10,11 @@ venv/bin/python deploy.py validate --inventory inventory.json
 venv/bin/python deploy.py render --inventory inventory.json --output /tmp/dark-render
 ```
 
+> Note: this directory demonstrates the legacy full deployment-v3 inventory
+> format. The preferred compact operator-inventory format lives in
+> [../operator-inventory/](../operator-inventory/); see the deployer
+> documentation ([docs/deployer.md](../../docs/deployer.md)).
+
 The inventory contains no secret values. Each `secrets` entry declares its
 controller-side `source`, consumer services, destination `path`, and strict
 `0600` mode. The deployer transfers only the files needed by each host; public

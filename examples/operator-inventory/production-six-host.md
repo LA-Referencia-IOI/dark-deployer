@@ -20,8 +20,13 @@ application host and backed by an observer chain copy.
   `resolver` machine.
 - RPC: one primary RPC named `rpc01`.
 - Storage: two Kubo/IPFS Cluster peers, one per storage machine.
-- Explorer placement: `explorer` is placed with the application stack.
-- Proxies: a Resolver public route and an application public route.
+- Explorer placement: `explorer` runs on `blockchain-a`, in its own group
+  (`overrides.explorer.group`), not with the application stack.
+- Proxies: `resolver-public` is the only internet-published gateway. The
+  application gateway is `apps-private`, bound `private` on the `lan`
+  network, so its routes (`/admin/` dashboard, `/explorer/`, `/api/v1/`,
+  `/api/docs`, `/api/openapi.json`) are reachable only from the LAN and are
+  not published to the Internet.
 
 ## Parameters to change
 

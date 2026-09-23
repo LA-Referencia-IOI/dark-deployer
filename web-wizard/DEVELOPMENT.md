@@ -11,7 +11,7 @@ This one is about *why* it is built the way it is and how to change it safely.
 **Status:** phases 0 (view), 1 (edit + live validation), 2 (palette and web edge),
 3 (save a copy) and 5 (network fabric and declared routes) are implemented.
 Phase 4 (a full availability overlay and a resolved-diff review at save time) is
-not. Five backend modules and three front-end files, 34 typed operations, a
+not. Five backend modules and three front-end files, 46 typed operations, a
 pytest suite and an optional headless canvas layer — no counts are quoted here
 on purpose (§10).
 
@@ -45,7 +45,7 @@ rejected. Read them before proposing a change.
 | Edits live in memory; the loaded file is never modified | The operator must never lose their inventory to a preview tool | `DraftSession` only writes in `save()`, and `save()` cannot target the loaded path |
 | Saving can only create a new file | User rule: *"always save a new file, never overwrite"* | `os.open(..., O_CREAT \| O_EXCL)` — there is no overwrite code path at all; tests cover the refusals |
 | The workbench implements its **own** session/operations/undo | User rule: do not reuse the deployer's earlier wizard or editor | Nothing imports `deployment_v3.inventory_editor` |
-| Must run on **Python 3.9** | The user's system `python3` is 3.9 | FastAPI evaluates route annotations at runtime, so signatures use `typing.Optional[...]`, never `X \| None`; the suite is run under 3.9 and 3.10 |
+| Must run on exactly **CPython 3.14** | `pyproject.toml` pins `requires-python = ">=3.14,<3.15"` | `run.sh` honours a set `DARK_PYTHON` as given, then tries `python3.14`, the deployer's `venv/bin/python` and the system `python3` — each automatic candidate only if it reports 3.14 — and refuses an existing `.venv` built with any other Python |
 | No CDN, no bundler, no Node at runtime | It is an offline local tool | Plain `<script>`/`<link>` from `webwizard/static`; Node and `jsdom` are used only by the optional frontend test |
 | The workbench never reads secret material | It shows topologies, not credentials | No code path reads a secret file; secrets appear only as ids in the resolved document |
 
@@ -279,7 +279,7 @@ class DraftSession:
 
 ### 5.4 `operations.py` — the typed operations
 
-34 named operations in a registry, each a plain function
+46 named operations in a registry, each a plain function
 `(session: DraftSession, params: dict) -> None` that either commits a change or
 raises `OperationRejected`.
 
@@ -618,7 +618,7 @@ All `/api/*` routes require the token. `POST` bodies are JSON objects.
 | `GET` | `/static/<name>` | — | `index.html`, `canvas.js` or `style.css` (the only three allowed), `no-store` |
 | `GET` | `/api/inventories` | — | `{inventories: [{name, path}]}` for `examples/operator-inventory` |
 | `GET` | `/api/graph?path=…` | — | the graph, read-only and stateless (400 if unreadable) |
-| `GET` | `/api/operations` | — | `{operations: [...32 names]}` |
+| `GET` | `/api/operations` | — | `{operations: [...46 names]}` |
 | `POST` | `/api/session` | `{path}` | `{session_id, …state}` |
 | `GET` | `/api/session/<id>` | — | state |
 | `POST` | `/api/session/<id>/op` | `{kind, params}` | state, with `ok:false` + `error` on refusal |
@@ -805,9 +805,10 @@ its shape (added/removed/changed per section) is worth copying.
 ./web-wizard/run.sh --inventory examples/operator-inventory/local-ha.json
 ```
 
-`run.sh` picks the newest usable interpreter (`DARK_PYTHON`, then
-`python3.13…3.10` on `PATH`, then the deployer's `venv/bin/python`, then
-`python3`), creates `web-wizard/.venv` from `requirements.txt` if missing, and
+`run.sh` picks the interpreter (`DARK_PYTHON` honoured as given, then
+`python3.14` on `PATH`, then the deployer's `venv/bin/python`, then `python3`,
+each automatic candidate accepted only if it is CPython 3.14), creates
+`web-wizard/.venv` from `requirements.txt` if missing, and
 executes `python -m webwizard` **without changing directory** — it puts the
 package on `PYTHONPATH` instead, so a relative `--inventory` resolves exactly as
 typed.
@@ -816,7 +817,7 @@ typed.
 |---|---|
 | `403` when opening the page | The token is only in the printed URL. Open the URL `run.sh` printed; the cookie is then set |
 | `deployment_v3 is not importable` | The workbench is not inside a dark-deployer checkout. `REPO_ROOT` is derived from `webwizard/…` |
-| `Unable to evaluate type annotation 'str \| None'` | A FastAPI route signature used `X \| None`. FastAPI evaluates annotations at runtime, which fails on 3.9 — use `typing.Optional[...]` |
+| `Unable to evaluate type annotation 'str \| None'` | A FastAPI route signature used `X \| None`. FastAPI evaluates annotations at runtime, which fails on interpreters older than 3.10 — the routes use `typing.Optional[...]`, so seeing this means an interpreter other than 3.14 is running the workbench |
 | The page shows old behaviour after an edit | It shouldn't: `/static/*` is served `no-store`. Hard-reload once if you changed `index.html` structure |
 | `address already in use` | `--port` (default 8765); the server falls back to an ephemeral port if busy, and prints it |
 | The frontend test is skipped | `node` missing, or `jsdom` not resolvable from `tests/frontend` (`npm install` there), or `NODE_PATH` unset |
@@ -885,7 +886,7 @@ web-wizard/
   run.sh                  interpreter selection, venv bootstrap, launch
   requirements.txt        fastapi, uvicorn, jsonschema (workbench-only)
   requirements-dev.txt    pytest, httpx
-  pyproject.toml          requires-python >= 3.9; static/** as package data
+  pyproject.toml          requires-python ">=3.14,<3.15"; static/** as package data
   .gitignore              .venv/, __pycache__/, .pytest_cache/, node_modules/
   webwizard/
     __init__.py           package docstring: this is a read-only consumer

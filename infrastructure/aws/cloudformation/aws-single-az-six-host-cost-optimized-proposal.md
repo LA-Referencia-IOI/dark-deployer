@@ -20,7 +20,7 @@ inventario salvo nueva decisión explícita.
 | Acordada | El ALB ofrecerá HTTP y HTTPS para Minter y Resolver. HTTPS usará un certificado ACM. |
 | Acordada | Dashboard queda fuera del gateway y conserva `apps:8080`. |
 | Acordada | `apps:8080` queda cerrado inicialmente en el Security Group. |
-| Diferida | El mecanismo de acceso futuro al Dashboard se decidirá más adelante; mientras tanto `apps:8080` permanece cerrado. |
+| Acordada | El acceso al Dashboard se realiza mediante el túnel SSM `forward_admin_ssm_apps.sh`, que reenvía el puerto `8080` del contenedor a `localhost:8081`; `apps:8080` permanece cerrado en el Security Group. |
 | Acordada | TLS específico para Admin queda fuera de esta primera iteración. |
 | Acordada | Cada EC2 tendrá un root gp3 de 30 GiB y un volumen gp3 de datos separado. |
 | Acordada | Los datos persistentes de dARK y el almacenamiento interno de Docker vivirán en el volumen de datos. |
@@ -111,14 +111,15 @@ storage-1:      10.20.10.14
 storage-2:      10.20.10.15
 ```
 
-El inventario usará:
+El inventario usará la IP privada fija que la plantilla asigna a cada host
+como `management_address` y como `addresses.aws-lan`:
 
 ```text
-management_address = IPv4 pública dinámica del host
-addresses.aws-lan  = IPv4 privada fija del host
+management_address = IPv4 privada fija del host (10.20.10.10 a 10.20.10.15)
+addresses.aws-lan  = la misma IPv4 privada fija
 ```
 
-El inventario usa las IP privadas fijas como `management_address`. La
+La plantilla declara esas IP privadas fijas y las publica como outputs. La
 administración inicial se realiza mediante SSM; SSH solo funciona dentro de
 la red privada o mediante Tailscale posteriormente. Blockchain, IPFS, Cluster,
 Store, RPC y las aplicaciones se comunican por `aws-lan`.
@@ -147,19 +148,21 @@ GET /health/live -> resolver-api:/health/live
 
 ### Dashboard administrativo
 
-Dashboard sale del gateway de aplicaciones y se publica directamente desde su
-puerto original, pero sin DNS público:
+Dashboard sale del gateway de aplicaciones y conserva su puerto original,
+sin DNS público ni publicación en el Security Group:
 
 ```text
-apps:8080 (sin DNS público)
-  -> IPv4 pública de apps:8080, si el Security Group se habilita posteriormente
-  -> dashboard:8080
+apps:8080 (cerrado en el Security Group, sin DNS público)
+  -> dashboard:8080 (contenedor, descubierto desde el host apps)
 ```
 
-El servicio queda desplegado, pero `apps:8080/tcp` permanece cerrado en el
-Security Group. Nadie puede acceder desde Internet en la primera iteración.
-El acceso administrativo se decidirá posteriormente mediante una regla
-controlada, VPN o túnel SSH. TLS de Admin tampoco forma parte de esta primera
+El servicio queda desplegado y `apps:8080/tcp` permanece cerrado en el
+Security Group, de modo que nadie puede acceder desde Internet. El acceso
+administrativo ya está disponible mediante el túnel SSM del repositorio:
+`infrastructure/aws/cloudformation/forward_admin_ssm_apps.sh` descubre la IP
+del contenedor Dashboard en `apps` y reenvía su puerto `8080` a
+`localhost:8081` del equipo operador (`--remote-port` y `--local-port`
+permiten cambiar ambos). TLS de Admin tampoco forma parte de esta primera
 implementación.
 
 ## Red y Security Groups
@@ -229,8 +232,13 @@ Los tamaños de datos acordados son:
 | `storage-1` | 30 GiB | 250 GiB |
 | `storage-2` | 30 GiB | 250 GiB |
 
-Los volúmenes gp3 de datos tendrán política de conservación al eliminar el
-stack (`Retain`). La eliminación de la infraestructura no debe borrar la
+La política de conservación de los volúmenes gp3 de datos la decide el
+parámetro `RetainDataVolumes`, cuyo valor por defecto es `false`. Cada volumen
+de datos se declara dos veces en la plantilla y la condición elige la variante
+con `DeletionPolicy: Retain` y `UpdateReplacePolicy: Retain` cuando el
+parámetro es `true`, o la variante con `DeletionPolicy: Delete` y
+`UpdateReplacePolicy: Delete` cuando es `false`. Solo con
+`RetainDataVolumes: 'true'` la eliminación de la infraestructura no borra la
 cadena, los datos de IPFS, las bases de datos ni los datos de Docker.
 
 Los volúmenes gp3 se amplían cuando sea necesario. La política operativa de
@@ -286,7 +294,7 @@ apps / resolver / blockchain-a / blockchain-b / storage-1 / storage-2
   ├── referencia al Launch Template
   ├── tipo de instancia propio
   ├── Security Groups propios
-  └── EBS de datos propio, conservado con Retain
+  └── EBS de datos propio, con `DeletionPolicy` condicionada a `RetainDataVolumes`
 ```
 
 El bootstrap esperará a que aparezca el único volumen EBS adicional al root,
@@ -323,15 +331,17 @@ del despliegue de seis hosts.
 
 ## DNS gestionado por Rain
 
-Rain gestionará en Route 53 los registros públicos:
+Rain gestiona en Route 53 los registros públicos alias de tipo A:
 
 ```text
-minter-01.dark-pid.net A/AAAA Alias -> ALB
-resolver-01.dark-pid.net A/AAAA Alias -> ALB
+minter-01.dark-pid.net A Alias -> ALB
+resolver-01.dark-pid.net A Alias -> ALB
 ```
 
-El despliegue deberá crear el registro si no existe y actualizarlo si ya
-existe, siempre apuntando al ALB del stack. El Dashboard no tendrá nombre DNS
+La plantilla crea ambos `AWS::Route53::RecordSet` con `Type: A` como aliases
+del ALB; no crea registros AAAA, que seguirían siendo una adición futura.
+Rain crea el registro si no existe y lo actualiza si ya existe, siempre
+apuntando al ALB del stack. El Dashboard no tendrá nombre DNS
 público en esta iteración.
 
 La resolución de Minter y Resolver no dependerá de las IPv4 públicas de las
@@ -411,11 +421,15 @@ Rain change set y despliegue
   -> deploy.py validate / plan / render / install
 ```
 
-La plantilla ya elimina NAT Gateway y hace pública la subnet de carga. Quedan
-por alinear el inventario y el renderer para publicar Dashboard directamente
-en `8080`, manteniendo cerrado ese puerto, y los parámetros/outputs para
-aplicar las IP privadas fijas y los dominios finales. La gestión de Route 53
-queda definida para la siguiente etapa de Rain.
+La plantilla ya elimina NAT Gateway y hace pública la subnet de carga. Lo que
+esta lista trataba como pendiente ya está implementado: la plantilla fija las
+IP privadas `10.20.10.10` a `10.20.10.15` y las expone como outputs, toma
+`AppsHostname` y `ResolverHostname` como parámetros y crea ella misma en
+Route 53 los registros alias de Minter y Resolver. El inventario
+`dark2-prod-aws.json` mantiene el Dashboard fuera del gateway de aplicaciones
+(sus únicas rutas públicas son `/health` y `/api/v1/`), el Security Group
+mantiene cerrado el puerto 8080 y el acceso al Dashboard se realiza mediante
+el túnel SSM `forward_admin_ssm_apps.sh`.
 
 ## Criterios de aceptación
 

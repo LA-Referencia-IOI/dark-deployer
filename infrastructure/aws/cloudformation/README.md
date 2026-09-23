@@ -277,11 +277,14 @@ la infraestructura base y el despliegue posterior del proxy de Apps. El EBS de
 datos se elimina por defecto; usar `RetainDataVolumes: 'true'` si debe
 conservarse al eliminar el stack.
 
-Primero validar localmente y contra CloudFormation:
+Primero validar la plantilla localmente (el change set de abajo es la
+verificación contra CloudFormation). `aws cloudformation validate-template` no
+vale aquí porque rechaza las plantillas que usan tipos de parámetro
+respaldados por SSM (`AWS::SSM::Parameter::Value<...>`); usa en su lugar
+`cfn-lint` (o `rain fmt` / `rain deploy`):
 
 ```bash
-aws cloudformation validate-template \
-  --template-body file://infrastructure/aws/cloudformation/dark2-prod-aws.yaml
+cfn-lint infrastructure/aws/cloudformation/dark2-prod-aws.yaml
 ```
 
 Crear un change set antes de cualquier recurso:
@@ -320,9 +323,14 @@ template para `management_address` y `addresses.aws-lan`. La administración
 inicial se realiza mediante SSM; SSH requiere conectividad privada o Tailscale.
 dARK usa exclusivamente la LAN privada entre servicios.
 
-Los orígenes de los proxies deben ser exactamente los outputs `AppsUrl` y
-`ResolverUrl`. Si se usa TLS en el ALB, conservar `tls.mode: external` y el
-listener del proxy en 80, como ya hace el inventario de ejemplo.
+Los orígenes de los proxies deben coincidir con los outputs de la plantilla:
+`AppsHttpUrl` / `AppsHttpsUrl` para el proxy de Apps y `ResolverHttpUrl` /
+`ResolverHttpsUrl` para el de Resolver, es decir, las URLs HTTP y HTTPS de
+`AppsHostname` y `ResolverHostname`. El stack también expone `VpcId`,
+`WorkloadSubnetId`, `AvailabilityZone`, `AlbDnsName`, las IP privadas y
+públicas de las seis EC2 y los IDs de los Security Groups del mesh y del ALB.
+Si se usa TLS en el ALB, conservar `tls.mode: external` y el listener del
+proxy en 80, como ya hace el inventario de ejemplo.
 
 En el perfil AWS activo actual no se publica Explorer ni la documentación de
 Minter. La API pública del Minter queda bajo
@@ -349,7 +357,14 @@ Security Groups de la plantilla antes de ejecutar `install`.
 
 ## Destrucción y datos
 
-La eliminación del stack elimina las instancias y la red, pero conserva los
-volúmenes EBS de datos por `DeletionPolicy: Retain`. Antes de eliminar una sede
-se debe respaldar también el material privado del controlador; conservar EBS no
+La eliminación del stack elimina las instancias, la red y los volúmenes root.
+El destino de los seis volúmenes EBS de datos depende del parámetro
+`RetainDataVolumes` (por defecto `false`, y `'false'` en
+`dark2-prod-aws.parameters.yaml`): cada volumen de datos se declara dos veces
+en la plantilla y la condición elige la variante con `DeletionPolicy: Retain`
+y `UpdateReplacePolicy: Retain` cuando el parámetro es `true`, o la variante
+con `DeletionPolicy: Delete` y `UpdateReplacePolicy: Delete` cuando es
+`false`. Solo con `RetainDataVolumes: 'true'` los volúmenes de datos
+sobreviven a la eliminación del stack. Antes de eliminar una sede se debe
+respaldar también el material privado del controlador; conservar EBS no
 reconstruye secretos, artefactos de cadena ni configuración del despliegue.
