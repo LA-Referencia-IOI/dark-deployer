@@ -1,382 +1,252 @@
-# dARK Deployer
+# dark-deployer
 
-`dark-deployer` installs, upgrades, verifies, and operates a complete dARK
-platform: a private Besu/QBFT network, APIs, workers, contracts, Dashboard,
-Explorer, Resolver, and distributed Kubo/IPFS Cluster storage.
+`dark-deployer` installs, upgrades, verifies, and operates the complete dARK
+platform: a private Besu/QBFT blockchain, APIs, workers, contracts, Dashboard,
+Explorer, Resolver, and distributed Kubo/IPFS Cluster storage. One declarative
+inventory drives everything: validate it, resolve it against a maintained
+catalogue, plan phases, render per-machine Docker Compose bundles, preflight
+hosts, push/apply, and verify the result.
 
-The supported entry point is `deploy.py`. It receives a declarative inventory,
-validates it, builds a per-machine and per-phase plan, prepares components and
-artifacts, produces one Docker Compose bundle for each host, and verifies the
-result. The inventory is the source of truth; generated Compose files must not
-be edited manually.
+The same rules apply whether the stack runs on one local Docker host or across
+remote SSH-managed servers.
 
-The deployer can run the complete stack on one local Docker host or distribute
-groups across remote SSH-managed servers. The same inventory, networking,
-secret, planning, and verification rules apply in both cases.
+## 1. What is dARK?
 
-## Included tools
+dARK is a decentralized identifier and publication platform. An external
+repository deposits an object and its bibliographic metadata through the APIs;
+dARK allocates an **ARK identifier** under the authority that owns the NAAN,
+stores canonical metadata and payload in a **private IPFS swarm**, confirms
+real pins, publishes the immutable record on-chain, and exposes HTTP
+resolution. The public ARK lifecycle stays stable (`reserved`, `draft`,
+`update`, `published`, `tombstone`) while internal processing state is owned by
+PostgreSQL and the workers.
 
-| Tool | Purpose | Changes infrastructure |
-| --- | --- | --- |
-| `deploy.py` | Validate, plan, render, install, and operate dARK | Only its operational commands |
-| Operator inventory v2 | Describe a standard installation compactly | No |
-| Complete v3 inventory | Describe the full execution contract directly | No |
-| `inventory-edit` | Edit inventory sections through a Textual TUI | Only the file after confirmation |
-| `metrics` | Watch per-machine Docker metrics for one managed deployment | Nothing: it only reads |
-| `components/dark-monitoring` | Prometheus, Grafana and exporter stack generated from an applied deployment snapshot | Its explicit installer starts a separate monitoring stack |
-| `web-wizard/` | Design, visualize, and adapt operator inventories through a local web interface | Only creates a new copy |
-| `chain-*` commands | Create, export, and verify Besu artifacts | Some explicitly create artifacts |
-| `secrets-init` | Prepare managed secrets for a new installation | Yes, at the requested destination |
+The publication pipeline is `reserve → complete metadata → persist → publish →
+resolve`:
 
-The `web-wizard` never runs Docker, SSH, Git, or deployment operations, and it
-does not read secret values. It uses the deployer's resolver and planner only to
-validate and explain the inventory being designed.
+- the **metadata worker** persists level-1 and level-2 metadata and their CIDs;
+- the **replication worker** confirms one real IPFS pin for both levels;
+- only then the **chain worker** submits the record to the blockchain;
+- after publication, durability promotion requests the configured target
+  replicas as maintenance work, and payloads are cleaned up once both levels
+  meet the target.
 
-## Requirements
+Three layers make this up (details in
+[docs/platform-architecture.md](docs/platform-architecture.md)):
 
-- Python 3.14.
-- Docker Engine and Docker Compose v2 for local execution.
-- SSH access from the controller for remote deployments.
-- Reachable LAN/VPN addresses as declared by the inventory.
-- Private material referenced by the inventory, stored outside Git.
-
-Basic setup:
-
-```bash
-./create_venv.sh
-docker version
-docker compose version
+```text
+SERVICE LAYER     Admin API · Minter API · Resolver API · Store API · Dashboard
+                  │  dark-core-lib (Python SDK: DARKCoreClient, services)
+BLOCKCHAIN LAYER  Authority.sol (access control) ← IAuthority.sol → dARK.sol (ARK registry)
+                  │  private Besu/QBFT network, chain ID 2025
+STORAGE LAYER     Kubo + IPFS Cluster peers · Store API (store/retrieve/status/replication)
 ```
 
-El script usa Python 3.14 y crea `venv/`. Para incluir las dependencias
-opcionales de la interfaz Textual:
+**Authority-centric model.** `Authority.sol` binds one wallet to one authority
+UUID and controls which NAANs each authority may write; `dARK.sol` holds the
+ARK registry (`create_ark`, `update_ark`, `resolve`). Components are acquired
+from their own repositories into `components/` at deploy time:
 
-```bash
-./create_venv.sh --with-tui
+| Component | Role | Checkout | Default container port |
+| --- | --- | --- | --- |
+| `dark-core-admin-api` | Authority and operational administration | `components/dark-core-admin-api` | 8000 |
+| `dark-core-minter-api` | ARK reservation, metadata, publication + 3 workers | `components/dark-core-minter-api` | 8001 |
+| `dark-core-resolver-api` | Public ARK resolution (`?info`, `?metadata`, redirect) | `components/dark-core-resolver-api` | 8002 |
+| `dark-store-api` | Storage facade over Kubo/Cluster: store, retrieve, status, replication | `components/dark-store-api` | 8003 |
+| `dark-dapp` | Solidity contracts (`Authority.sol`, `dARK.sol`) and contract tooling | `components/dark-dapp` | — |
+| `dark-core-lib` | Python SDK shared by services, tests, and notebooks | `components/dark-core-lib` | — |
+| `dashboard-web` | Operator UI (Laravel) + liveness hub | `components/dashboard-web` | 8080 |
+| `dark-explorador` | Chain/block explorer UI | `components/dark-explorador` | 80 |
+| Besu runtime | QBFT network, genesis and chain tooling | `blockchain/` (in this repo) | 8545 |
+| Kubo + IPFS Cluster | Private swarm; Cluster owns the global pinset | `components/dark-ipfs` | 5001 / 9094 |
+| PostgreSQL / MySQL | Minter metadata DB / dashboard DB | — | 5432 / 3306 |
+| `dark-monitoring` | Prometheus, Blackbox, node-exporter, cAdvisor, Grafana stack | `components/dark-monitoring` | separate stack |
+| `web-wizard/` | Local web workbench to design inventories | `web-wizard/` (in this repo) | 8765 on localhost |
+
+Supporting services (`minter-postgres`, `dashboard-mysql`, `edge-proxy`) are
+part of the rendered bundle. Every service's platform role is described in
+[docs/architecture.md](docs/architecture.md); the on-chain contracts and the
+SDK in [docs/platform-architecture.md](docs/platform-architecture.md) and
+[docs/sdk-guide.md](docs/sdk-guide.md).
+
+## 2. How the deployer works
+
+The deployer turns one inventory file into running, verified machines:
+
+```text
+operator inventory (v2/v3)
+      │ resolve   ← catalogue dark-platform-baseline-v1.0 + typed overrides
+      ▼
+   full v3 inventory ──► plan (phases) ──► render (per-machine bundles)
+        ▼
+preflight ──► prepare ──► push (SSH) ──► apply ──► verify
+        └──────────── install coordinates the whole flow locally ────────────┘
 ```
 
-To use `inventory-edit` or `metrics`:
+**Inventories.** The *operator inventory* (format `dark-operator-inventory`,
+v2 or v3) is the recommended way to describe an installation: identity,
+machines and execution (`local`, `docker-lab`, `ssh`), networks and existing
+routes, validator groups, RPC nodes with an explicit primary, observers, Kubo/
+Cluster peers and replication policy, proxies with TLS and public routes,
+placement, and typed overrides. The resolver expands it into the full
+*v3 inventory* — the complete execution contract (every service, connection,
+exposure, group, secret, component). You never edit the expanded output.
+Examples: [`examples/operator-inventory/`](examples/operator-inventory/)
+(compact) and [`examples/deployment-v3/`](examples/deployment-v3/) (full).
+
+**Phases.** Services start in dependency order: `validators → rpc →
+observers → contracts → storage → data → applications`, followed by the
+`verify:deployment` step.
+
+**Profiles.** `local` allows minimal topologies, `lab` allows shared placement
+(warned: several instances on one host is not real HA), `production` requires
+explicit availability objectives. Availability is analyzed per validator,
+group, and machine; observers keep a synchronized chain copy but do not count
+towards quorum.
+
+**Bundles and revisions.** Since the per-machine bundle model, `prepare` builds
+a machine-scoped bundle whose revision id is a SHA-256 of the resolved
+inventory; `push` transfers it and `apply` consumes it. Each host keeps
+`bundles/<revision-id>/` with a `current` pointer, and per-service fingerprints
+in `status.json` make deployment verification compare against what actually
+runs. `apply --revision` selects an older prepared revision.
+
+**Components and sources.** Components are acquired into `components/` with
+`fetch` + `merge --ff-only`; the catalogue pins `main` for every component and
+an inventory may override the branch for testing (see
+[docs/development.md](docs/development.md)). Divergent or locally modified
+checkouts stop acquisition.
+
+**Secrets and wallet.** Inventories contain secret *references*, never values.
+Managed secrets are generated at install time, private keys are transferred
+only to machines hosting their consumers, and the master wallet lives in
+`blockchain/master-wallet.txt` (mode `600`). Public bundles contain neither
+private keys nor secret hashes.
+
+**Networking.** Dependencies on the same machine use Docker DNS without
+published host ports; every cross-machine dependency explicitly selects LAN or
+VPN. `routes` declares connectivity that already exists — the deployer does not
+create routers, VPNs, or cloud rules; it renders an auditable
+`firewall-suggestion.json` instead. An `edge-proxy` is the normal public entry
+point, and proxy routes decide what is published.
+
+## 3. Quick start: dARK on one machine (`local-ha`)
+
+`local-ha` keeps all services on one Docker host while exercising the
+high-availability authoring shape: two validator groups (`blockchain-a`,
+`blockchain-b`, 2 validators each), one primary RPC (`rpc01`), two Kubo/Cluster
+peers (`storage-a`, `storage-b`) with `publish_after_replicas: 1` and
+`target_replicas: 2`, and a loopback HTTP gateway. The deployer warns that the
+replicas share one host: this scenario validates logical replication and
+dynamic validator groups, not host-failure tolerance.
+
+**Requirements:** Python 3.14, Docker Engine and Docker Compose v2.
+
+**1 — Set up the tool.** `./deploy.sh` is the supported entry point: it runs
+`deploy.py` with the repository venv, creating it on first use (and repairing
+it when requirements change). It needs CPython 3.14; point `DARK_PYTHON` at one
+if `python3.14` is not on `PATH`.
 
 ```bash
-venv/bin/python -m pip install -r requirements-tui.txt
+./deploy.sh                                   # prints the CLI help
+docker version && docker compose version      # prerequisites
 ```
 
-The component repositories are public GitHub repositories, but the inventories
-use SSH URLs so the controller needs a GitHub SSH key. If the controller does
-not have SSH access, change the component `repository_url` values to their
-HTTPS equivalents before acquisition. Public repositories do not require a
-GitHub password; HTTPS authentication prompts usually mean the URL is private,
-incorrect, or a credential helper is intercepting the request.
-
-## The two inventory formats
-
-For component development and per-inventory branch testing, see
-[docs/development.md](docs/development.md).
-For the review status and validation plan for PR #14, see
-[docs/pr-14-review.md](docs/pr-14-review.md).
-
-### Operator inventory v2 and v3
-
-This is the recommended format for new installations that follow the
-`dark-platform-baseline-v1.0` catalogue. It describes the decisions that usually differ
-between installations:
-
-- identity and profile;
-- local or SSH machines;
-- LAN/VPN networks and existing routes;
-- validator and observer groups;
-- RPC nodes and an explicit primary RPC;
-- placement of groups on machines;
-- Kubo/IPFS Cluster peers and replication policy;
-- proxies, TLS, public hosts, and routes;
-- artifact and secret references;
-- typed component, setting, and advertised-endpoint overrides.
-
-The resolver expands these decisions into a complete v3 inventory before
-validation, planning, rendering, or execution. That expanded output does not
-need to be saved in order to install.
-
-Examples live in [examples/operator-inventory/](examples/operator-inventory/).
-
-Version 2 remains supported with its single network per traffic family. Version
-3 adds optional `sites`, `machines.*.site`, locality policies (`site_lan`,
-`same_site`, `cross_site`) and a resolved P2P matrix. It is the format for
-installations spanning LANs and VPNs across sites.
-
-### Complete v3 inventory
-
-This is the expanded execution contract: it contains every service, connection,
-exposure, group, secret, component, and infrastructure policy. Use it to review
-the effective result or maintain an architecture deliberately outside the
-operator catalogue.
-
-Examples live in [examples/deployment-v3/](examples/deployment-v3/).
-
-Neither format contains secret values; they contain secret references only.
-
-## Profiles
-
-A profile sets validation policy and warnings; it never changes the
-architecture implicitly.
-
-| Profile | Use | Expected behavior |
-| --- | --- | --- |
-| `local` | Development and functional testing on one Docker host | Allows minimal topologies with no fault tolerance |
-| `lab` | Replication, role, and distributed-scenario testing | Allows shared placement and warns that multiple instances on one host are not real HA |
-| `production` | Real servers | Requires explicit availability objectives or typed acknowledgements |
-
-Availability is analyzed per validator, group, and machine. Observers keep an
-additional synchronized chain copy, but they do not count towards quorum.
-
-## Maintained scenarios
-
-| Operator file | Profile | Machines | What it exercises |
-| --- | --- | ---: | --- |
-| [`local-simple.json`](examples/operator-inventory/local-simple.md) | `local` | 1 | Minimal functional path with one validator, RPC, and storage peer |
-| [`local-observer.json`](examples/operator-inventory/local-observer.md) | `local` | 1 | A Besu observer and Resolver bound to its private RPC |
-| [`local-ha.json`](examples/operator-inventory/local-ha.md) | `lab` | 1 | Logical HA groups and two storage copies on one Docker host |
-| [`one-server-aws-sandbox.json`](examples/operator-inventory/one-server-aws-sandbox.md) | `lab` | 1 | Single-EC2 sandbox run locally on the server, with the local-ha service layout and public HTTP gateway |
-| [`aws-active-two-site-nine-host.json`](examples/operator-inventory/aws-active-two-site-nine-host.md) | `production` | 9 | AWS-active two-site shape: AWS retains QBFT quorum; the remote site preserves a chain and IPFS copy without application services |
-| [`dark2-prod-aws.json`](examples/operator-inventory/dark2-prod-aws.md) | `production` | 6 | AWS-only active site with applications, Resolver/observer, five validators, and two storage peers |
-| [`local-two-site.json`](examples/operator-inventory/local-two-site.md) | `lab` | 6 logical | Two isolated Docker LANs plus an inter-site VPN mesh |
-| [`lima-five-host.json`](examples/operator-inventory/lima-five-host.md) | `production` | 5 | Reproducible SSH distribution across Lima machines |
-| [`lima-two-site-five-host.json`](examples/operator-inventory/lima-two-site-five-host.md) | `lab` | 5 | Separate Lima lab: Apps plus two validators and IPFS in site A; two validators and IPFS in site B, joined through WireGuard |
-| [`production-five-host.json`](examples/operator-inventory/production-five-host.md) | `production` | 5 | Apps, two blockchain domains, and two storage domains |
-| [`production-six-host.json`](examples/operator-inventory/production-six-host.md) | `production` | 6 | Dedicated public Resolver with local observer, RPC and Store API |
-
-Production examples use documentation-reserved ranges and `REPLACE` values.
-Never run them until addresses, routes, SSH keys, public origins, artifacts, and
-secret sources have been replaced.
-
-`local-ha` demonstrates replication and logical separation, but every instance
-depends on the same Docker daemon: it does not tolerate physical host loss.
-
-`local-two-site` is a network-behaviour lab, not physical HA: it uses one Docker
-daemon but makes LAN and VPN paths observable. Same-site Besu/IPFS peers use
-their site LAN; cross-site peers use only `mesh-vpn`.
-
-## Local quick start
-
-To run the maintained local HA scenario directly:
+**2 — Inspect before you run.** All of these are read-only: they do not touch
+Docker, SSH, Git, or secrets.
 
 ```bash
-venv/bin/python deploy.py install \
-  --inventory examples/operator-inventory/local-ha.json \
-  --verbose
+./deploy.sh validate --inventory examples/operator-inventory/local-ha.json
+./deploy.sh plan     --inventory examples/operator-inventory/local-ha.json
+./deploy.sh inventory-explain --inventory examples/operator-inventory/local-ha.json \
+  --path /services/resolver-api/connections/rpc
 ```
 
-`install` validates the inventory, resolves the catalogue, runs preflight,
-acquires or reuses components, prepares managed inputs, renders, starts services
-by phase, and runs final verification.
-
-For a new deployment, the installer can create all controller-side private
-inputs interactively. It reports the exact paths as it creates them:
-
-- wallet credentials: `blockchain/master-wallet.txt` (mode `600`);
-- generated secrets: `.generated/deployment-v3/<deployment>/controller/secrets/`;
-- generated chain artifact: `.generated/deployment-v3/<deployment>/controller/chain-artifact/`.
-
-These paths are controller state and must not be committed or copied into a
-public bundle. A failed remote apply can reuse them with `resume` after the
-host-side cause is fixed.
-
-For a new local chain, it can generate a guarded master wallet:
+**3 — Install.** On the first run let the installer create the guarded master
+wallet and the managed secrets interactively (it reports every path it creates;
+wallet credentials land in `blockchain/master-wallet.txt`, generated material
+under `.generated/deployment-v3/<deployment>/controller/` — controller state,
+never committed):
 
 ```bash
-venv/bin/python deploy.py install \
+./deploy.sh install \
   --inventory examples/operator-inventory/local-ha.json \
   --create-master-wallet \
   --verbose
 ```
 
-The generator never silently replaces `blockchain/master-wallet.txt`. If it
-already exists, the installer asks whether it should be reused.
+`install` validates, resolves the catalogue, runs preflight, acquires or reuses
+components, prepares managed inputs, renders, starts services by phase, and
+runs final verification. It never silently replaces an existing wallet, and it
+never deletes volumes or persistent data.
 
-To exercise the two-site network laboratory, use its separate deployment id:
+**4 — Verify and explore.** After `verify` finishes:
 
 ```bash
-venv/bin/python deploy.py install \
-  --inventory examples/operator-inventory/local-two-site.json \
-  --verbose
+./deploy.sh verify --inventory examples/operator-inventory/local-ha.json
+./deploy.sh status --inventory examples/operator-inventory/local-ha.json
+./deploy.sh services --deployment dark-operator-local-ha
 ```
 
-Before installing, inspect the resolved P2P matrix. It must show `site-a-lan`
-or `site-b-lan` for peers in one site and `mesh-vpn` for cross-site peers:
+The `local-ha` gateway publishes on `http://localhost` (loopback): the
+dashboard at `/admin/`, the explorer at `/explorer/`, the Minter API under
+`/api/v1/` with OpenAPI docs at `/api/docs`.
+
+**5 — Operate and observe.**
 
 ```bash
-venv/bin/python deploy.py inventory-network-matrix \
-  --inventory examples/operator-inventory/local-two-site.json
+./deploy.sh tui       # interactive operations console (lifecycle + log streams)
+./deploy.sh metrics   # read-only Docker panel; safe to leave open
 ```
 
-After `verify`, run the [local-ha acceptance notebook](notebooks/scenarios/local-ha-deposit-lifecycle.ipynb)
-to exercise a complete deposit through the gateway and inspect the resulting
-private storage replication. The [notebook index](notebooks/README.md) explains
-the distinction between scenario acceptance and the generic API notebooks.
+**6 — Accept the scenario end to end.** Run the
+[local-ha acceptance notebook](notebooks/scenarios/local-ha-deposit-lifecycle.ipynb)
+to exercise a complete deposit through the gateway and inspect private storage
+replication. The [notebook index](notebooks/README.md) lists the other
+scenarios' acceptance notebooks.
 
-For the distributed Lima lab, use the [Lima five-host acceptance notebook](notebooks/scenarios/lima-five-host-deposit-lifecycle.ipynb) after its own `verify`.
-
-## Create and inspect an inventory
-
-Creating an editable template copy is optional:
+Creating your own inventory instead of using the example:
 
 ```bash
-venv/bin/python deploy.py inventory-create \
-  --template operator-production-six-host \
-  --output inventory.json
+./deploy.sh inventory-create --template operator-local-ha --output inventory.json
+./web-wizard/run.sh --inventory inventory.json   # design it in the browser
 ```
 
-Edit it with Textual:
+The web wizard runs a token-protected local server, validates every operation
+against the real resolver, and never overwrites the opened inventory (saving
+creates a new file). See [web-wizard/README.md](web-wizard/README.md).
+
+## 4. Operating a deployment
+
+**Lifecycle.** `deploy.py deployments` lists known managed deployments;
+`deploy.py services --deployment ID` lists exact managed `service:ID`
+selectors, runtime state, and valid actions. `build`, `stop`, `start`,
+`restart`, `recreate`, `remove`, and `logs` act on one `service:ID` at a time —
+locally or through the machine's configured SSH host. `remove` never deletes
+volumes, persistent data, or networks; `build` does not restart the container
+(use `recreate --build`); start lifecycle operations with `--dry-run`.
 
 ```bash
-venv/bin/python deploy.py inventory-edit --inventory inventory.json
+./deploy.sh recreate --deployment dark-operator-local-ha \
+  --target service:store-api --build
+./deploy.sh logs --deployment dark-operator-local-ha --target service:minter-api --tail 100
 ```
 
-Safe inspection sequence:
+**Metrics and monitoring.** `metrics` samples each machine once a minute
+through its own Docker daemon (CPU, memory, container and restart state) and
+changes nothing. `metrics-export` writes the same collector contract as a
+Prometheus textfile:
 
 ```bash
-venv/bin/python deploy.py validate --inventory inventory.json
-venv/bin/python deploy.py plan --inventory inventory.json --json
-
-venv/bin/python deploy.py inventory-resolve \
-  --inventory inventory.json \
-  --output resolved-inventory.json
-
-venv/bin/python deploy.py inventory-explain \
-  --inventory inventory.json \
-  --path /services/resolver-api/connections/rpc
-
-venv/bin/python deploy.py inventory-network-matrix \
-  --inventory inventory.json
-```
-
-`validate`, `plan`, `inventory-resolve`, `inventory-explain`, and
-`inventory-diff` are inspection operations: they do not contact Docker, SSH, or
-Git, and they do not read secret contents. `inventory-resolve` refuses to
-overwrite its output file.
-
-To compare a revision with a previous one:
-
-```bash
-venv/bin/python deploy.py inventory-diff \
-  --before previous-inventory.json \
-  --after inventory.json
-```
-
-## Web wizard
-
-The web workbench shows machines, groups, services, networks, connections, and
-failure domains. It can move groups, change cardinalities, configure RPC,
-storage, proxies, and routing, and validates every operation against the real
-resolver.
-
-Run it from the repository root:
-
-```bash
-./web-wizard/run.sh \
-  --inventory examples/operator-inventory/production-six-host.json
-```
-
-The launcher creates its own `web-wizard/.venv`, installs only its own
-dependencies, and prints a local token-protected URL. The opened inventory is
-never overwritten: saving creates a new file with exclusive creation.
-
-See [web-wizard/README.md](web-wizard/README.md) for the complete guide.
-
-## Recommended operational sequence
-
-### Coordinated local installation
-
-```bash
-venv/bin/python deploy.py validate --inventory inventory.json
-venv/bin/python deploy.py plan --inventory inventory.json
-venv/bin/python deploy.py install --inventory inventory.json --verbose
-venv/bin/python deploy.py status --inventory inventory.json
-venv/bin/python deploy.py verify --inventory inventory.json
-```
-
-### Explicit remote installation
-
-```bash
-venv/bin/python deploy.py validate --inventory inventory.json
-venv/bin/python deploy.py plan --inventory inventory.json
-venv/bin/python deploy.py preflight --inventory inventory.json
-venv/bin/python deploy.py push --inventory inventory.json
-venv/bin/python deploy.py apply --inventory inventory.json
-venv/bin/python deploy.py verify --inventory inventory.json
-```
-
-`push` transfers public bundles over SSH. `apply` validates host roles, paths,
-artifacts, and host capabilities before starting phases. Secrets are transferred
-separately and only to the machines hosting their consumers.
-
-`install` can also coordinate the complete remote flow:
-
-```bash
-venv/bin/python deploy.py install \
-  --inventory inventory.json \
-  --verbose
-```
-
-For AWS, run the controller from the `apps` host after CloudFormation has
-completed and `check-bootstrap.sh` passes on every host. The controller needs
-the PEM at `/home/ubuntu/lareferencia-dark.pem`, mode `600`, and the inventory
-must use the private addresses reachable from that host. The AWS helpers for
-Session Manager, PEM upload, Dashboard forwarding, and IAM setup are documented
-in [the CloudFormation guide](infrastructure/aws/cloudformation/README.md).
-
-After fixing the cause of an interrupted execution, update the controller code
-if needed and resume the same generated run:
-
-```bash
-venv/bin/python deploy.py resume --inventory inventory.json
-```
-
-`resume` reuses the wallet, generated secrets, chain artifact, source evidence,
-and prepared revision recorded for that deployment. It does not silently create
-a different chain identity.
-
-To rebuild one service without restarting all services on its machine:
-
-```bash
-venv/bin/python deploy.py recreate \
-  --inventory inventory.json \
-  --target service:dashboard \
-  --build
-```
-
-Use `deploy.py deployments` to list known managed deployments. Then use
-`deploy.py services --deployment DEPLOYMENT_ID` to see exact managed selectors,
-runtime state, descriptions and valid lifecycle actions. The
-operations `build`, `stop`, `start`, `restart`, `recreate` and `remove` act on one
-`service:ID`; `remove` never deletes volumes, persistent data or networks.
-`build` does not restart the active container; use `recreate --build` to build
-and replace it. In an interactive terminal, `deploy.py tui` provides a service
-browser, lifecycle actions and refreshed logs over the same managed snapshots.
-
-For observation without any possibility of action, `deploy.py metrics` opens a
-read-only panel over the same deployment: it samples each machine once a minute
-through its own Docker daemon, locally or over the configured SSH host, and
-shows CPU, memory, container and restart state per machine plus the containers
-of the selected one. It issues no lifecycle command at all, so it is safe to
-leave open next to the operations console.
-
-```bash
-venv/bin/python deploy.py metrics
-```
-
-To export the same Docker/SSH collector contract for Prometheus through
-node-exporter's textfile collector:
-
-```bash
-venv/bin/python deploy.py metrics-export \
+./deploy.sh metrics-export \
   --deployment dark-operator-local-ha \
   --include-disk \
   --output components/dark-monitoring/generated/dark.prom
 ```
 
-`components/dark-monitoring` provides the separate Prometheus, Blackbox,
-node-exporter, cAdvisor and Grafana stack. Its installer reads the applied
-snapshot rather than a manually maintained host list:
+`components/dark-monitoring` runs the separate Prometheus/Blackbox/
+node-exporter/cAdvisor/Grafana stack; its installer derives targets from the
+applied deployment snapshot, not a hand-written host list:
 
 ```bash
 cd components/dark-monitoring
@@ -384,196 +254,163 @@ cd components/dark-monitoring
   --deployment-snapshot ../../.generated/deployment-v3/dark-operator-local-ha/bundle/shared/deployment-topology.json
 ```
 
-The first run creates a private `.env` and asks the operator to replace the
-sample Grafana administrator password before starting anything.
+The first run creates a private `.env` and asks you to replace the sample
+Grafana administrator password before starting anything.
 
-## Networking and exposure
-
-Dependencies on the same machine use Docker DNS and do not publish host ports.
-Every cross-machine dependency explicitly selects LAN or VPN and derives a
-private provider exposure.
-
-`routes` declares directional connectivity that already exists at the site; the
-deployer does not create routers, VPNs, cloud rules, or firewalls. Rendering
-produces an auditable firewall suggestion containing API/web endpoints and Besu,
-Kubo, and Cluster P2P ports.
-
-An `edge-proxy` is the normal public entry point. Proxy routes—not the mere
-existence of a backend—decide which services are published. The six-machine
-example exposes Resolver API at `/`, while `resolver-api` consumes the local
-`observer01` RPC and a read-only `store-api-reader` inside Docker. The reader
-uses only its local site's Kubo/Cluster endpoints; IPFS/Cluster P2P retrieves
-remote content when necessary, without depending on the `apps` host.
-
-When an empty Docker bridge network overlaps the requested subnet, `install`,
-`apply`, and `resume` can remove it only with
-`--clean-empty-network-conflicts`. A network with attached containers is never
-removed automatically.
-
-## Blockchain, RPC, and observers
-
-Each blockchain group contains one or more validators. An inventory can declare
-multiple groups, multiple RPCs, and an explicit primary RPC. All Besu nodes join
-P2P and receive independent persistent storage.
-
-An observer:
-
-- retains a synchronized copy of the chain;
-- does not participate in the QBFT validator set;
-- has RPC enabled for explicitly bound private consumers;
-- is not automatically published on the host;
-- can reside with Resolver so Resolver API uses its local RPC.
-
-Artifact commands include:
+**Remote deployments.** The explicit sequence is:
 
 ```bash
-venv/bin/python deploy.py chain-init --help
-venv/bin/python deploy.py chain-static-nodes --help
-venv/bin/python deploy.py chain-export --help
-venv/bin/python deploy.py chain-verify --help
+./deploy.sh validate --inventory inventory.json
+./deploy.sh plan     --inventory inventory.json
+./deploy.sh preflight --inventory inventory.json
+./deploy.sh prepare  --inventory inventory.json
+./deploy.sh push     --inventory inventory.json
+./deploy.sh apply    --inventory inventory.json
+./deploy.sh verify   --inventory inventory.json
 ```
 
-Do not regenerate genesis, identities, or node keys for an existing chain.
-Group exports provide each machine with only genesis, static nodes, and the
-private keys for its own nodes.
+`push` transfers public bundles over SSH; `apply` validates host roles, paths,
+artifacts, and capabilities before starting phases. `install` can coordinate
+the complete flow (local or remote) in one command. After fixing the cause of
+an interrupted execution, `resume` reuses the wallet, generated secrets, chain
+artifact, source evidence, and prepared revision recorded for that deployment
+— it never silently creates a different chain identity.
 
-## Storage and publication
+For AWS, provision with [CloudFormation
+(`dark2-prod-aws`)](infrastructure/aws/cloudformation/README.md), then run the
+controller from the `apps` host once `check-bootstrap.sh` passes on every host;
+the inventory uses the private addresses reachable from that host. The
+[Lima lab](docs/lima-five-host-test.md) reproduces a five-host SSH
+distribution locally.
 
-Every storage peer creates a one-to-one pair:
+**Blockchain artifacts.** `chain-init`, `chain-static-nodes`, `chain-export`,
+`chain-verify`, and `chain-bootstrap` create, export, and verify Besu
+artifacts. Do not regenerate genesis, identities, or node keys for an existing
+chain; group exports give each machine only its own nodes' keys.
 
-```text
-Kubo + IPFS Cluster
-```
+**Storage and publication.** Every storage peer is a one-to-one Kubo + Cluster
+pair, and the replication policy must satisfy
+`1 <= publish_after_replicas <= target_replicas <= number of peers`. Store API
+returns a CID when Cluster accepts the payload; the Minter requires confirmed
+pins for metadata levels before publishing to the chain.
 
-The replication policy must satisfy:
+**Recovery.** `resume` continues an interrupted run. When an empty Docker
+bridge network overlaps a requested subnet, `install`, `apply`, and `resume`
+remove it only with `--clean-empty-network-conflicts`; a network with attached
+containers is never removed automatically. `recreate` rebuilds one service
+without applying inventory changes — altered ports, connections, placement, or
+secrets require a reviewed `apply`.
 
-```text
-1 <= publish_after_replicas <= target_replicas <= number of peers
-```
+**Command index.** The CLI exposes 35 subcommands, grouped by effect:
 
-Store API returns a CID when Cluster accepts the payload. Minter requires real
-pins for metadata levels before publishing to blockchain. Final replication and
-payload cleanup are later worker activity, not part of a client HTTP request.
+| Group | Commands | Side effects |
+| --- | --- | --- |
+| Inspect an inventory | `validate`, `plan`, `inventory-resolve`, `inventory-explain`, `inventory-network-matrix`, `inventory-diff` | Read-only except `inventory-resolve`, which writes its `--output` JSON; no Docker/SSH/Git, no secret values |
+| Deploy | `render`, `install`, `preflight`, `prepare`, `push`, `apply`, `resume`, `verify`, `status` | `render` writes a bundle; the rest install, transfer, or start services (`verify`/`status` read-only) |
+| Managed services | `services`, `logs`, `build`, `stop`, `start`, `restart`, `recreate`, `remove` | Act on one `service:ID` (take `--deployment` or `--inventory`) |
+| Observe | `deployments`, `tui`, `metrics`, `metrics-export` | Read-only; `metrics-export` writes its `--output` `.prom` file; `tui` mutates only through explicit lifecycle actions |
+| Inventories | `inventory-create`, `inventory-edit` | Create or edit a file after confirmation |
+| Chain artifacts | `chain-bootstrap`, `chain-init`, `chain-static-nodes`, `chain-export`, `chain-verify` | Some create artifacts explicitly |
+| Secrets | `secrets-init` | Creates managed private material at the requested destination |
 
-## Security and persistence
+## 5. Maintained scenarios
 
-- Inventories contain secret paths and consumers, not values.
-- Public bundles contain neither private keys nor secret hashes.
-- Existing components are updated with `fetch` and `merge --ff-only`; divergent
-  or modified checkouts stop acquisition.
-- Installation never automatically deletes volumes or persistent data.
-- Blockchain artifacts are verified against nodes, roles, groups, chain ID,
-  endpoints, and checksums in the current inventory.
-- Review `plan`, exposures, and firewall suggestions before any remote install.
+Every pair `.json`/`.md` under [`examples/operator-inventory/`](examples/operator-inventory/)
+loads and renders with the current code. Production examples use
+documentation-reserved ranges and `REPLACE` placeholders — never run them
+until addresses, routes, SSH keys, public origins, artifacts, and secret
+sources are replaced.
 
-## Main commands
+| Operator file | Profile | Machines | What it exercises |
+| --- | --- | ---: | --- |
+| [`local-simple.json`](examples/operator-inventory/local-simple.md) | `local` | 1 | Minimal functional path: one validator, RPC, and storage peer |
+| [`local-observer.json`](examples/operator-inventory/local-observer.md) | `local` | 1 | A Besu observer and Resolver bound to its private RPC |
+| [`local-ha.json`](examples/operator-inventory/local-ha.md) | `lab` | 1 | Logical HA groups and two storage copies on one Docker host |
+| [`local-ha-monitoring.json`](examples/operator-inventory/local-ha-monitoring.md) | `lab` | 1 | local-ha plus the dark-monitoring stack for the deployment |
+| [`local-two-site.json`](examples/operator-inventory/local-two-site.md) | `lab` | 6 logical | Two isolated Docker LANs plus an inter-site VPN mesh (network-behaviour lab, not physical HA) |
+| [`lima-five-host.json`](examples/operator-inventory/lima-five-host.md) | `production` | 5 | Reproducible SSH distribution across Lima machines |
+| [`lima-two-site-five-host.json`](examples/operator-inventory/lima-two-site-five-host.md) | `lab` | 5 | Two Lima sites joined through WireGuard: Apps + 2 validators + IPFS in site A, 2 validators + IPFS in site B |
+| [`production-five-host.json`](examples/operator-inventory/production-five-host.md) | `production` | 5 | Apps, two blockchain domains, and two storage domains |
+| [`production-six-host.json`](examples/operator-inventory/production-six-host.md) | `production` | 6 | Dedicated public Resolver with local observer, RPC, and Store API reader |
+| [`one-server-aws-sandbox.json`](examples/operator-inventory/one-server-aws-sandbox.md) | `lab` | 1 | Single-EC2 sandbox run on the server, local-ha layout with public HTTP gateway |
+| [`dark2-prod-aws.json`](examples/operator-inventory/dark2-prod-aws.md) | `production` | 6 | AWS-only active site: applications, Resolver/observer, five validators, two storage peers |
+| [`aws-active-two-site-nine-host.json`](examples/operator-inventory/aws-active-two-site-nine-host.md) | `production` | 9 | AWS retains QBFT quorum; the remote site keeps chain and IPFS copies without application services |
 
-| Command | Function |
+## 6. Documentation map
+
+**Understand the platform**
+
+| Document | Depth |
 | --- | --- |
-| `validate` | Validate an operator or v3 inventory |
-| `plan` | Show machines, groups, phases, and dependencies |
-| `render` | Generate bundles without applying them |
-| `preflight` | Check local/remote prerequisites |
-| `push` | Transfer bundles to SSH hosts |
-| `apply` | Apply a prepared bundle |
-| `install` | Coordinate acquisition, preparation, application, and verification |
-| `resume` | Continue an interrupted execution |
-| `status` | Show a concise operational status |
-| `deployments` | List locally known managed deployments and their live summaries |
-| `services` | List current managed service states, descriptions, and valid lifecycle actions |
-| `verify` | Run functional and infrastructure verification |
-| `recreate` | Rebuild/recreate one specific service |
-| `stop`, `start`, `restart`, `remove` | Operate on one exact managed service, locally or through its configured SSH host |
-| `inventory-create` | Create a copy from a maintained template |
-| `inventory-edit` | Edit an inventory with Textual |
-| `metrics` | Watch per-machine Docker CPU, memory, container and restart state in a read-only Textual panel |
-| `inventory-resolve` | Expand operator v2 to v3 |
-| `inventory-explain` | Explain the provenance of a resolved field |
-| `inventory-network-matrix` | Show the resolved per-peer LAN/VPN endpoints |
-| `inventory-diff` | Compare two resolved inventories semantically |
-| `chain-*` | Create, export, and verify Besu artifacts |
-| `secrets-init` | Initialize managed private material |
+| [docs/architecture.md](docs/architecture.md) | Services, minter pipeline, state model, IPFS layout, chain, health endpoints |
+| [docs/platform-architecture.md](docs/platform-architecture.md) | Authority-centric design: contracts, service layer, ports, data flows |
+| [docs/sdk-guide.md](docs/sdk-guide.md) | Developer guide: `dark-core-lib` SDK, contract deployment, signer roles |
+| [docs/api-reference.md](docs/api-reference.md) | HTTP API of every service, mTLS posture, on-chain reference |
+| [notebooks/README.md](notebooks/README.md) | End-to-end notebooks: authority→resolver, deposit lifecycle per scenario |
 
-Check command-specific help before using operational options:
+**Go deeper on the deployer**
 
-```bash
-venv/bin/python deploy.py install --help
-venv/bin/python deploy.py apply --help
-venv/bin/python deploy.py chain-init --help
-```
-
-Service lifecycle commands take a selector from the deployed bundle, never a
-Docker container name. List managed deployments first, then inspect services:
-
-```bash
-venv/bin/python deploy.py deployments
-venv/bin/python deploy.py services --deployment dark-operator-local-ha
-```
-
-The historical `--inventory inventory.json` form remains available to locate a
-deployment ID. For example, rebuild a changed service from its current source
-and deployed Compose context with:
-
-```bash
-venv/bin/python deploy.py recreate --inventory inventory.json \
-  --target service:store-api-reader --build
-```
-
-`recreate` without `--build` replaces one container using the existing image and
-deployed configuration. `recreate --build` rebuilds a service with a `build:`
-context from the checkout referenced by that deployed Compose file. Neither
-command applies inventory changes: altered ports, generated environment,
-connections, placement, images or secrets require a reviewed `apply`. Always
-start with `--dry-run` when selecting a service in an active deployment.
-
-`stop`, `start`, and `restart` preserve containers and data. `remove` removes
-only the managed container; it never removes persistent bind-mounted data,
-Docker volumes, or networks. Every operation requires the reviewed deployment
-bundle, validates the exact Compose labels, and supports `--dry-run`.
-
-List the runtime state and exact selectors available for lifecycle operations:
-
-```bash
-venv/bin/python deploy.py services --inventory inventory.json
-venv/bin/python deploy.py services --inventory inventory.json --json
-venv/bin/python deploy.py services --deployment dark-operator-local-ha --json
-```
-
-## Essential documentation
-
-| Document | Contents |
+| Document | Depth |
 | --- | --- |
-| [Operations manual](OPERATIONS-MANUAL.md) | Installation, configuration, verification, recovery, and troubleshooting |
-| [Deployer reference](docs/deployer.md) | Contracts, commands, security, rendering, and execution |
-| [Docker metrics panel](docs/metrics-panel.md) | Read-only per-machine Docker metrics: decisions, contract, verification |
-| [Prometheus metrics proposal](docs/metrics-prometheus-proposal.md) | How monitoring works today, and four ways to expose it to Prometheus |
-| [Operator inventory](docs/deployment-v3-operator-inventory-proposal.md) | Compact format and catalogue design |
-| [Inventory and artifact flow](docs/deployment-v3-inventory-and-artifact-flow.md) | Resolution, bundles, secrets, and blockchain artifacts |
-| [Service placement](docs/deployment-v3-service-placement.md) | Groups, connections, endpoints, and placement constraints |
-| [Networking](docs/networking-v3.md) | LAN, VPN, routes, NAT, ports, and firewalling |
-| [Multisite networking proposal](docs/multi-site-lan-vpn-proposal.md) | Working design for sites, per-peer LAN/VPN routing, Besu, Kubo, and IPFS Cluster |
-| [Architecture](docs/architecture.md) | dARK components and ARK lifecycle |
-| [Lima testing](docs/lima-five-host-test.md) | Five-host distributed lab |
-| [AWS deployment](docs/aws-single-az-five-host.md) | Private EC2 scenario in one Availability Zone |
-| [AWS CloudFormation active site](infrastructure/aws/cloudformation/README.md) | Isolated VPC, six public-IPv4 EC2 hosts in one workload AZ, EBS, ALB, TLS hand-off, and inventory outputs |
-| [Web wizard](web-wizard/README.md) | Local workbench usage and guarantees |
-| [History](docs/history.md) | Archived decisions and superseded documentation |
+| [docs/deployer.md](docs/deployer.md) | The deployer reference: formats, acquisition, rendering, execution, security |
+| [docs/deployment-v3-inventory-and-artifact-flow.md](docs/deployment-v3-inventory-and-artifact-flow.md) | Resolution, bundles, secrets, blockchain artifacts |
+| [docs/deployment-v3-service-placement.md](docs/deployment-v3-service-placement.md) | Groups, connections, placement constraints |
+| [docs/networking-v3.md](docs/networking-v3.md) | LAN/VPN, routes, NAT, P2P ports, firewalling |
+| [docs/multi-site-lan-vpn-proposal.md](docs/multi-site-lan-vpn-proposal.md) | Multi-site design (format v3) and its acceptance criteria |
+| [docs/deployment-v3-revisions.md](docs/deployment-v3-revisions.md) | Bundle/revision reference: prepare, push, apply, fingerprints, status |
+| [docs/operations.md](docs/operations.md) | Operational runbook: install, verification, workers, lifecycle |
 
-## Repository layout
+**Scenarios and labs**
+
+| Document | Depth |
+| --- | --- |
+| [docs/lima-five-host-test.md](docs/lima-five-host-test.md) | Five-host Lima lab procedure |
+| [docs/aws-single-az-five-host.md](docs/aws-single-az-five-host.md) | Manual five-host EC2 runbook |
+| [CloudFormation guide](infrastructure/aws/cloudformation/README.md) | `dark2-prod-aws`: isolated VPC, six hosts, EBS, ALB, TLS, bootstrap seal, SSM helpers |
+| [AWS operator CLI](infrastructure/aws/cloudformation/dark2-prod-aws-operator-cli.md) | Operator profile, PEM upload, Dashboard forwarding, bootstrap check |
+| [local-infra/README.md](local-infra/README.md) | Lima lab scripts and two-site generator |
+
+**Development and design**
+
+| Document | Depth |
+| --- | --- |
+| [docs/development.md](docs/development.md) | Test component branches without touching the catalogue; pre-PR validation |
+| [docs/deployer-generalization.md](docs/deployer-generalization.md) | Active design: generalizing the deployer beyond the baseline catalogue |
+| [docs/deployer-component-contract-v0.md](docs/deployer-component-contract-v0.md) | Companion spec: component definition, bindings, hooks |
+| [web-wizard/README.md](web-wizard/README.md) | Inventory workbench usage and guarantees |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Environment, tests, linting, contribution flow |
+
+**Reference**
+
+| Document | Depth |
+| --- | --- |
+| [docs/README.md](docs/README.md) | Documentation index: the canonical map of every maintained document |
+| [docs/monitoring.md](docs/monitoring.md) | Monitoring decision record and operating guide |
+| [docs/known-issues.md](docs/known-issues.md) | Single living list of unresolved issues and pending acceptance work |
+
+Archived proposals, diagnoses, and historical reviews live in
+[`docs/old/`](docs/old/README-index.md) — valuable context, not current
+instructions.
+
+## 7. Repository layout
 
 ```text
-deploy.py                       supported CLI
-deployment_v3/                 contracts, resolver, planner, rendering, and runtime
-examples/operator-inventory/   maintained compact inventories
-examples/deployment-v3/        maintained complete inventories
-web-wizard/                    local web workbench for operator inventories
-blockchain/                    Besu runtime and tools
-components/                    dARK component checkouts
-docs/                          technical documentation and scenarios
-tests/                         deployer tests
+deploy.py / deploy.sh           CLI and its self-maintaining launcher
+create_venv.sh                  standalone venv creation (--with-tui adds Textual)
+deployment_v3/                  contracts, resolver, planner, renderer, runner, metrics
+examples/operator-inventory/    maintained compact inventories + per-scenario guides
+examples/deployment-v3/         maintained complete inventories (legacy format)
+web-wizard/                     local web workbench for operator inventories
+blockchain/                     Besu runtime, genesis tooling, chain scripts
+components/                     dARK component checkouts (acquired from their repos)
+local-infra/                    Lima lab scripts and inventory instantiation
+infrastructure/aws/             CloudFormation templates, parameters, SSM helpers
+notebooks/                      end-to-end and per-scenario acceptance notebooks
+docs/                           technical documentation (docs/old/ = archive)
+tests/                          deployer tests (unittest)
 ```
 
-## Tests
+## 8. Tests
 
 Deployer:
 
@@ -588,6 +425,6 @@ PYTHONPATH=web-wizard:$PYTHONPATH \
   venv/bin/python -m pytest web-wizard/tests -q
 ```
 
-## License
+## 9. License
 
 Software: AGPL-3.0-or-later. Documentation: CC BY 4.0 unless stated otherwise.
