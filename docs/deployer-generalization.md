@@ -7,7 +7,7 @@
   arbitrarios (Java/Spring Boot, Solr, VuFind, …) **describiéndolos** y desplegarlos nombrándolos
   en un inventario.
 - **Relacionado:** `docs/deployment-v3-inventory-and-artifact-flow.md`,
-  `docs/deployment-v3-operator-inventory-proposal.md`
+  `docs/old/deployment-v3-operator-inventory-proposal.md` (archivado)
 
 > Este documento sintetiza tres rondas de análisis sucesivas. Para evitar el debate escenificado,
 > las afirmaciones se clasifican en tres categorías: **firmes** (verificadas en código o con las que
