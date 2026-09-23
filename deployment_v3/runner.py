@@ -87,6 +87,17 @@ def _require(result, description):
     if result.returncode: raise ApplyError(f"{description}: {result.stderr.strip() or result.stdout.strip() or 'no command output'}")
 
 
+def _service_exists_in_runtime(plan, machine, service, root) -> bool:
+    """Return whether Compose still has a container for a previously applied service."""
+    executor = resolve_executor(machine)
+    directory = _compose_directory(plan, machine, root, service.id)
+    compose = ("docker", "compose", "--project-name", _compose_project(plan, machine, service.id), "-f", str(directory / "compose.yaml"))
+    result = executor.run((*compose, "ps", "-a", "--format", "json", service.id), timeout=30)
+    if result.returncode:
+        return False
+    return bool(result.stdout.strip())
+
+
 def _distribute_contract_runtime(plan, producer) -> list[str]:
     """Copy the generated public contract environment to remote consumers.
 
@@ -747,6 +758,15 @@ def apply(plan, project_root: Path, *, resume=False, revision=None, defer_verifi
                 ),
             }
             changed_services = set(changes["added"]) | set(changes["changed"])
+            # status.json records the last successful apply, but containers
+            # may have been removed outside the deployer. Reconcile that
+            # durable state with Docker before treating a service as reused.
+            for service in effective.services:
+                if previous_services.get(service.id) == "applied" and service.id not in changed_services:
+                    if not _service_exists_in_runtime(effective, effective.machine(service.machine_id), service, root):
+                        changed_services.add(service.id)
+                        changes["changed"].append(service.id)
+            changes["changed"] = sorted(set(changes["changed"]))
             changed_machines = {
                 effective.service(service_id).machine_id
                 for service_id in changed_services
