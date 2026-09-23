@@ -1,7 +1,7 @@
 # dARK 2.0 - API & Library Developer Reference
 
 > This guide is part of the [dARK 2.0 Documentation](README.md).
-> See also: [Developer Guide](DARK_2.0_GUIDE.md) | [Architecture](DARK_2.0_ARCHITECTURE.md)
+> See also: [docs/sdk-guide.md](sdk-guide.md) | [docs/platform-architecture.md](platform-architecture.md)
 
 This guide provides technical specifications for developers integrating with the dARK 2.0 stack: REST APIs, smart contract interfaces, events, and SDK usage.
 
@@ -14,15 +14,17 @@ This guide provides technical specifications for developers integrating with the
 | `dark-core-resolver-api` | 8002 | Public (no auth) |
 | `dark-store-api` | 8003 | No auth (internal network) |
 
+Every service also exposes an unauthenticated `GET /health/live` liveness endpoint at the service root (returns `{"status": "alive"}` without touching backends). Admin, minter, and resolver also expose `GET /health`; the store API additionally provides `GET /health/read` and `GET /health/write`.
+
 ---
 
 ## 1. Admin API (`dark-core-admin-api` — port 8000)
 
-All endpoints require **mTLS**. The base path prefix for the admin router is `/admin`; for ARK stats it is `/arks`.
+All endpoints require **mTLS**. Every admin endpoint is mounted under the global `/api/v1` prefix: the admin router at `/api/v1/admin/...`, ARK stats at `/api/v1/arks/...`.
 
 ### 1.1 Authority Management
 
-#### `POST /admin/authority` — Register authority
+#### `POST /api/v1/admin/authority` — Register authority
 Creates a new authority: generates a wallet, encrypts its private key on-chain, funds it from the admin account, registers it in the `Authority` contract, and authorizes all specified NAANs.
 
 **Request body:**
@@ -46,12 +48,12 @@ Creates a new authority: generates a wallet, encrypts its private key on-chain, 
 }
 ```
 
-#### `GET /admin/authority/{uuid}` — Get authority info
+#### `GET /api/v1/admin/authority/{uuid}` — Get authority info
 Returns authority wallet, NAANs, active status, and wallet balance.
 
 **Response `200`** — `AuthorityResponse` (same structure as above).
 
-#### `POST /admin/authority/{uuid}/authorize-naan` — Authorize NAAN
+#### `POST /api/v1/admin/authority/{uuid}/authorize-naan` — Authorize NAAN
 Adds a NAAN to an existing authority. Idempotent: if NAAN is already authorized, returns success without a transaction.
 
 **Request body:** `{"naan": "12345"}`
@@ -65,33 +67,33 @@ Adds a NAAN to an existing authority. Idempotent: if NAAN is already authorized,
 }
 ```
 
-#### `POST /admin/authority/{uuid}/revoke-naan` — Revoke NAAN
+#### `POST /api/v1/admin/authority/{uuid}/revoke-naan` — Revoke NAAN
 Removes a NAAN from an authority. Idempotent.
 
 **Request body:** `{"naan": "12345"}`
 
 **Response `200`** — `OperationResponse`.
 
-#### `POST /admin/authority/{uuid}/deactivate` — Deactivate authority
+#### `POST /api/v1/admin/authority/{uuid}/deactivate` — Deactivate authority
 Prevents the authority from minting new ARKs. Idempotent.
 
 **Response `200`** — `OperationResponse`.
 
-#### `GET /admin/authority/{uuid}/balance` — Get wallet balance
+#### `GET /api/v1/admin/authority/{uuid}/balance` — Get wallet balance
 
 **Response `200`**:
 ```json
 {"uuid": "...", "wallet_address": "0x...", "balance_eth": 0.0095}
 ```
 
-#### `POST /admin/authority/{uuid}/fund` — Fund authority wallet
+#### `POST /api/v1/admin/authority/{uuid}/fund` — Fund authority wallet
 Sends ETH from the admin account to an authority wallet.
 
 **Request body:** `{"amount_eth": 0.01}`
 
 **Response `200`** — `OperationResponse`.
 
-#### `GET /admin/status` — System status
+#### `GET /api/v1/admin/status` — System status
 
 **Response `200`** — `AdminStatusResponse`:
 ```json
@@ -106,11 +108,11 @@ Sends ETH from the admin account to an authority wallet.
 
 ### 1.2 ARK Stats
 
-#### `GET /arks/count` — Total ARK count
+#### `GET /api/v1/arks/count` — Total ARK count
 
 **Response `200`:** `{"count": 42}`
 
-#### `GET /arks/recent?limit=10` — Recent ARKs
+#### `GET /api/v1/arks/recent?limit=10` — Recent ARKs
 `limit` is 1–100, default 10.
 
 **Response `200`:**
@@ -160,7 +162,7 @@ All fields except `ark` and `state` are optional (`null` when not yet available)
 
 Auth note: write endpoints (`POST`, `PUT`, `DELETE`) require **authority identity** (certificate CN = authority UUID). Read endpoints require **mTLS**.
 
-#### `POST /arks` — Reserve ARK
+#### `POST /api/v1/arks` — Reserve ARK
 Allocates a NOID-based ARK identifier and persists a `reserved` record. Validates that the authority is authorized for the NAAN on-chain (result is cached).
 
 **Auth:** authority identity  
@@ -176,7 +178,7 @@ Allocates a NOID-based ARK identifier and persists a `reserved` record. Validate
 | `403` | Authority not authorized for NAAN |
 | `409` | Collision after retries (retry the call) |
 
-#### `POST /arks/batch` — Batch reserve ARKs
+#### `POST /api/v1/arks/batch` — Batch reserve ARKs
 Reserves multiple ARKs in one request. Authorization is validated once for the batch. Each item gets its own `client_item_id` for correlation.
 
 **Auth:** authority identity  
@@ -200,7 +202,7 @@ Reserves multiple ARKs in one request. Authorization is validated once for the b
 ```
 `errors` is `null` when all items succeeded.
 
-#### `GET /arks/{ark:path}` — Get ARK
+#### `GET /api/v1/arks/{ark:path}` — Get ARK
 Returns the ARK record from the database; falls back to the blockchain if not found locally. For `published` ARKs, merges DB metadata with on-chain data (URL and CID come from the contract).
 
 **Auth:** mTLS  
@@ -213,7 +215,7 @@ Returns the ARK record from the database; falls back to the blockchain if not fo
 | `400` | Invalid ARK format / bad checkdigit |
 | `404` | Not found in DB or blockchain |
 
-#### `PUT /arks/{ark:path}` — Update metadata → DRAFT
+#### `PUT /api/v1/arks/{ark:path}` — Update metadata → DRAFT
 Submits Level-1 (minimal) + Level-2 (original) metadata and transitions the ARK:
 - `reserved` → `draft` (new create_ark queued)
 - `published` → `update` (update_ark queued)
@@ -253,7 +255,7 @@ If the ARK exists on-chain but not locally, it is imported as `published` before
 | `422` | Level-1 metadata validation failed |
 | `502` | Blockchain read failed during on-chain import |
 
-#### `DELETE /arks/{ark:path}` — Tombstone ARK
+#### `DELETE /api/v1/arks/{ark:path}` — Tombstone ARK
 Marks an ARK as deleted. **Irreversible.** Only the owning authority can tombstone.
 
 **Auth:** authority identity  
@@ -270,22 +272,22 @@ Marks an ARK as deleted. **Irreversible.** Only the owning authority can tombsto
 
 All require **mTLS**.
 
-#### `GET /authority/{uuid}` — Get authority info
+#### `GET /api/v1/authority/{uuid}` — Get authority info
 Returns `AuthorityResponse` (same schema as Admin API, without `balance_eth`).
 
-#### `GET /authority/{uuid}/naans` — List authorized NAANs
+#### `GET /api/v1/authority/{uuid}/naans` — List authorized NAANs
 
 **Response `200`:** `{"uuid": "...", "naans": ["12345", "67890"]}`
 
-#### `GET /authority/{uuid}/authorized/{naan}` — Check NAAN authorization
+#### `GET /api/v1/authority/{uuid}/authorized/{naan}` — Check NAAN authorization
 
 **Response `200`:** `{"uuid": "...", "naan": "12345", "authorized": true}`
 
-### 2.4 Worker Status Endpoints
+### 2.4 Worker Status & Retry Endpoints
 
-No authentication required (internal network only).
+The status and error-listing endpoints require no authentication (internal network only); `POST /api/v1/worker/retry` requires **mTLS**.
 
-#### `GET /worker/status?detail=simple|full` — Worker status
+#### `GET /api/v1/worker/status?detail=simple|workload|infrastructure|full` — Worker status
 
 `detail=simple` (default) returns a compact operational summary:
 ```json
@@ -310,34 +312,65 @@ No authentication required (internal network only).
 }
 ```
 
-`detail=full` adds per-worker heartbeat details (host, PID, instance ID, cycle utilization, estimated drain time), RPC retry config, and full queue breakdowns per stage.
+`detail=workload` adds the `workload` breakdown per stage, the `errors` summary, `backlog_age` metrics, and the replication `configuration`; `detail=infrastructure` adds the `infrastructure` block (RPC and metadata-storage health); `detail=full` includes both.
 
 **Worker states:** `idle` | `working` | `backlogged` | `delayed` | `paused_rpc_unavailable` | `stopped` | `stale` | `unknown` | `disabled`
 
 **Overall health:** `ok` | `degraded` | `down`
 
-#### `GET /worker/errors/permanent?stage=all|metadata|chain&page=1&page_size=50` — Permanent errors
-Returns paginated list of ARKs that exhausted all retry attempts. Used for operational triage.
+#### `GET /api/v1/worker/errors` — Permanent errors
+Returns a paginated list of ARKs whose processing status is `FAILED` (only permanent failures are listed; normal waits are not). Used for operational triage.
+
+**Query parameters:**
+
+| Param | Values |
+| :--- | :--- |
+| `stage` | `all` (default), `metadata`, `availability`, `chain`, `replication` |
+| `authority_id` | Optional authority UUID filter |
+| `error_code` | `all` (default) or a processing error code name (e.g. `chain_rpc_unavailable`) |
+| `page` | 1-based page number (default `1`) |
+| `page_size` | 1–200 (default `50`) |
 
 **Response `200`:**
 ```json
 {
-  "total": 3,
-  "page": 1,
-  "page_size": 50,
+  "summary": {"total": 3, "by_stage": {"metadata": 2, "chain": 1}, "by_code": {"chain_rpc_unavailable": 1}},
+  "pagination": {"page": 1, "page_size": 50, "total": 3, "total_pages": 1},
   "items": [
     {
       "ark": "ark:/12345/abc123",
-      "state": "D",
+      "public_state": "D",
       "stage": "metadata",
-      "authority_id": "org-uuid",
-      "publish_retry_count": 5,
-      "publish_last_error": "Connection timeout",
-      "metadata": {"level1_cid": null, "original_cid": null, "original_schema": "dublin_core"}
+      "error_code": "storage_unavailable",
+      "detail": "IPFS cluster unreachable",
+      "attempts": 5,
+      "updated_at": "2026-09-01T12:00:00",
+      "level1_cid": null,
+      "level2_cid": null
     }
   ]
 }
 ```
+
+#### `POST /api/v1/worker/retry` — Administrative retry
+Explicitly returns permanently failed ARKs to `READY` in their current stage so the background workers pick them up again.
+
+**Auth:** mTLS  
+**Request body:**
+```json
+{"arks": ["ark:/12345/abc123"], "reason": "operator-approved retry after RPC outage"}
+```
+`arks` accepts 1–1000 ARK identifiers; `reason` (1–500 characters) is required and is logged together with the operator identity from the client certificate.
+
+**Response `200`:**
+```json
+{
+  "requested": 1,
+  "reason": "operator-approved retry after RPC outage",
+  "items": [{"ark": "ark:/12345/abc123", "status": "accepted"}]
+}
+```
+Per-ARK `status` values: `accepted`, `locked` (ARK is being processed; retry later), `not_found`, `not_retryable_state` (reserved or tombstoned), `not_failed`.
 
 ---
 
@@ -345,27 +378,38 @@ Returns paginated list of ARKs that exhausted all retry attempts. Used for opera
 
 Public, no authentication.
 
-#### `GET /arks/{ark:path}` — Resolve ARK (default)
-Redirects to the ARK's target URL. HTTP 301 or 302 depending on `RESOLVER_REDIRECT_STATUS` config (default 301).
+#### `GET /api/v1/arks/{ark:path}` — Resolve ARK (default)
+Redirects to the ARK's target URL. The redirect status comes from the `RESOLVER_REDIRECT_STATUS` config (default 302).
 
 **Path:** full ARK, e.g. `ark:/12345/abc123`
 
-#### `GET /arks/{ark:path}?info` — Public info
-Returns a JSON document with on-chain ARK metadata (URL, owner, timestamps, CID).
+#### `GET /api/v1/arks/{ark:path}?info` — Public info
+Resolves the ARK on-chain and returns its target URL, timestamps, and descriptive metadata projected from the ARK's Level-1 metadata. The ARK must have Level-1 metadata available, otherwise the request fails with `502`.
 
-**Response `200`:**
+**Response `200`** — `ArkInfoResponse`:
 ```json
 {
   "ark": "ark:/12345/abc123",
-  "url": "https://example.org/item/1",
-  "owner": "0x...",
-  "cid": "bafyrei...",
+  "target": "https://example.org/item/1",
   "created_at": "2026-01-01T00:00:00Z",
-  "updated_at": "2026-01-01T00:00:00Z"
+  "updated_at": "2026-01-01T00:00:00Z",
+  "metadata_schema": "dublin_core",
+  "title": "My Item",
+  "authors": ["Alice"],
+  "year": 2026,
+  "publisher": null,
+  "resource_type": null,
+  "language": null,
+  "abstract": null,
+  "subjects": null,
+  "rights": null,
+  "alternate_identifiers": [{"schema": "doi", "value": "10.1234/example"}],
+  "alternate_urls": null
 }
 ```
+Optional fields are `null` when absent; each `alternate_identifiers` item has `schema` and `value`.
 
-#### `GET /arks/{ark:path}?metadata` — Metadata view
+#### `GET /api/v1/arks/{ark:path}?metadata` — Metadata view
 Fetches Level-1 and Level-2 metadata from the storage layer and returns the original record with its MIME type.
 
 **HEAD** is supported on all three variants.
@@ -407,9 +451,32 @@ Returns raw bytes. Content-Type is `application/octet-stream`.
 {"cid": "bafyrei...", "status": "pinned", "replication": {"total_replicas": 2, "checked_at": "2026-09-01T12:00:00Z"}}
 ```
 
+#### `POST /v1/replication/ensure` — Request durable replication
+Raises the replica allocation target of already-stored CIDs without waiting for the resulting pins to complete.
+
+**Request body:**
+```json
+{"cids": ["bafyrei..."], "target_replicas": 2, "assigned_replicas": {"bafyrei...": 1}}
+```
+`cids` accepts 1–200 identifiers; `target_replicas` (1–200) cannot exceed the configured replication target; `assigned_replicas` (optional) marks CIDs whose current allocation already meets the target.
+
+**Response `200`:**
+```json
+{"results": {"bafyrei...": "promotion_requested"}}
+```
+Each CID maps to an outcome: `already_allocated` (assigned replicas already meet the target), or `promotion_requested`/`promotion_failed` in `ipfs_cluster` mode (the `filesystem` backend reports `already_allocated`).
+
+**Errors:** `403` in read-only mode, `422` if `target_replicas` exceeds the configured target, `500` on backend failure.
+
 #### `GET /health` — Health check
 
 **Response `200`:** `{"status": "healthy"}`
+
+#### `GET /health/live` — Liveness check
+
+Cheap process check that does not touch the storage backend.
+
+**Response `200`:** `{"status": "alive"}`
 
 ---
 

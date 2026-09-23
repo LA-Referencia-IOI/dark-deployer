@@ -237,9 +237,11 @@ The dARK contract does not know about UUIDs. It operates purely on wallet addres
 
 ### 5.1 Installation & Configuration
 
-```bash
-pip install dark-core-lib
-```
+`dark-core-lib` is a component of the dARK stack, not a published PyPI
+package: the deployer acquires its Git checkout into `components/dark-core-lib/`
+and every service consumes it from there (services that embed it declare it in
+their requirements). For ad-hoc work, clone the repository and use it in place
+or `pip install -e` from the checkout.
 
 The SDK is configured via environment variables or a `.env` file:
 
@@ -261,7 +263,7 @@ In **read-only mode** (`DARK_READ_ONLY=true`), only `DARK_RPC_URL` and `DARK_CON
 deployer supplies the administration signer to Admin API and the separate
 minter signer to Minter API under that service-local name. Resolver and Store
 API do not receive blockchain signing keys. See
-[Deployer Operations](docs/deployer-operations.md#3-signer-roles).
+[Deployer Operations](old/deployer-operations.md#3-signer-roles) (archived).
 
 ### 5.2 DARKCoreClient
 
@@ -409,6 +411,10 @@ ark_info = client.update_ark(
 
 `create_ark` and `update_ark` sign and submit the transaction using the authority's wallet (decrypted from the on-chain encrypted key), wait for confirmation, and return an `ARKInfo` if `fetch_result=True`. Set `fetch_result=False` to skip the post-tx read.
 
+Before submitting, `client.estimate_operation_gas(uuid, operation)` returns the
+gas estimate for one `ARKPublishOperation` (it delegates to
+`arks.estimate_operation_gas` in the services layer).
+
 ### 5.5 Batch Publishing (Pipelined)
 
 For bulk operations, `publish_operations` uses a sliding-window nonce pipeline to maximize throughput without waiting for each transaction to confirm before sending the next.
@@ -474,6 +480,7 @@ All SDK exceptions inherit from `DarkCoreError`:
 | `AuthorizationError` | NAAN operation on inactive or unregistered wallet |
 | `ARKError` | Generic dARK contract failure |
 | `ARKNotFoundError` | `resolve` or `get` called for non-existent ARK |
+| `ARKAlreadyExistsError` | Mint/register operation for an ARK that already exists |
 
 **Typical pattern:**
 
