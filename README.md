@@ -23,6 +23,7 @@ secret, planning, and verification rules apply in both cases.
 | Complete v3 inventory | Describe the full execution contract directly | No |
 | `inventory-edit` | Edit inventory sections through a Textual TUI | Only the file after confirmation |
 | `metrics` | Watch per-machine Docker metrics for one managed deployment | Nothing: it only reads |
+| `components/dark-monitoring` | Prometheus, Grafana and exporter stack generated from an applied deployment snapshot | Its explicit installer starts a separate monitoring stack |
 | `web-wizard/` | Design, visualize, and adapt operator inventories through a local web interface | Only creates a new copy |
 | `chain-*` commands | Create, export, and verify Besu artifacts | Some explicitly create artifacts |
 | `secrets-init` | Prepare managed secrets for a new installation | Yes, at the requested destination |
@@ -61,6 +62,11 @@ venv/bin/python -m pip install -r requirements-tui.txt
 ```
 
 ## The two inventory formats
+
+For component development and per-inventory branch testing, see
+[docs/development.md](docs/development.md).
+For the review status and validation plan for PR #14, see
+[docs/pr-14-review.md](docs/pr-14-review.md).
 
 ### Operator inventory v2 and v3
 
@@ -327,6 +333,29 @@ leave open next to the operations console.
 ```bash
 venv/bin/python deploy.py metrics
 ```
+
+To export the same Docker/SSH collector contract for Prometheus through
+node-exporter's textfile collector:
+
+```bash
+venv/bin/python deploy.py metrics-export \
+  --deployment dark-operator-local-ha \
+  --include-disk \
+  --output components/dark-monitoring/generated/dark.prom
+```
+
+`components/dark-monitoring` provides the separate Prometheus, Blackbox,
+node-exporter, cAdvisor and Grafana stack. Its installer reads the applied
+snapshot rather than a manually maintained host list:
+
+```bash
+cd components/dark-monitoring
+../../venv/bin/python install.py \
+  --deployment-snapshot ../../.generated/deployment-v3/dark-operator-local-ha/bundle/shared/deployment-topology.json
+```
+
+The first run creates a private `.env` and asks the operator to replace the
+sample Grafana administrator password before starting anything.
 
 ## Networking and exposure
 

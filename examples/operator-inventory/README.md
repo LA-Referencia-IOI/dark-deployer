@@ -20,6 +20,7 @@ Each maintained inventory has a companion guide:
 | `local-simple.json` | [local-simple.md](local-simple.md) |
 | `local-observer.json` | [local-observer.md](local-observer.md) |
 | `local-ha.json` | [local-ha.md](local-ha.md) |
+| `local-ha-monitoring.json` | [local-ha-monitoring.md](local-ha-monitoring.md) |
 | `local-two-site.json` | [local-two-site.md](local-two-site.md) |
 | `one-server-aws-sandbox.json` | [one-server-aws-sandbox.md](one-server-aws-sandbox.md) |
 | `aws-active-two-site-nine-host.json` | [aws-active-two-site-nine-host.md](aws-active-two-site-nine-host.md) |

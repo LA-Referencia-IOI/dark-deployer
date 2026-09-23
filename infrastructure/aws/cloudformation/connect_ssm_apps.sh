@@ -1,62 +1,63 @@
 #!/usr/bin/env bash
-# Opens an AWS Systems Manager session on the running apps host.
+# Open an interactive Session Manager shell on the running apps host.
 set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: connect_ssm_apps.sh [--region REGION] [--profile PROFILE]
-                          [--deployment DEPLOYMENT]
+Usage: connect_ssm_apps.sh [--deployment NAME] [--region REGION] [--profile PROFILE]
 
-Finds the single running EC2 instance tagged dARKRole=apps for the deployment
-and opens an interactive Session Manager session.
+Finds the single running EC2 instance tagged dARKRole=apps and opens an
+interactive AWS Systems Manager session to it.
 EOF
   exit 2
 }
 
-# Defaults for the active AWS deployment. Command-line options can override
-# these values when connecting to another account, region, or stack.
 DEPLOYMENT='dark2-prod-aws'
-REGION='us-east-1'
-ROLE='apps'
-INSTANCE_STATE='running'
+REGION=''
 PROFILE=''
 
 while (($#)); do
   case "$1" in
+    --deployment) [[ $# -ge 2 ]] || usage; DEPLOYMENT=$2; shift 2 ;;
     --region) [[ $# -ge 2 ]] || usage; REGION=$2; shift 2 ;;
     --profile) [[ $# -ge 2 ]] || usage; PROFILE=$2; shift 2 ;;
-    --deployment) [[ $# -ge 2 ]] || usage; DEPLOYMENT=$2; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
 
-command -v aws >/dev/null || { echo 'aws is required in PATH' >&2; exit 1; }
+aws_bin=''
+for candidate in "${AWS_CLI:-}" /opt/homebrew/bin/aws "$(command -v aws 2>/dev/null || true)" /usr/local/bin/aws; do
+  [[ -n "$candidate" && -x "$candidate" ]] || continue
+  description="$(file -b "$candidate" 2>/dev/null || true)"
+  case "$description" in
+    *arm64*|*"universal binary"*|*"Universal"*) aws_bin="$candidate"; break ;;
+  esac
+  if [[ "$candidate" == "/opt/homebrew/bin/aws" ]] && "$candidate" --version >/dev/null 2>&1; then
+    aws_bin="$candidate"
+    break
+  fi
+done
+[[ -n "$aws_bin" ]] || { echo 'a native AWS CLI is required (on Apple Silicon: brew install awscli)' >&2; exit 1; }
+command -v session-manager-plugin >/dev/null || {
+  echo 'session-manager-plugin is required (macOS: brew install --cask session-manager-plugin)' >&2
+  exit 1
+}
 
-aws_args=(--region "$REGION")
+aws_args=()
+[[ -n "$REGION" ]] && aws_args+=(--region "$REGION")
 [[ -n "$PROFILE" ]] && aws_args+=(--profile "$PROFILE")
 
-instances=()
-while IFS= read -r instance_id; do
-  [ -n "$instance_id" ] || continue
-  [ "$instance_id" = 'None' ] && continue
-  instances[${#instances[@]}]="$instance_id"
-done < <(aws "${aws_args[@]}" ec2 describe-instances \
-  --filters \
-    "Name=tag:dARKDeployment,Values=$DEPLOYMENT" \
-    "Name=tag:dARKRole,Values=$ROLE" \
-    "Name=instance-state-name,Values=$INSTANCE_STATE" \
-  --query 'Reservations[].Instances[].InstanceId' \
-  --output text | tr '\t' '\n')
-
-if ((${#instances[@]} == 0)); then
-  echo "no running apps instance found for dARKDeployment=$DEPLOYMENT in $REGION" >&2
-  exit 1
-fi
-if ((${#instances[@]} != 1)); then
-  printf 'expected exactly one running apps instance, found: %s\n' "${instances[*]}" >&2
+instances="$("$aws_bin" ${aws_args[@]+"${aws_args[@]}"} ec2 describe-instances \
+  --filters "Name=tag:dARKDeployment,Values=$DEPLOYMENT" \
+            'Name=tag:dARKRole,Values=apps' \
+            'Name=instance-state-name,Values=running' \
+  --query 'Reservations[].Instances[].InstanceId' --output text)"
+ids=($instances)
+if [[ "${#ids[@]}" -ne 1 ]]; then
+  echo "expected exactly one running apps host for dARKDeployment=$DEPLOYMENT, found ${#ids[@]}" >&2
   exit 1
 fi
 
-echo "connecting to apps instance ${instances[0]}"
-exec aws "${aws_args[@]}" ssm start-session --target "${instances[0]}"
+echo "Opening Session Manager session on ${ids[0]} ($DEPLOYMENT)"
+exec "$aws_bin" ${aws_args[@]+"${aws_args[@]}"} ssm start-session --target "${ids[0]}"

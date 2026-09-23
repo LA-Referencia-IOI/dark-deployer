@@ -161,7 +161,6 @@ Acepta `--region`, `--profile` y `--deployment` si se usan valores distintos
 de los del stack activo.
 
 La forma equivalente, útil para diagnosticar el descubrimiento, es:
-
 ```bash
 INSTANCE_ID=$(aws ec2 describe-instances \
   --region us-east-1 \
@@ -176,6 +175,10 @@ aws ssm start-session \
   --region us-east-1 \
   --target "$INSTANCE_ID"
 ```
+
+El wrapper busca la única instancia `running` con los tags
+`dARKDeployment=dark2-prod-aws` y `dARKRole=apps`, valida el AWS CLI nativo y
+abre la sesión con Session Manager.
 
 Ya dentro de `apps`, el repositorio del deployer debe estar en
 `/home/ubuntu/dark-deployer` y la clave privada en

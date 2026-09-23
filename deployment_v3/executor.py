@@ -83,7 +83,14 @@ class SshExecutor(Executor):
             command.extend(["-o", f"UserKnownHostsFile={ssh.known_hosts_file}"])
         command.append(f"{ssh.user}@{self.machine.management_address}")
         command.append(shlex.join(argv))
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = (exc.stderr or "") + f"\nSSH command to {ssh.user}@{self.machine.management_address}:{ssh.port} timed out after {timeout:.0f}s"
+            return CommandResult(tuple(command), 124, stdout if isinstance(stdout, str) else stdout.decode(errors="replace"), stderr)
+        except OSError as exc:
+            return CommandResult(tuple(command), 127, "", str(exc))
         return CommandResult(tuple(command), completed.returncode, completed.stdout, completed.stderr)
 
     def stream(self, argv: Sequence[str]) -> int:
@@ -140,7 +147,7 @@ def resolve_executor(machine: Machine) -> Executor:
 
 
 def run_preflight(machine: Machine) -> list[dict[str, str | bool]]:
-    """Run only read-only checks. It never creates paths, networks or containers."""
+    """Validate destination prerequisites before rendering or starting services."""
     executor = resolve_executor(machine)
     commands = {
         "docker": ("docker", "info", "--format", "{{.ID}}"),
@@ -151,18 +158,13 @@ def run_preflight(machine: Machine) -> list[dict[str, str | bool]]:
     # destination paths such as /srv/dark must not gate a local Docker test.
     if machine.execution not in {"local", "docker-lab"}:
         commands.update({
-            # data_root is intentionally created by apply; measure the
-            # existing parent during this read-only preflight instead.
             "disk_space": ("sh", "-lc", f"test $(df -Pk {shlex.quote(str(Path(machine.data_root).parent))} | awk 'NR==2 {{print $4}}') -gt 1048576"),
-            # The bootstrap creates workspace_root itself.  Validate that
-            # directory when present; only its parent must be writable before
-            # the first bootstrap creates it.
-            "workspace_parent": ("sh", "-lc", f"test -d {shlex.quote(machine.workspace_root)} || test -d {shlex.quote(str(Path(machine.workspace_root).parent))}"),
-            "workspace_parent_writable": ("sh", "-lc", f"(test -d {shlex.quote(machine.workspace_root)} && test -w {shlex.quote(machine.workspace_root)}) || (test -d {shlex.quote(str(Path(machine.workspace_root).parent))} && test -w {shlex.quote(str(Path(machine.workspace_root).parent))})"),
-            "data_parent": ("test", "-d", str(Path(machine.data_root).parent)),
-            "data_parent_writable": ("test", "-w", str(Path(machine.data_root).parent)),
-            "secrets_parent": ("test", "-d", str(Path(machine.secrets_root).parent)),
-            "secrets_parent_writable": ("test", "-w", str(Path(machine.secrets_root).parent)),
+            "workspace_root": ("test", "-d", machine.workspace_root),
+            "data_root": ("test", "-d", machine.data_root),
+            "secrets_root": ("test", "-d", machine.secrets_root),
+            "workspace_write_probe": ("sh", "-lc", f"probe=$(mktemp -d {shlex.quote(machine.workspace_root)}/.dark-preflight.XXXXXX) && rmdir \"$probe\""),
+            "data_write_probe": ("sh", "-lc", f"probe=$(mktemp -d {shlex.quote(machine.data_root)}/.dark-preflight.XXXXXX) && rmdir \"$probe\""),
+            "secrets_write_probe": ("sh", "-lc", f"probe=$(mktemp -d {shlex.quote(machine.secrets_root)}/.dark-preflight.XXXXXX) && rmdir \"$probe\""),
         })
         commands.update({f"address:{network}": ("sh", "-lc", f"ip -4 addr show | grep -q 'inet {address}/'") for network, address in machine.addresses.items()})
     results: list[dict[str, str | bool]] = []

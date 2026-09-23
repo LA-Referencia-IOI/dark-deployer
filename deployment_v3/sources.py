@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+import hashlib
+import os
 from pathlib import Path
 
 from .model import DeploymentPlan
@@ -22,7 +24,30 @@ COMPONENT_PATHS = {
     "dark-core-resolver-api": "components/dark-core-resolver-api",
     "dark-store-api": "components/dark-store-api",
     "dark-ipfs": "components/dark-ipfs",
+    "dark-monitoring": "components/dark-monitoring",
 }
+
+_IGNORED_SOURCE_ENTRIES = frozenset({".git", ".env", ".env.integration", ".generated", ".DS_Store", "venv", ".venv", "node_modules", "__pycache__", ".pytest_cache"})
+
+
+def source_tree_digest(path: Path) -> str:
+    """Hash the same public tree that staging is allowed to distribute."""
+    digest = hashlib.sha256()
+    for directory, names, files in os.walk(path, topdown=True, followlinks=False):
+        names[:] = sorted(name for name in names if name not in _IGNORED_SOURCE_ENTRIES)
+        relative_directory = Path(directory).relative_to(path)
+        for name in sorted(files):
+            if name in _IGNORED_SOURCE_ENTRIES:
+                continue
+            item = Path(directory) / name
+            if item.is_symlink() and not item.exists():
+                continue
+            relative = (relative_directory / name).as_posix().encode()
+            digest.update(relative + b"\0")
+            with item.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _git(path: Path, *arguments: str) -> str:
@@ -33,7 +58,7 @@ def _git(path: Path, *arguments: str) -> str:
     return completed.stdout.strip()
 
 
-def source_evidence(plan: DeploymentPlan, project_root: Path) -> dict[str, dict[str, object]]:
+def source_evidence(plan: DeploymentPlan, project_root: Path, component_ids: set[str] | None = None) -> dict[str, dict[str, object]]:
     """Return reproducible source evidence and enforce an explicitly chosen ref.
 
     The controller transfers its validated public sources to remote machines;
@@ -42,7 +67,8 @@ def source_evidence(plan: DeploymentPlan, project_root: Path) -> dict[str, dict[
     release reference.
     """
     evidence: dict[str, dict[str, object]] = {}
-    for component_id in sorted(plan.raw["components"]):
+    selected = component_ids if component_ids is not None else set(plan.raw["components"])
+    for component_id in sorted(selected):
         relative = COMPONENT_PATHS.get(component_id)
         if relative is None:
             raise SourceError(f"no source path is registered for component {component_id}")
@@ -62,6 +88,7 @@ def source_evidence(plan: DeploymentPlan, project_root: Path) -> dict[str, dict[
             "origin": remote,
             "inventory_repository": expected_remote,
             "inventory_branch": expected or None,
+            "content_sha256": source_tree_digest(path),
         }
     return evidence
 
