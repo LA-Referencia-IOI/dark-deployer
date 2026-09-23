@@ -61,6 +61,13 @@ To use `inventory-edit` or `metrics`:
 venv/bin/python -m pip install -r requirements-tui.txt
 ```
 
+The component repositories are public GitHub repositories, but the inventories
+use SSH URLs so the controller needs a GitHub SSH key. If the controller does
+not have SSH access, change the component `repository_url` values to their
+HTTPS equivalents before acquisition. Public repositories do not require a
+GitHub password; HTTPS authentication prompts usually mean the URL is private,
+incorrect, or a credential helper is intercepting the request.
+
 ## The two inventory formats
 
 For component development and per-inventory branch testing, see
@@ -161,6 +168,17 @@ venv/bin/python deploy.py install \
 `install` validates the inventory, resolves the catalogue, runs preflight,
 acquires or reuses components, prepares managed inputs, renders, starts services
 by phase, and runs final verification.
+
+For a new deployment, the installer can create all controller-side private
+inputs interactively. It reports the exact paths as it creates them:
+
+- wallet credentials: `blockchain/master-wallet.txt` (mode `600`);
+- generated secrets: `.generated/deployment-v3/<deployment>/controller/secrets/`;
+- generated chain artifact: `.generated/deployment-v3/<deployment>/controller/chain-artifact/`.
+
+These paths are controller state and must not be committed or copied into a
+public bundle. A failed remote apply can reuse them with `resume` after the
+host-side cause is fixed.
 
 For a new local chain, it can generate a guarded master wallet:
 
@@ -299,11 +317,23 @@ venv/bin/python deploy.py install \
   --verbose
 ```
 
-After fixing the cause of an interrupted execution:
+For AWS, run the controller from the `apps` host after CloudFormation has
+completed and `check-bootstrap.sh` passes on every host. The controller needs
+the PEM at `/home/ubuntu/lareferencia-dark.pem`, mode `600`, and the inventory
+must use the private addresses reachable from that host. The AWS helpers for
+Session Manager, PEM upload, Dashboard forwarding, and IAM setup are documented
+in [the CloudFormation guide](infrastructure/aws/cloudformation/README.md).
+
+After fixing the cause of an interrupted execution, update the controller code
+if needed and resume the same generated run:
 
 ```bash
 venv/bin/python deploy.py resume --inventory inventory.json
 ```
+
+`resume` reuses the wallet, generated secrets, chain artifact, source evidence,
+and prepared revision recorded for that deployment. It does not silently create
+a different chain identity.
 
 To rebuild one service without restarting all services on its machine:
 

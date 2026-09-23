@@ -75,9 +75,11 @@ el entorno del repositorio. CloudFormation no instala Python en los hosts:
 sudo apt-get update
 sudo apt-get install -y python3.14 python3.14-venv
 cd /home/ubuntu/dark-deployer
-python3.14 -m venv venv
-venv/bin/python -m pip install -r requirements.txt -r requirements-tui.txt
+./create_venv.sh
 ```
+
+Usa `./create_venv.sh --with-tui` si necesitas `inventory-edit`, `metrics` o la
+consola TUI. El script reutiliza `venv/` si ya existe.
 
 Las demás máquinas solo necesitan la preparación base de Docker, Compose y
 SSM realizada por el bootstrap.
@@ -250,7 +252,10 @@ no responde. Requiere en el operador `ec2:DescribeInstances`, `ssm:SendCommand`
 y `ssm:GetCommandInvocation`.
 
 Rain no reemplaza `deploy.py`: después del stack hay que recoger sus outputs,
-instanciar el inventario y ejecutar `validate`, `plan` e `install`.
+instanciar el inventario y ejecutar `validate`, `preflight`, `plan` e `install`.
+La instalación genera el wallet, los secretos gestionados y el artefacto de
+cadena bajo `.generated/deployment-v3/dark2-prod-aws/controller/`; sus rutas se
+imprimen en pantalla y deben conservarse para `resume`.
 
 ### Smoke stack mínimo de Apps
 
