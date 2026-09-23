@@ -616,6 +616,16 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(evidence, "RPC peers=4; expected at least 4")
 
+    def test_private_rpc_probe_uses_the_rendered_machine_bridge(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "dark2-prod-aws.json")
+        calls = []
+        executor = SimpleNamespace(
+            run=lambda argv, timeout: calls.append((argv, timeout)) or CommandResult(tuple(argv), 0, '{"result":"0x4"}', "")
+        )
+        with patch.object(readiness, "resolve_executor", return_value=executor):
+            readiness.rpc_request(plan, ROOT, plan.primary_rpc(), "net_peerCount")
+        self.assertEqual(calls[0][0][calls[0][0].index("--network") + 1], "dark2-prod-aws-apps")
+
     def test_observer_readiness_checks_sync_and_validator_exclusion(self):
         document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
         document["blockchain"]["validator_groups"] = {"blockchain-a": {"validator_count": 1}}

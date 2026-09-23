@@ -93,7 +93,11 @@ def rpc_request(plan, root, rpc, method: str, params: list | None = None):
     )
     if rpc.exposure and rpc.exposure.get("mode") != "none":
         return _curl(plan, machine, _host_url(rpc, machine), payload)
-    network = f"{_compose_project(plan, machine, rpc.id)}_default"
+    # Machine bundles use the externally managed machine bridge declared in
+    # Compose (for example ``dark2-prod-aws-apps``), not Compose's implicit
+    # ``<project>_default`` network.  The latter does not exist because every
+    # rendered service joins the shared bridge explicitly.
+    network = f"{plan.deployment_id}-{machine.id}"
     return resolve_executor(machine).run((
         "docker", "run", "--rm", "--network", network,
         "curlimages/curl:8.12.1", "-fsS", "--max-time", "5",
