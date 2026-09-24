@@ -1074,8 +1074,10 @@ class DeploymentV3Tests(unittest.TestCase):
             with patch.object(runner_module, "resolve_executor", return_value=executor):
                 services = runner_module.list_managed_services(plan, project_root)
         rpc = next(item for item in services if item["service"] == "rpc01")
+        validator = next(item for item in services if item["service"] == "validator01")
         store = next(item for item in services if item["service"] == "store-api")
         self.assertTrue(rpc["capabilities"]["runtime_log_level"])
+        self.assertFalse(validator["capabilities"]["runtime_log_level"])
         self.assertFalse(store["capabilities"]["runtime_log_level"])
 
     def test_service_logs_accept_one_shot_service_output(self):

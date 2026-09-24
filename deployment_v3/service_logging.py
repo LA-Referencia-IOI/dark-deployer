@@ -19,7 +19,7 @@ class RuntimeLogLevelAdapter:
 
 
 _BESU_ADAPTER = RuntimeLogLevelAdapter(
-    service_types=frozenset({"besu-rpc", "besu-validator", "besu-observer"}),
+    service_types=frozenset({"besu-rpc", "besu-observer"}),
     levels=frozenset({"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL", "OFF"}),
 )
 _ADAPTERS = (_BESU_ADAPTER,)

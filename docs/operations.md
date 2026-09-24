@@ -110,7 +110,9 @@ stop following without changing the deployment.
 
 The configured base level is `blockchain.logging.level` in the resolved
 inventory. To raise or lower one running Besu node temporarily, without a
-restart, use its exact selector:
+restart, use its exact selector. This applies to Besu RPC and observer nodes;
+validators keep their RPC interface disabled and do not expose runtime log
+level controls:
 
 ```bash
 venv/bin/python deploy.py log-level \
@@ -120,8 +122,9 @@ venv/bin/python deploy.py log-level \
 
 `services --json` reports the `runtime_log_level` capability and levels for
 each service. The operation rejects services that do not support an in-process
-change; it never restarts them implicitly. Besu nodes currently provide this
-capability through `admin_changeLogLevel` on the deployment bridge. Their
+change; it never restarts them implicitly. Besu RPC and observer nodes
+currently provide this capability through `admin_changeLogLevel` on the
+deployment bridge. Their
 accepted levels are `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, and
 `OFF` (`WARNING` and `CRITICAL` are accepted aliases).
 
