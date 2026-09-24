@@ -152,6 +152,16 @@ aws iam attach-group-policy \
   --policy-arn arn:aws:iam::524284048780:policy/dark2-prod-aws-operator
 ```
 
+Si la política ya existe, publica una nueva versión para incorporar el acceso
+al documento interactivo `SSM-SessionManagerRunShell`:
+
+```bash
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::524284048780:policy/dark2-prod-aws-operator \
+  --policy-document file://infrastructure/aws/cloudformation/dark2-prod-aws-operator-policy.json \
+  --set-as-default
+```
+
 Después se crea el usuario o rol operativo y se añade al grupo. No se debe
 conceder a ese usuario `ec2:CreateTags`, `ec2:DeleteTags` ni permisos IAM,
 porque podría modificar las etiquetas y eludir la restricción. La política
