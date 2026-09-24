@@ -525,7 +525,7 @@ def _positive_integer(value: Any, path: str) -> int:
 
 def _validate_settings(settings: dict[str, Any]) -> None:
     """Keep emitted Minter and Store tuning explicit in the topology."""
-    _only_keys(settings, "settings", {"minter", "store"})
+    _only_keys(settings, "settings", {"minter", "store", "ipfs"})
     minter = _object(settings.get("minter"), "settings.minter")
     _only_keys(minter, "settings.minter", {"shoulder", "logging", "metadata", "replication", "chain"})
     shoulder = minter.get("shoulder")
@@ -607,6 +607,17 @@ def _validate_settings(settings: dict[str, Any]) -> None:
         allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         if not isinstance(level, str) or level.upper() not in allowed_levels:
             raise _error("settings.store.logging.level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+
+    ipfs = settings.get("ipfs")
+    if ipfs is not None:
+        ipfs_settings = _object(ipfs, "settings.ipfs")
+        _only_keys(ipfs_settings, "settings.ipfs", {"logging"})
+        ipfs_logging = _object(ipfs_settings.get("logging"), "settings.ipfs.logging")
+        _only_keys(ipfs_logging, "settings.ipfs.logging", {"level"})
+        level = ipfs_logging.get("level")
+        allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if not isinstance(level, str) or level.upper() not in allowed_levels:
+            raise _error("settings.ipfs.logging.level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
 
 
 def _provider_id(connection: dict[str, str]) -> str:
@@ -867,7 +878,15 @@ def _validate_domain(
                 if network not in machine_by_id[peer.machine_id].addresses:
                     raise _error(f"services.{peer.id} requires {network} for cross-host {policy} P2P")
     blockchain = _object(raw["blockchain"], "blockchain")
-    _only_keys(blockchain, "blockchain", {"chain_id", "nodes", "qbft", "artifact", "primary_rpc", "observer_max_block_lag"})
+    _only_keys(blockchain, "blockchain", {"chain_id", "nodes", "qbft", "artifact", "primary_rpc", "observer_max_block_lag", "logging"})
+    logging = blockchain.get("logging")
+    if logging is not None:
+        logging_settings = _object(logging, "blockchain.logging")
+        _only_keys(logging_settings, "blockchain.logging", {"level"})
+        level = logging_settings.get("level")
+        allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if not isinstance(level, str) or level.upper() not in allowed_levels:
+            raise _error("blockchain.logging.level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
     observer_max_block_lag = blockchain.get("observer_max_block_lag", 1)
     if not isinstance(observer_max_block_lag, int) or isinstance(observer_max_block_lag, bool) or observer_max_block_lag < 0:
         raise _error("blockchain.observer_max_block_lag must be a non-negative integer")

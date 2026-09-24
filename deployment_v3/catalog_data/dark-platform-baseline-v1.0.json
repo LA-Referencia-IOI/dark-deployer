@@ -330,6 +330,9 @@
     "blockchain": {
       "primary_rpc": "",
       "chain_id": 2025,
+      "logging": {
+        "level": "WARNING"
+      },
       "qbft": {
         "block_period_seconds": 6,
         "epoch_length": 30000,
@@ -439,6 +442,11 @@
         "add_concurrency": 4,
         "status_concurrency": 6,
         "promotion_concurrency": 4,
+        "logging": {
+          "level": "WARNING"
+        }
+      },
+      "ipfs": {
         "logging": {
           "level": "WARNING"
         }

@@ -514,6 +514,31 @@ class DeploymentV3Tests(unittest.TestCase):
             env = output / "machines" / "local" / "groups" / "apps" / "env" / "store-api.env"
             self.assertIn("LOG_LEVEL=INFO\n", env.read_text())
 
+    def test_ipfs_log_level_is_rendered_for_kubo_and_cluster(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
+        document["overrides"]["settings"]["ipfs"] = {"logging": {"level": "DEBUG"}}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(document))
+            plan = build_plan(path)
+            output = Path(temporary) / "bundle"
+            render_plan(plan, output)
+            env_directory = output / "machines" / "local" / "groups" / "storage-1" / "env"
+            self.assertIn("GOLOG_LOG_LEVEL=debug\n", (env_directory / "ipfs-storage-a.env").read_text())
+            self.assertIn("GOLOG_LOG_LEVEL=debug\n", (env_directory / "cluster-storage-a.env").read_text())
+
+    def test_blockchain_log_level_is_rendered_as_besu_cli_level(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
+        document["overrides"]["blockchain"] = {"logging": {"level": "WARNING"}}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(document))
+            plan = build_plan(path)
+            output = Path(temporary) / "bundle"
+            render_plan(plan, output)
+            compose = output / "machines" / "local" / "groups" / "blockchain-a" / "compose.yaml"
+            self.assertIn("--logging=WARN", compose.read_text())
+
     def test_operator_inventory_reports_missing_remote_route(self):
         source = ROOT / "examples" / "operator-inventory" / "production-five-host.json"
         document = json.loads(source.read_text())
@@ -966,6 +991,51 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertEqual(executor.calls, [])
         self.assertFalse((root / "status.json").exists())
 
+    def test_runtime_log_level_uses_service_adapter_and_private_rpc_without_restart(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+
+        class BesuExecutor(self._RecordingLocalExecutor):
+            def run(self, argv, *, timeout=30.0):
+                command = tuple(argv)
+                self.calls.append((command, timeout))
+                if command[:3] == ("docker", "ps", "-q"):
+                    return CommandResult(command, 0, "container-id\n", "")
+                if command[:2] == ("docker", "run"):
+                    return CommandResult(command, 0, '{"jsonrpc":"2.0","result":"Success","id":1}', "")
+                return CommandResult(command, 0, "", "")
+
+        executor = BesuExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            root = self._prepare_lifecycle_bundle(plan, project_root, "rpc01")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                result = runner_module.set_service_log_level(plan, project_root, "service:rpc01", "warning")
+                restored = runner_module.set_service_log_level(plan, project_root, "service:rpc01", restore=True)
+            journal = (root / "journal.jsonl").read_text()
+        self.assertEqual(result["level"], "WARN")
+        self.assertEqual(restored["level"], "DEBUG")
+        self.assertTrue(restored["restore"])
+        rpc = next(command for command, _ in executor.calls if command[:2] == ("docker", "run"))
+        self.assertIn("dark-operator-local-ha-local", rpc)
+        payload = rpc[rpc.index("--data") + 1]
+        self.assertIn("admin_changeLogLevel", payload)
+        self.assertIn('"WARN"', payload)
+        self.assertFalse(any("restart" in command for command, _ in executor.calls))
+        self.assertIn('"action": "log-level"', journal)
+
+    def test_runtime_log_level_rejects_unsupported_services_and_dry_run_is_safe(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        executor = self._RecordingLocalExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "store-api")
+            with self.assertRaisesRegex(runner_module.ApplyError, "runtime log-level unsupported"):
+                runner_module.set_service_log_level(plan, project_root, "service:store-api", "DEBUG")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                result = runner_module.set_service_log_level(plan, project_root, "service:rpc01", "DEBUG", dry_run=True)
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(executor.calls, [])
+
     def test_service_logs_follow_the_resolved_compose_service(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
         executor = self._RecordingLocalExecutor()
@@ -988,6 +1058,25 @@ class DeploymentV3Tests(unittest.TestCase):
         self.assertEqual(action_choices(row), ("build", "restart", "recreate", "recreate-build", "logs"))
         self.assertIn("Machine: local", service_detail(row))
         self.assertNotIn("Actions:", service_detail(row))
+
+    def test_operations_console_offers_runtime_controls_when_service_supports_them(self):
+        row = {"type": "besu-observer", "state": "running", "actions": ["restart"]}
+        self.assertEqual(action_choices(row), ("restart", "log-debug", "log-restore", "logs"))
+        row["state"] = "exited"
+        self.assertEqual(action_choices(row), ("restart", "logs"))
+
+    def test_service_listing_exposes_runtime_log_level_capability(self):
+        plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")
+        executor = self._RecordingLocalExecutor()
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            self._prepare_lifecycle_bundle(plan, project_root, "rpc01")
+            with patch.object(runner_module, "resolve_executor", return_value=executor):
+                services = runner_module.list_managed_services(plan, project_root)
+        rpc = next(item for item in services if item["service"] == "rpc01")
+        store = next(item for item in services if item["service"] == "store-api")
+        self.assertTrue(rpc["capabilities"]["runtime_log_level"])
+        self.assertFalse(store["capabilities"]["runtime_log_level"])
 
     def test_service_logs_accept_one_shot_service_output(self):
         plan = build_plan(ROOT / "examples" / "operator-inventory" / "local-ha.json")

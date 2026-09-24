@@ -145,6 +145,7 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
     connection = lambda name: _url(plan, service, service.connections[name]["service"], service.connections[name])
     host = lambda name: connection(name).split("//", maxsplit=1)[1].rsplit(":", maxsplit=1)[0]
     values = {"DARK_DEPLOYMENT_ID": plan.deployment_id}
+    log_level_map = {"DEBUG": "debug", "INFO": "info", "WARNING": "warning", "ERROR": "error", "CRITICAL": "fatal"}
     if service.type in {"minter-api", "minter-worker"}:
         minter = plan.raw["settings"]["minter"]
         replication = minter["replication"]
@@ -243,6 +244,8 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
             address, port = p2p_endpoint(plan.machine(service.machine_id), service, network, plan.raw['infrastructure']['ipfs']['swarm_port'])
             announces = [f"/ip4/{address}/tcp/{port}"]
         values |= {"NODE_NAME": str(service.configuration["peer_name"]), "IPFS_SWARM_KEY_FILE": "/run/secrets/ipfs-swarm-key", "IPFS_BOOTSTRAP_ENDPOINTS": " ".join(bootstrap), "IPFS_BOOTSTRAP_P2P_PORT": str(plan.raw["infrastructure"]["ipfs"]["swarm_port"]), "IPFS_ANNOUNCE_MULTIADDRESSES": json.dumps(announces, separators=(",", ":")), "CLUSTER_SEED": "true" if is_seed else "false"}
+        if (ipfs_settings := plan.raw["settings"].get("ipfs")) and (logging_settings := ipfs_settings.get("logging")):
+            values["GOLOG_LOG_LEVEL"] = log_level_map[logging_settings["level"].upper()]
     elif service.type == "ipfs-cluster":
         peers = [item for item in plan.services if item.type == "ipfs-cluster" and item.id != service.id]
         network = plan.raw["infrastructure"]["cluster"]["network"]
@@ -268,6 +271,8 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
             address, port = p2p_endpoint(plan.machine(service.machine_id), service, network, plan.raw['infrastructure']['cluster']['p2p_port'])
             announces = [f"/ip4/{address}/tcp/{port}"]
         values |= {"CLUSTER_PEERNAME": str(service.configuration["peer_name"]), "IPFS_DARK_NET_ALIAS": service.connections["kubo"]["service"], "CLUSTER_SECRET_FILE": "/run/secrets/ipfs-cluster-secret", "CLUSTER_BOOTSTRAP_ENDPOINTS": " ".join(bootstrap), "CLUSTER_BOOTSTRAP_P2P_PORT": str(plan.raw["infrastructure"]["cluster"]["p2p_port"]), "CLUSTER_ANNOUNCE_MULTIADDRESSES": json.dumps(announces, separators=(",", ":")), "CLUSTER_SEED": "true" if is_seed else "false"}
+        if (ipfs_settings := plan.raw["settings"].get("ipfs")) and (logging_settings := ipfs_settings.get("logging")):
+            values["GOLOG_LOG_LEVEL"] = log_level_map[logging_settings["level"].upper()]
     elif service.type == "explorer":
         values |= {
             "RPC_HTTP_URL": connection("rpc"),

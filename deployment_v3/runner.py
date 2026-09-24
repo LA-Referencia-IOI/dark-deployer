@@ -24,6 +24,7 @@ from .state import StateLockError, deployment_lock, record, run_root, write_stat
 from .sources import SourceError, source_evidence
 from .staging_manifest import StagingManifestError, machine_components, materialize_machine_inputs, service_components, service_runtime_assets, verify_machine_manifest, write_machine_manifest
 from .artifacts import ArtifactError, verify_artifact_compatibility, verify_artifact_manifest
+from .service_logging import RuntimeLogLevelError, apply_runtime_log_level, configured_runtime_log_level, normalize_runtime_log_level, runtime_log_level_capability
 
 
 class ApplyError(RuntimeError): pass
@@ -1010,6 +1011,7 @@ def list_managed_services(plan, project_root: Path) -> list[dict[str, object]]:
             "state": runtime["state"],
             "detail": runtime["detail"],
             "actions": list(_lifecycle_actions(service, runtime["state"])),
+            "capabilities": runtime_log_level_capability(service.type),
         })
     return rows
 
@@ -1211,4 +1213,51 @@ def manage_service(plan, project_root: Path, action: str, target: str, *, build:
         timeout = 1800 if action == "recreate" and build else 120
         _require(executor.run(commands[action], timeout=timeout), f"{action} {service.id}")
         _write_lifecycle_state(root, effective.deployment_id, service.id, action, machine.id, project, dry_run=False)
+        return resolved
+
+
+def set_service_log_level(plan, project_root: Path, target: str, level: str | None = None, *, restore: bool = False, dry_run: bool = False) -> dict[str, str | bool]:
+    """Apply a service's supported runtime log level without restarting it."""
+    if restore == (level is not None):
+        raise ApplyError("provide exactly one of a runtime log level or restore=True")
+    lock_root = run_root(project_root, plan.deployment_id)
+    with deployment_lock(lock_root):
+        root, effective, service, machine, group, directory, project = _lifecycle_target(plan, project_root, target)
+        try:
+            selected_level = configured_runtime_log_level(effective, service) if restore else str(level)
+            # Validate before any Docker access, including dry runs.
+            normalized = normalize_runtime_log_level(service.type, selected_level)
+        except RuntimeLogLevelError as exc:
+            raise ApplyError(str(exc)) from exc
+        resolved = {
+            "deployment_id": effective.deployment_id,
+            "service": service.id,
+            "machine": machine.id,
+            "group": group.id,
+            "project": project,
+            "action": "log-level",
+            "level": normalized,
+            "restore": restore,
+            "dry_run": dry_run,
+        }
+        if dry_run:
+            return resolved
+        executor = resolve_executor(machine)
+        _require(executor.run(("test", "-f", str(directory / "compose.yaml"))), f"locate managed Compose file for {service.id}")
+        containers = executor.run((
+            "docker", "ps", "-q",
+            "--filter", f"label=com.docker.compose.project={project}",
+            "--filter", f"label=com.docker.compose.service={service.id}",
+            "--filter", "status=running",
+        ))
+        _require(containers, f"inspect running managed Docker container for {service.id}")
+        matches = [item for item in containers.stdout.splitlines() if item.strip()]
+        if len(matches) != 1:
+            message = "multiple" if len(matches) > 1 else "no running"
+            raise ApplyError(f"{message} managed containers match {service.id} in Compose project {project}")
+        try:
+            apply_runtime_log_level(executor, effective.deployment_id, machine.id, service, normalized)
+        except RuntimeLogLevelError as exc:
+            raise ApplyError(str(exc)) from exc
+        record(root, {"state": "succeeded", **resolved})
         return resolved

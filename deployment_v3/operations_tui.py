@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .console import ConsoleSnapshot, action_choices, service_detail, snapshot
-from .runner import ApplyError, follow_service_logs, manage_service, managed_plan, read_service_logs
+from .runner import ApplyError, follow_service_logs, manage_service, managed_plan, read_service_logs, set_service_log_level
 
 # The state and text helpers are re-exported so callers that imported them from
 # this console keep working; their implementation lives in ``console``.
@@ -20,7 +20,7 @@ __all__ = ["ConsoleSnapshot", "action_choices", "run_operations_tui", "service_d
 
 REFRESH_SECONDS = 5
 LOG_TAIL = 300
-CONFIRM_ACTIONS = frozenset({"build", "stop", "restart", "recreate", "recreate-build", "remove"})
+CONFIRM_ACTIONS = frozenset({"build", "stop", "restart", "recreate", "recreate-build", "remove", "log-debug", "log-restore"})
 ACTION_LABELS = {
     "build": "Build",
     "stop": "Stop",
@@ -29,6 +29,8 @@ ACTION_LABELS = {
     "recreate": "Recreate",
     "recreate-build": "Build + recreate",
     "remove": "Remove",
+    "log-debug": "Set runtime DEBUG",
+    "log-restore": "Restore configured log level",
     "logs": "Logs",
 }
 
@@ -243,7 +245,12 @@ def _make_textual_app(project_root: Path):
             self._status(f"Running {ACTION_LABELS[action].lower()} for {row['service']}…")
             try:
                 plan = managed_plan(project_root, self.deployment_id)
-                manage_service(plan, project_root, actual, str(row["target"]), build=build)
+                if action == "log-debug":
+                    set_service_log_level(plan, project_root, str(row["target"]), "DEBUG")
+                elif action == "log-restore":
+                    set_service_log_level(plan, project_root, str(row["target"]), restore=True)
+                else:
+                    manage_service(plan, project_root, actual, str(row["target"]), build=build)
             except ApplyError as exc:
                 self._status(f"[red]{ACTION_LABELS[action]} failed:[/red] {exc}")
                 return

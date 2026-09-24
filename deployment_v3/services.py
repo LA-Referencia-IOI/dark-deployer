@@ -95,6 +95,9 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
     result: dict = {}
     besu_count = sum(item.type in {"besu-validator", "besu-rpc", "besu-observer"} for item in plan.services)
     sync_min_peers = min(3, besu_count - 1) if besu_count > 1 else None
+    besu_logging = plan.raw["blockchain"].get("logging")
+    besu_level_map = {"DEBUG": "DEBUG", "INFO": "INFO", "WARNING": "WARN", "ERROR": "ERROR", "CRITICAL": "FATAL"}
+    besu_log_argument = [f"--logging={besu_level_map[besu_logging['level'].upper()]}"] if besu_logging else []
     for service in services:
         # Keep generated service instances immutable from the inventory while
         # giving the low-level port helper the policy it must expose.
@@ -115,13 +118,13 @@ def compose_document(plan: DeploymentPlan, machine: Machine, services: tuple[Ser
             env.append(secret_path("dashboard-runtime-env"))
         if service.type == "besu-rpc":
             node = service.configuration["node_id"]
-            command = ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=true", "--rpc-http-host=0.0.0.0", "--p2p-port=30303"]
+            command = ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=true", "--rpc-http-host=0.0.0.0", "--p2p-port=30303", *besu_log_argument]
             if sync_min_peers is not None: command.append(f"--sync-min-peers={sync_min_peers}")
             result[service.id] = {**common, "image": images["besu"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{runtime_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{runtime_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": command}
             if not has_remote_peer(plan, {"besu-rpc", "besu-validator", "besu-observer"}): result[service.id]["networks"] = {network: {"ipv4_address": chain_node_addresses(plan)[node]}}
         elif service.type in {"besu-validator", "besu-observer"}:
             node = service.configuration["node_id"]
-            command = ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=" + ("true" if service.type == "besu-observer" else "false"), "--p2p-port=30303"]
+            command = ["--config-file=/config/besu-config.toml", "--genesis-file=/config/genesis.json", "--node-private-key-file=/config/nodekey", "--static-nodes-file=/config/static-nodes.json", "--rpc-http-enabled=" + ("true" if service.type == "besu-observer" else "false"), "--p2p-port=30303", *besu_log_argument]
             if service.type == "besu-observer": command.append("--rpc-http-host=0.0.0.0")
             if sync_min_peers is not None: command.append(f"--sync-min-peers={sync_min_peers}")
             result[service.id] = {**common, "image": images["besu"], "env_file": env, "ports": [*_ports(machine, service), *_p2p_ports(plan, machine, service)], "volumes": [f"{service_data}:/data", f"{runtime_root}/blockchain/scripts/besu-entrypoint.sh:/usr/local/bin/dark-besu-entrypoint.sh:ro", f"{runtime_root}/blockchain/config/besu-config.toml:/config/besu-config.toml:ro", f"{chain_artifact}/genesis.json:/config/genesis.json:ro", f"{chain_artifact}/nodes/{node}/nodekey:/config/nodekey:ro", f"{chain_artifact}/nodes/{node}/static-nodes.json:/config/static-nodes.json:ro"], "entrypoint": ["/usr/local/bin/dark-besu-entrypoint.sh"], "command": command}

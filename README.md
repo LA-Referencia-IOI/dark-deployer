@@ -230,6 +230,9 @@ volumes, persistent data, or networks; `build` does not restart the container
 ./deploy.sh recreate --deployment dark-operator-local-ha \
   --target service:store-api --build
 ./deploy.sh logs --deployment dark-operator-local-ha --target service:minter-api --tail 100
+# Runtime-only: does not restart Besu and is reset by its next restart.
+./deploy.sh log-level --deployment dark-operator-local-ha \
+  --target service:rpc01 --level DEBUG
 ```
 
 **Metrics and monitoring.** `metrics` samples each machine once a minute
@@ -301,13 +304,13 @@ containers is never removed automatically. `recreate` rebuilds one service
 without applying inventory changes — altered ports, connections, placement, or
 secrets require a reviewed `apply`.
 
-**Command index.** The CLI exposes 35 subcommands, grouped by effect:
+**Command index.** The CLI exposes 36 subcommands, grouped by effect:
 
 | Group | Commands | Side effects |
 | --- | --- | --- |
 | Inspect an inventory | `validate`, `plan`, `inventory-resolve`, `inventory-explain`, `inventory-network-matrix`, `inventory-diff` | Read-only except `inventory-resolve`, which writes its `--output` JSON; no Docker/SSH/Git, no secret values |
 | Deploy | `render`, `install`, `preflight`, `prepare`, `push`, `apply`, `resume`, `verify`, `status` | `render` writes a bundle; the rest install, transfer, or start services (`verify`/`status` read-only) |
-| Managed services | `services`, `logs`, `build`, `stop`, `start`, `restart`, `recreate`, `remove` | Act on one `service:ID` (take `--deployment` or `--inventory`) |
+| Managed services | `services`, `logs`, `build`, `stop`, `start`, `restart`, `recreate`, `remove`, `log-level` | Act on one `service:ID` (take `--deployment` or `--inventory`); `log-level` is available only for services that report the runtime capability |
 | Observe | `deployments`, `tui`, `metrics`, `metrics-export` | Read-only; `metrics-export` writes its `--output` `.prom` file; `tui` mutates only through explicit lifecycle actions |
 | Inventories | `inventory-create`, `inventory-edit` | Create or edit a file after confirmation |
 | Chain artifacts | `chain-bootstrap`, `chain-init`, `chain-static-nodes`, `chain-export`, `chain-verify` | Some create artifacts explicitly |

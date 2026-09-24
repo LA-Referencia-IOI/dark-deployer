@@ -382,6 +382,9 @@
   "blockchain": {
     "primary_rpc": "rpc01",
     "chain_id": 2025,
+    "logging": {
+      "level": "DEBUG"
+    },
     "qbft": {
       "block_period_seconds": 6,
       "epoch_length": 30000,
@@ -496,6 +499,11 @@
       "add_concurrency": 4,
       "status_concurrency": 6,
       "promotion_concurrency": 4,
+      "logging": {
+        "level": "DEBUG"
+      }
+    },
+    "ipfs": {
       "logging": {
         "level": "DEBUG"
       }

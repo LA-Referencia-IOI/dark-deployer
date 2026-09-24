@@ -106,6 +106,37 @@ service's Docker Compose log on its owning local or SSH host. It prints the
 last 100 lines by default; use `--tail N` to change that number and `Ctrl-C` to
 stop following without changing the deployment.
 
+### Runtime logging
+
+The configured base level is `blockchain.logging.level` in the resolved
+inventory. To raise or lower one running Besu node temporarily, without a
+restart, use its exact selector:
+
+```bash
+venv/bin/python deploy.py log-level \
+  --deployment dark-operator-local-ha \
+  --target service:rpc01 --level DEBUG
+```
+
+`services --json` reports the `runtime_log_level` capability and levels for
+each service. The operation rejects services that do not support an in-process
+change; it never restarts them implicitly. Besu nodes currently provide this
+capability through `admin_changeLogLevel` on the deployment bridge. Their
+accepted levels are `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, and
+`OFF` (`WARNING` and `CRITICAL` are accepted aliases).
+
+Restore the deployed inventory level after diagnosing an incident:
+
+```bash
+venv/bin/python deploy.py log-level \
+  --deployment dark-operator-local-ha \
+  --target service:rpc01 --restore
+```
+
+Runtime overrides do not persist through a restart. In `deploy.py tui`, any
+running service with this capability offers confirmed **Set runtime DEBUG** and
+**Restore configured log level** actions.
+
 ### Recreate versus apply
 
 Use `recreate` when the deployed topology remains correct and only one

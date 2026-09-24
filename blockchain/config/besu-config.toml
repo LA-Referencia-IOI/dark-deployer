@@ -5,7 +5,8 @@
 # Data path inside the container
 data-path="/data"
 
-# Log level
+# Fallback for legacy inventories. The deployer passes --logging from
+# blockchain.logging.level when the inventory declares it.
 logging="INFO"
 
 # P2P networking

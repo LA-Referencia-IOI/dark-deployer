@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .runner import list_managed_deployments, list_managed_services, managed_plan
+from .service_logging import runtime_log_level_capability
 
 
 @dataclass(frozen=True)
@@ -52,4 +53,7 @@ def action_choices(row: dict[str, object] | None) -> tuple[str, ...]:
     actions = [str(item) for item in row.get("actions", ())]
     if "recreate" in actions:
         actions.insert(actions.index("recreate") + 1, "recreate-build")
+    capability = row.get("capabilities") or runtime_log_level_capability(str(row.get("type", "")))
+    if row.get("state") == "running" and capability.get("runtime_log_level"):
+        actions.extend(("log-debug", "log-restore"))
     return tuple((*actions, "logs"))

@@ -421,7 +421,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
     if "access" in raw and "proxies" in raw:
         raise _fail("access is a legacy compatibility field and cannot be combined with proxies")
     overrides = _object(raw.get("overrides", {}), "overrides")
-    _only_keys(overrides, "overrides", {"explorer", "resolver", "settings", "components"})
+    _only_keys(overrides, "overrides", {"explorer", "resolver", "blockchain", "settings", "components"})
     explorer_override = _object(overrides.get("explorer", {}), "overrides.explorer")
     _only_keys(explorer_override, "overrides.explorer", {"enabled", "group"})
     explorer_enabled = explorer_override.get("enabled", True)
@@ -751,7 +751,7 @@ def resolve_inventory(raw: dict[str, Any], *, source_path: Path) -> ResolutionRe
             source = str(Path(root) / definition["path"])
         if source is not None:
             definition["source"] = source if Path(source).is_absolute() else str((source_path.parent / source).resolve())
-    for section in ("settings", "components"):
+    for section in ("blockchain", "settings", "components"):
         if section in overrides:
             result[section] = _merge(result[section], _object(overrides[section], f"overrides.{section}"), f"overrides.{section}")
 

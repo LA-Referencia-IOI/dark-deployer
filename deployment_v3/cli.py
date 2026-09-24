@@ -18,7 +18,7 @@ from .inventory import InventoryError, load_inventory
 from .executor import ExecutionError, run_preflight
 from .planner import build_plan
 from .render import render_plan
-from .runner import ApplyError, _effective_plan, apply, existing_chain_data, follow_service_logs, list_managed_deployments, list_managed_services, manage_service, managed_plan, persistent_data_inventory, prepare, push
+from .runner import ApplyError, _effective_plan, apply, existing_chain_data, follow_service_logs, list_managed_deployments, list_managed_services, manage_service, managed_plan, persistent_data_inventory, prepare, push, set_service_log_level
 from .artifacts import ArtifactError, export_chain_group, initialize_chain, verify_artifact_compatibility, verify_artifact_manifest, write_chain_bootstrap, write_static_nodes
 from .secrets import SecretError, initialize_greenfield_secrets
 from .verify import VerifyError, verify
@@ -49,8 +49,8 @@ def _format_preflight_failure(failed: dict[str, list[dict[str, object]]]) -> str
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="deploy.py", description="dARK declarative deployment v3")
     actions = parser.add_subparsers(dest="action", required=True)
-    operational = {"services", "logs", "build", "stop", "start", "restart", "recreate", "remove"}
-    for name in ("validate", "plan", "render", "preflight", "prepare", "push", "apply", "resume", "status", "verify", "install", "services", "logs", "build", "stop", "start", "restart", "recreate", "remove", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
+    operational = {"services", "logs", "build", "stop", "start", "restart", "recreate", "remove", "log-level"}
+    for name in ("validate", "plan", "render", "preflight", "prepare", "push", "apply", "resume", "status", "verify", "install", "services", "logs", "build", "stop", "start", "restart", "recreate", "remove", "log-level", "chain-bootstrap", "chain-static-nodes", "chain-init", "chain-export", "chain-verify", "secrets-init", "inventory-edit", "inventory-resolve", "inventory-explain", "inventory-network-matrix"):
         command = actions.add_parser(name)
         if name in operational:
             source = command.add_mutually_exclusive_group(required=True)
@@ -109,6 +109,12 @@ def _parser() -> argparse.ArgumentParser:
         if name in {"build", "stop", "start", "restart", "recreate", "remove"}:
             command.add_argument("--target", help="exact managed service selector: service:ID")
             command.add_argument("--dry-run", action="store_true", help="show the resolved target without changing Docker")
+        if name == "log-level":
+            command.add_argument("--target", required=True, help="exact running service selector: service:ID")
+            choice = command.add_mutually_exclusive_group(required=True)
+            choice.add_argument("--level", help="requested runtime log level")
+            choice.add_argument("--restore", action="store_true", help="restore the level declared by the deployed inventory")
+            command.add_argument("--dry-run", action="store_true", help="show the resolved target without changing the service")
         if name == "recreate":
             command.add_argument("--service", help="deprecated alias for --target service:ID")
             command.add_argument("--build", action="store_true")
@@ -682,7 +688,7 @@ def main() -> None:
             for warning in availability.warnings:
                 print(f"[WARN] {warning}")
             return
-        plan = _operational_plan(args, project_root) if args.action in {"services", "logs", "build", "stop", "start", "restart", "recreate", "remove"} else build_plan(args.inventory)
+        plan = _operational_plan(args, project_root) if args.action in {"services", "logs", "build", "stop", "start", "restart", "recreate", "remove", "log-level"} else build_plan(args.inventory)
         if args.action == "preflight":
             result = {machine.id: run_preflight(machine) for machine in plan.machines}
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -729,6 +735,10 @@ def main() -> None:
             if not target:
                 raise ValueError("--target service:ID is required")
             result = manage_service(plan, project_root, args.action, target, build=getattr(args, "build", False), dry_run=args.dry_run)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.action == "log-level":
+            result = set_service_log_level(plan, project_root, args.target, args.level, restore=args.restore, dry_run=args.dry_run)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.action == "prepare":
