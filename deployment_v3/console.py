@@ -55,5 +55,5 @@ def action_choices(row: dict[str, object] | None) -> tuple[str, ...]:
         actions.insert(actions.index("recreate") + 1, "recreate-build")
     capability = row.get("capabilities") or runtime_log_level_capability(str(row.get("type", "")))
     if row.get("state") == "running" and capability.get("runtime_log_level"):
-        actions.extend(("log-debug", "log-restore"))
+        actions = ["log-debug", "log-restore", *actions]
     return tuple((*actions, "logs"))

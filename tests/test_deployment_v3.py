@@ -1061,7 +1061,7 @@ class DeploymentV3Tests(unittest.TestCase):
 
     def test_operations_console_offers_runtime_controls_when_service_supports_them(self):
         row = {"type": "besu-observer", "state": "running", "actions": ["restart"]}
-        self.assertEqual(action_choices(row), ("restart", "log-debug", "log-restore", "logs"))
+        self.assertEqual(action_choices(row), ("log-debug", "log-restore", "restart", "logs"))
         row["state"] = "exited"
         self.assertEqual(action_choices(row), ("restart", "logs"))
 
