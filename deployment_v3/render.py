@@ -146,16 +146,17 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
     host = lambda name: connection(name).split("//", maxsplit=1)[1].rsplit(":", maxsplit=1)[0]
     values = {"DARK_DEPLOYMENT_ID": plan.deployment_id}
     if service.type in {"minter-api", "minter-worker"}:
-        replication = plan.raw["settings"]["minter"]["replication"]
-        metadata = plan.raw["settings"]["minter"]["metadata"]
-        chain = plan.raw["settings"]["minter"]["chain"]
+        minter = plan.raw["settings"]["minter"]
+        replication = minter["replication"]
+        metadata = minter["metadata"]
+        chain = minter["chain"]
         values |= {
             "DATABASE_URL": f"postgresql://dark:dark@{host('database')}:5432/minter",
             "METADATA_STORE_API_URL": connection("store_api"),
             "DARK_RPC_URL": connection("rpc"),
             "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"]),
             "METADATA_STORAGE_PATH": "/app/metadata_storage",
-            "MINTER_SHOULDER": plan.raw["settings"]["minter"]["shoulder"],
+            "MINTER_SHOULDER": minter["shoulder"],
             "METADATA_WORKER_PAGE_SIZE": str(metadata["page_size"]),
             "METADATA_WORKER_CONCURRENCY": str(metadata["concurrency"]),
             "METADATA_WORKER_MIN_CONCURRENCY": str(metadata["min_concurrency"]),
@@ -167,9 +168,12 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
             "CHAIN_WORKER_PAGE_SIZE": str(chain["page_size"]),
             "CHAIN_WORKER_RPC_BATCH_SIZE": str(chain["rpc_batch_size"]),
         }
+        if logging_settings := minter.get("logging"):
+            values["MINTER_LOG_LEVEL"] = logging_settings["level"].upper()
     elif service.type == "minter-migrate":
         values |= {"DATABASE_URL": f"postgresql://dark:dark@{host('database')}:5432/minter", "METADATA_STORAGE_PATH": "/app/metadata_storage"}
     elif service.type == "store-api":
+        store_settings = plan.raw["settings"]["store"]
         values |= {
             "STORE_API_HOST": "0.0.0.0",
             "STORE_API_PORT": "8003",
@@ -177,6 +181,8 @@ def _env(plan: DeploymentPlan, service: ServiceInstance) -> dict[str, str]:
             "STORAGE_BACKEND": "ipfs_cluster",
             "STORAGE_ENDPOINTS_FILE": "/config/storage-endpoints.json",
         }
+        if logging_settings := store_settings.get("logging"):
+            values["LOG_LEVEL"] = logging_settings["level"].upper()
     elif service.type == "admin-api":
         values |= {"ADMIN_API_HOST": "0.0.0.0", "ADMIN_API_PORT": "8000", "DARK_RPC_URL": connection("rpc"), "DARK_CHAIN_ID": str(plan.raw["blockchain"]["chain_id"])}
     elif service.type == "resolver-api":

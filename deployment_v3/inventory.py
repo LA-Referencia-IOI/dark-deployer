@@ -527,10 +527,21 @@ def _validate_settings(settings: dict[str, Any]) -> None:
     """Keep emitted Minter and Store tuning explicit in the topology."""
     _only_keys(settings, "settings", {"minter", "store"})
     minter = _object(settings.get("minter"), "settings.minter")
-    _only_keys(minter, "settings.minter", {"shoulder", "metadata", "replication", "chain"})
+    _only_keys(minter, "settings.minter", {"shoulder", "logging", "metadata", "replication", "chain"})
     shoulder = minter.get("shoulder")
     if not isinstance(shoulder, str) or not re.fullmatch(r"2[0-9a-z]{2}", shoulder):
         raise _error("settings.minter.shoulder must use the 2xx format with lowercase alphanumeric characters")
+
+    # Optional so previously generated v3 inventories remain valid. Catalog-backed
+    # operator inventories inherit INFO and can override it explicitly.
+    logging = minter.get("logging")
+    if logging is not None:
+        logging_settings = _object(logging, "settings.minter.logging")
+        _only_keys(logging_settings, "settings.minter.logging", {"level"})
+        level = logging_settings.get("level")
+        allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if not isinstance(level, str) or level.upper() not in allowed_levels:
+            raise _error("settings.minter.logging.level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
 
     metadata = _object(minter.get("metadata"), "settings.minter.metadata")
     metadata_required = {"page_size", "concurrency", "min_concurrency"}
@@ -580,11 +591,22 @@ def _validate_settings(settings: dict[str, Any]) -> None:
 
     store = _object(settings.get("store"), "settings.store")
     store_required = {"add_concurrency", "status_concurrency", "promotion_concurrency"}
-    _only_keys(store, "settings.store", store_required)
-    if set(store) != store_required:
+    _only_keys(store, "settings.store", store_required | {"logging"})
+    if not store_required.issubset(store):
         raise _error("settings.store is incomplete")
     for field in store_required:
         _positive_integer(store[field], f"settings.store.{field}")
+
+    # Optional so existing fully expanded v3 inventories remain valid. Catalog
+    # backed operator inventories inherit the production-safe WARNING default.
+    logging = store.get("logging")
+    if logging is not None:
+        logging_settings = _object(logging, "settings.store.logging")
+        _only_keys(logging_settings, "settings.store.logging", {"level"})
+        level = logging_settings.get("level")
+        allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if not isinstance(level, str) or level.upper() not in allowed_levels:
+            raise _error("settings.store.logging.level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
 
 
 def _provider_id(connection: dict[str, str]) -> str:

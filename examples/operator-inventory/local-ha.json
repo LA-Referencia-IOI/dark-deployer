@@ -37,5 +37,15 @@
       ]}]
     }
   },
-  "overrides": {"settings": {"minter": {"shoulder": "200"}}}
+  "overrides": {
+    "settings": {
+      "minter": {
+        "shoulder": "200",
+        "logging": {"level": "DEBUG"}
+      },
+      "store": {
+        "logging": {"level": "DEBUG"}
+      }
+    }
+  }
 }

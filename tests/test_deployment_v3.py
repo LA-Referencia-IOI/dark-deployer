@@ -488,6 +488,32 @@ class DeploymentV3Tests(unittest.TestCase):
             self.assertEqual(bundled, resolution.document)
             self.assertEqual(evidence["metadata"], resolution.metadata)
 
+    def test_minter_log_level_is_rendered_for_api_and_workers(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
+        document["overrides"]["settings"]["minter"]["logging"] = {"level": "WARNING"}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(document))
+            plan = build_plan(path)
+            output = Path(temporary) / "bundle"
+            render_plan(plan, output)
+            env_directory = output / "machines" / "local" / "groups" / "apps" / "env"
+            env_files = ("minter-api.env", "metadata-worker.env", "replication-worker.env", "chain-worker.env")
+            for filename in env_files:
+                self.assertIn("MINTER_LOG_LEVEL=WARNING\n", (env_directory / filename).read_text())
+
+    def test_store_log_level_is_rendered(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-ha.json").read_text())
+        document["overrides"]["settings"]["store"] = {"logging": {"level": "INFO"}}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            path.write_text(json.dumps(document))
+            plan = build_plan(path)
+            output = Path(temporary) / "bundle"
+            render_plan(plan, output)
+            env = output / "machines" / "local" / "groups" / "apps" / "env" / "store-api.env"
+            self.assertIn("LOG_LEVEL=INFO\n", env.read_text())
+
     def test_operator_inventory_reports_missing_remote_route(self):
         source = ROOT / "examples" / "operator-inventory" / "production-five-host.json"
         document = json.loads(source.read_text())

@@ -65,6 +65,38 @@ class InventoryEvolutionTests(unittest.TestCase):
                 with self.assertRaisesRegex(OperatorInventoryError, "2xx"):
                     resolve_inventory(document, source_path=ROOT / "inventory.json")
 
+    def test_minter_log_level_defaults_to_warning_and_is_overridable(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-simple.json").read_text())
+        default_resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
+        self.assertEqual(default_resolution.document["settings"]["minter"]["logging"], {"level": "WARNING"})
+
+        document["overrides"]["settings"]["minter"]["logging"] = {"level": "warning"}
+        resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
+        self.assertEqual(resolution.document["settings"]["minter"]["logging"], {"level": "warning"})
+
+    def test_minter_log_level_rejects_unknown_value(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-simple.json").read_text())
+        document["overrides"]["settings"]["minter"]["logging"] = {"level": "verbose"}
+
+        with self.assertRaisesRegex(OperatorInventoryError, "logging.level"):
+            resolve_inventory(document, source_path=ROOT / "inventory.json")
+
+    def test_store_log_level_defaults_to_warning_and_is_overridable(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-simple.json").read_text())
+        default_resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
+        self.assertEqual(default_resolution.document["settings"]["store"]["logging"], {"level": "WARNING"})
+
+        document["overrides"]["settings"]["store"] = {"logging": {"level": "debug"}}
+        resolution = resolve_inventory(document, source_path=ROOT / "inventory.json")
+        self.assertEqual(resolution.document["settings"]["store"]["logging"], {"level": "debug"})
+
+    def test_store_log_level_rejects_unknown_value(self):
+        document = json.loads((ROOT / "examples" / "operator-inventory" / "local-simple.json").read_text())
+        document["overrides"]["settings"]["store"] = {"logging": {"level": "verbose"}}
+
+        with self.assertRaisesRegex(OperatorInventoryError, "logging.level"):
+            resolve_inventory(document, source_path=ROOT / "inventory.json")
+
     def test_aws_active_two_site_inventory_keeps_aws_quorum_after_site_b_validator_loss(self):
         inventory_path = ROOT / "examples" / "operator-inventory" / "aws-active-two-site-nine-host.json"
         plan = build_plan(inventory_path)

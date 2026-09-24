@@ -460,6 +460,9 @@
   "settings": {
     "minter": {
       "shoulder": "200",
+      "logging": {
+        "level": "DEBUG"
+      },
       "metadata": {
         "page_size": 100,
         "concurrency": 4,
@@ -492,7 +495,10 @@
     "store": {
       "add_concurrency": 4,
       "status_concurrency": 6,
-      "promotion_concurrency": 4
+      "promotion_concurrency": 4,
+      "logging": {
+        "level": "DEBUG"
+      }
     }
   },
   "secrets": {
