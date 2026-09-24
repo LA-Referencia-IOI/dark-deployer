@@ -29,11 +29,7 @@ done
 aws_bin=''
 for candidate in "${AWS_CLI:-}" /opt/homebrew/bin/aws "$(command -v aws 2>/dev/null || true)" /usr/local/bin/aws; do
   [[ -n "$candidate" && -x "$candidate" ]] || continue
-  description="$(file -b "$candidate" 2>/dev/null || true)"
-  case "$description" in
-    *arm64*|*"universal binary"*|*"Universal"*) aws_bin="$candidate"; break ;;
-  esac
-  if [[ "$candidate" == "/opt/homebrew/bin/aws" ]] && "$candidate" --version >/dev/null 2>&1; then
+  if "$candidate" --version >/dev/null 2>&1; then
     aws_bin="$candidate"
     break
   fi
