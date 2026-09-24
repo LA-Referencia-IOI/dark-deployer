@@ -383,7 +383,7 @@
     "primary_rpc": "rpc01",
     "chain_id": 2025,
     "logging": {
-      "level": "DEBUG"
+      "level": "INFO"
     },
     "qbft": {
       "block_period_seconds": 6,
@@ -464,7 +464,7 @@
     "minter": {
       "shoulder": "200",
       "logging": {
-        "level": "DEBUG"
+        "level": "INFO"
       },
       "metadata": {
         "page_size": 100,
@@ -500,12 +500,12 @@
       "status_concurrency": 6,
       "promotion_concurrency": 4,
       "logging": {
-        "level": "DEBUG"
+        "level": "INFO"
       }
     },
     "ipfs": {
       "logging": {
-        "level": "DEBUG"
+        "level": "INFO"
       }
     }
   },

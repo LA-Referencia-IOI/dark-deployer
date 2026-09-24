@@ -1013,7 +1013,7 @@ class DeploymentV3Tests(unittest.TestCase):
                 restored = runner_module.set_service_log_level(plan, project_root, "service:rpc01", restore=True)
             journal = (root / "journal.jsonl").read_text()
         self.assertEqual(result["level"], "WARN")
-        self.assertEqual(restored["level"], "DEBUG")
+        self.assertEqual(restored["level"], "INFO")
         self.assertTrue(restored["restore"])
         rpc = next(command for command, _ in executor.calls if command[:2] == ("docker", "run"))
         self.assertIn("dark-operator-local-ha-local", rpc)

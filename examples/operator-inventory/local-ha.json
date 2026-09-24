@@ -39,18 +39,18 @@
   },
   "overrides": {
     "blockchain": {
-      "logging": {"level": "DEBUG"}
+      "logging": {"level": "INFO"}
     },
     "settings": {
       "minter": {
         "shoulder": "200",
-        "logging": {"level": "DEBUG"}
+        "logging": {"level": "INFO"}
       },
       "store": {
-        "logging": {"level": "DEBUG"}
+        "logging": {"level": "INFO"}
       },
       "ipfs": {
-        "logging": {"level": "DEBUG"}
+        "logging": {"level": "INFO"}
       }
     }
   }
