@@ -26,7 +26,7 @@
       "Effect": "Allow",
       "Action": "ssm:StartSession",
       "Resource": [
-        "arn:aws:ssm:us-east-1::document/SSM-SessionManagerRunShell",
+        "arn:aws:ssm:us-east-1:524284048780:document/SSM-SessionManagerRunShell",
         "arn:aws:ssm:us-east-1::document/AWS-StartPortForwardingSession",
         "arn:aws:ssm:us-east-1::document/AWS-StartPortForwardingSessionToRemoteHost"
       ]
