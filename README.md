@@ -279,12 +279,17 @@ an interrupted execution, `resume` reuses the wallet, generated secrets, chain
 artifact, source evidence, and prepared revision recorded for that deployment
 — it never silently creates a different chain identity.
 
-For AWS, provision with [CloudFormation
-(`dark2-prod-aws`)](infrastructure/aws/cloudformation/README.md), then run the
+For AWS, provision with the [CloudFormation repository
+(`dark2-prod`)](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/README.md), then run the
 controller from the `apps` host once `check-bootstrap.sh` passes on every host;
 the inventory uses the private addresses reachable from that host. The
 [Lima lab](docs/lima-five-host-test.md) reproduces a five-host SSH
 distribution locally.
+
+CloudFormation files are fetched from the dedicated repository into the
+ignored `.generated/dark-aws-cloudfront` checkout. Run
+`infrastructure/aws/pull-cloudformation.sh` to clone/update it; the familiar
+`infrastructure/aws/cloudformation/` path is a symlink to that checkout.
 
 **Blockchain artifacts.** `chain-init`, `chain-static-nodes`, `chain-export`,
 `chain-verify`, and `chain-bootstrap` create, export, and verify Besu
@@ -336,7 +341,8 @@ sources are replaced.
 | [`production-five-host.json`](examples/operator-inventory/production-five-host.md) | `production` | 5 | Apps, two blockchain domains, and two storage domains |
 | [`production-six-host.json`](examples/operator-inventory/production-six-host.md) | `production` | 6 | Dedicated public Resolver with local observer, RPC, and Store API reader |
 | [`one-server-aws-sandbox.json`](examples/operator-inventory/one-server-aws-sandbox.md) | `lab` | 1 | Single-EC2 sandbox run on the server, local-ha layout with public HTTP gateway |
-| [`dark2-prod-aws.json`](examples/operator-inventory/dark2-prod-aws.md) | `production` | 6 | AWS-only active site: applications, Resolver/observer, five validators, two storage peers |
+| [`dark2-prod.json`](examples/operator-inventory/dark2-prod.md) | `production` | 6 | AWS-only active site: applications, Resolver/observer, five validators, two storage peers |
+| [`dark2-prod-tailscale-eight-host.json`](examples/operator-inventory/dark2-prod-tailscale-eight-host.md) | `production` | 8 | AWS site plus an external observer and IPFS peer; Tailscale enrollment is a separate operation |
 | [`aws-active-two-site-nine-host.json`](examples/operator-inventory/aws-active-two-site-nine-host.md) | `production` | 9 | AWS retains QBFT quorum; the remote site keeps chain and IPFS copies without application services |
 
 ## 6. Documentation map
@@ -369,8 +375,10 @@ sources are replaced.
 | --- | --- |
 | [docs/lima-five-host-test.md](docs/lima-five-host-test.md) | Five-host Lima lab procedure |
 | [docs/aws-single-az-five-host.md](docs/aws-single-az-five-host.md) | Manual five-host EC2 runbook |
-| [CloudFormation guide](infrastructure/aws/cloudformation/README.md) | `dark2-prod-aws`: isolated VPC, six hosts, EBS, ALB, TLS, bootstrap seal, SSM helpers |
-| [AWS operator CLI](infrastructure/aws/cloudformation/dark2-prod-aws-operator-cli.md) | Operator profile, PEM upload, Dashboard forwarding, bootstrap check |
+| [CloudFormation guide](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/README.md) | Deploy shared base with Headscale, then six-host dARK stack |
+| [AWS base and machine contract](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/aws-base-and-workload-stacks.md) | Shared VPC, parameters, exports and lifecycle |
+| [AWS operator CLI](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/dark2-prod-operator-cli.md) | Operator profile, PEM upload, Dashboard forwarding, bootstrap check |
+| [AWS CLI operator setup](docs/aws-cli-operator-setup.md) | Linux AWS CLI, IAM profile, Session Manager, and deployment helper setup |
 | [local-infra/README.md](local-infra/README.md) | Lima lab scripts and two-site generator |
 
 **Development and design**

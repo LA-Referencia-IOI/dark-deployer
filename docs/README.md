@@ -43,7 +43,10 @@ For historical analyses and closed incident reports, see
 | [`lima-five-host-test.md`](lima-five-host-test.md) | Five-host Lima lab procedure |
 | [`aws-single-az-five-host.md`](aws-single-az-five-host.md) | Manual five-host EC2 runbook (the automated path is the CloudFormation guide) |
 | [`multi-site-lan-vpn-proposal.md`](multi-site-lan-vpn-proposal.md) | Multi-site design (`format_version: 3`) and its acceptance criteria |
-| [`../infrastructure/aws/cloudformation/README.md`](../infrastructure/aws/cloudformation/README.md) | `dark2-prod-aws` CloudFormation stack: VPC, six hosts, EBS, ALB, TLS, SSM helpers |
+| [CloudFormation guide](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/README.md) | Ordered Rain deployment: shared base, then six machines, EBS, ALB, TLS and SSM |
+| [dark2-prod procedure](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/DARK2-PROD-PROCEDURE.md) | Teardown, base/workload deployment, bootstrap checks, address export and inventory/SSH sync |
+| [Headscale and Headplane](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/HEADSCALE.md) | Private Headplane and shared VPN stack |
+| [Base/machine contract](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/aws-base-and-workload-stacks.md) | Parameter ownership, exports and lifecycle |
 | [`../local-infra/README.md`](../local-infra/README.md) | Lima lab scripts, inventory instantiation, two-site generator |
 
 ## Development and active design

@@ -188,9 +188,9 @@ For remote hosts, the deployer works with prepared revisions instead of
 re-rendering on every machine:
 
 ```bash
-./deploy.sh prepare --inventory examples/operator-inventory/dark2-prod-aws.json
-./deploy.sh push   --inventory examples/operator-inventory/dark2-prod-aws.json
-./deploy.sh apply  --inventory examples/operator-inventory/dark2-prod-aws.json
+./deploy.sh prepare --inventory examples/operator-inventory/dark2-prod.json
+./deploy.sh push   --inventory examples/operator-inventory/dark2-prod.json
+./deploy.sh apply  --inventory examples/operator-inventory/dark2-prod.json
 ```
 
 `prepare` renders and stages an immutable per-machine bundle and records a
@@ -202,10 +202,11 @@ unchanged services are reused instead of recreated. The full reference —
 including what `push` refuses to do with a stale bundle — is in
 [deployment-v3-revisions.md](deployment-v3-revisions.md).
 
-For AWS, the provisioned path is the CloudFormation stack
-`infrastructure/aws/cloudformation/` (see its README for the `dark2-prod-aws`
-runbook, parameters, and SSM access helpers); the resulting operator inventory
-is instantiated with `local-infra/instantiate-inventory.py`.
+For AWS, CloudFormation is maintained in the separate
+[`dark-aws-cloudfront`](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront)
+repository (see its README for the `dark2-prod` runbook, parameters and SSM
+helpers); the resulting operator inventory remains in this repository and is
+instantiated with `local-infra/instantiate-inventory.py`.
 
 ## Metrics and monitoring
 

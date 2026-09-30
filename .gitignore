@@ -156,7 +156,9 @@ components/
 
 # Account-specific AWS CloudFormation parameters (account ID, ACM ARN,
 # hosted zone): never commit the real parameters file.
-infrastructure/aws/cloudformation/dark2-prod-aws.parameters.yaml
+infrastructure/aws/cloudformation/dark2-prod.parameters.yaml
+infrastructure/aws/cloudformation/dark2-prod-base.parameters.yaml
+infrastructure/aws/cloudformation/dark2-headscale.parameters.yaml
 
 __pycache__/
 

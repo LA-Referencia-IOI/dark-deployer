@@ -2,7 +2,9 @@
 
 > **Posición de esta guía:** es el runbook *manual* de aprovisionamiento. La vía
 > hoy recomendada para AWS es la automatizada con CloudFormation
-> (`infrastructure/aws/cloudformation/`, inventario `dark2-prod-aws`, seis
+> (el stack vigente está en el repositorio
+> [`dark-aws-cloudfront`](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront),
+> inventory `dark2-prod`, seis
 > hosts), que sustituye el aprovisionamiento manual de esta guía. Esta guía
 > sigue siendo útil como referencia del modelo de cinco hosts y de los pasos
 > manuales que la pila CloudFormation automatiza.
