@@ -47,6 +47,7 @@ For historical analyses and closed incident reports, see
 | [dark2-prod procedure](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/DARK2-PROD-PROCEDURE.md) | Teardown, base/workload deployment, bootstrap checks, address export and inventory/SSH sync |
 | [Headscale and Headplane](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/HEADSCALE.md) | Private Headplane and shared VPN stack |
 | [Base/machine contract](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/aws-base-and-workload-stacks.md) | Parameter ownership, exports and lifecycle |
+| [`dark2-prod-external-linux-host.md`](dark2-prod-external-linux-host.md) | OS, Docker/Compose, Tailscale, SSH keys, disk layout and exact preflight requirements for non-AWS targets |
 | [`../local-infra/README.md`](../local-infra/README.md) | Lima lab scripts, inventory instantiation, two-site generator |
 
 ## Development and active design

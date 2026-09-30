@@ -18,6 +18,11 @@ must be able to reach those addresses and read both keys. The deployment ID and
 storage cluster name stay the same so this can extend the existing deployment
 rather than create another chain.
 
+Prepare each external destination according to the [external Linux host
+requirements](../../docs/dark2-prod-external-linux-host.md) before running
+preflight. That guide distinguishes deployer checks from the additional
+Tailscale, SSH, disk-persistence and firewall setup needed for operation.
+
 ## Replace before use
 
 - Replace **all eight** `machines.*.addresses.tailscale` examples
