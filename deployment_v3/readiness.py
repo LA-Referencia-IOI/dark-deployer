@@ -87,7 +87,7 @@ def rpc_request(plan, root, rpc, method: str, params: list | None = None):
     if rpc.exposure and rpc.exposure.get("mode") != "none":
         return _curl(plan, machine, _host_url(rpc, machine), payload)
     # Machine bundles use the externally managed machine bridge declared in
-    # Compose (for example ``dark2-prod-aws-apps``), not Compose's implicit
+    # Compose (for example ``dark2-prod-apps``), not Compose's implicit
     # ``<project>_default`` network.  The latter does not exist because every
     # rendered service joins the shared bridge explicitly.
     return resolve_executor(machine).run(

@@ -160,7 +160,7 @@ class InventoryEvolutionTests(unittest.TestCase):
         self.assertEqual(services["resolver-public-site-b"]["connections"]["arks-site-b"], {"service": "resolver-api-site-b"})
 
     def test_aws_active_six_disables_explorer_and_uses_private_minter_prefix(self):
-        path = ROOT / "examples/operator-inventory/dark2-prod-aws.json"
+        path = ROOT / "examples/operator-inventory/dark2-prod.json"
         resolution = resolve_inventory(json.loads(path.read_text()), source_path=path)
         services = resolution.document["services"]
         self.assertNotIn("explorer", services)

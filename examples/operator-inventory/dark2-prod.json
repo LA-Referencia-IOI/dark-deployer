@@ -10,7 +10,7 @@
     ]
   },
   "deployment": {
-    "id": "dark2-prod-aws",
+    "id": "dark2-prod",
     "label": "REPLACE: dARK AWS six-host production deployment"
   },
   "defaults": {
@@ -29,6 +29,10 @@
     "aws-lan": {
       "kind": "lan",
       "cidr": "10.20.0.0/16"
+    },
+    "tailscale": {
+      "kind": "vpn",
+      "cidr": "100.64.1.0/24"
     }
   },
   "sites": {
@@ -42,7 +46,8 @@
       "management_address": "10.20.10.10",
       "site": "aws",
       "addresses": {
-        "aws-lan": "10.20.10.10"
+        "aws-lan": "10.20.10.10",
+        "tailscale": "100.64.1.1"
       }
     },
     "resolver": {
@@ -50,7 +55,8 @@
       "management_address": "10.20.10.11",
       "site": "aws",
       "addresses": {
-        "aws-lan": "10.20.10.11"
+        "aws-lan": "10.20.10.11",
+        "tailscale": "100.64.1.3"
       }
     },
     "blockchain-a": {
@@ -58,7 +64,8 @@
       "management_address": "10.20.10.12",
       "site": "aws",
       "addresses": {
-        "aws-lan": "10.20.10.12"
+        "aws-lan": "10.20.10.12",
+        "tailscale": "100.64.1.5"
       }
     },
     "blockchain-b": {
@@ -66,7 +73,8 @@
       "management_address": "10.20.10.13",
       "site": "aws",
       "addresses": {
-        "aws-lan": "10.20.10.13"
+        "aws-lan": "10.20.10.13",
+        "tailscale": "100.64.1.2"
       }
     },
     "storage-1": {
@@ -74,7 +82,8 @@
       "management_address": "10.20.10.14",
       "site": "aws",
       "addresses": {
-        "aws-lan": "10.20.10.14"
+        "aws-lan": "10.20.10.14",
+        "tailscale": "100.64.1.4"
       }
     },
     "storage-2": {
@@ -82,7 +91,8 @@
       "management_address": "10.20.10.15",
       "site": "aws",
       "addresses": {
-        "aws-lan": "10.20.10.15"
+        "aws-lan": "10.20.10.15",
+        "tailscale": "100.64.1.6"
       }
     }
   },
@@ -95,10 +105,22 @@
     "storage-2": "storage-2"
   },
   "routing": {
-    "blockchain_p2p": "aws-lan",
-    "storage_p2p": "aws-lan",
-    "storage_api": "aws-lan",
-    "application_api": "aws-lan"
+    "blockchain_p2p": {
+      "same_site": "aws-lan",
+      "cross_site": "tailscale"
+    },
+    "storage_p2p": {
+      "same_site": "aws-lan",
+      "cross_site": "tailscale"
+    },
+    "storage_api": {
+      "same_site": "aws-lan",
+      "cross_site": "tailscale"
+    },
+    "application_api": {
+      "same_site": "aws-lan",
+      "cross_site": "tailscale"
+    }
   },
   "blockchain": {
     "chain_id": 2025,
@@ -132,7 +154,7 @@
     }
   },
   "storage": {
-    "cluster_name": "dark2-prod-aws",
+    "cluster_name": "dark2-prod",
     "peers": {
       "storage-a": {
         "group": "storage-1"

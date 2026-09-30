@@ -1,0 +1,343 @@
+{
+  "format": "dark-operator-inventory",
+  "format_version": 3,
+  "catalog": "dark-platform-baseline-v1.0",
+  "profile": "production",
+  "availability": {
+    "objectives": [
+      "tolerate_validator_individual",
+      "observer_copy"
+    ]
+  },
+  "deployment": {
+    "id": "dark2-prod",
+    "label": "dARK AWS with external observer and IPFS peer over Tailscale (replace sample addresses)"
+  },
+  "defaults": {
+    "ssh": {
+      "user": "ubuntu",
+      "port": 22,
+      "private_key_file": "/home/ubuntu/lareferencia-dark.pem"
+    },
+    "paths": {
+      "workspace_root": "/srv/dark",
+      "data_root": "/srv/dark/data",
+      "secrets_root": "/srv/dark/secrets"
+    }
+  },
+  "networks": {
+    "aws-lan": {
+      "kind": "lan",
+      "cidr": "10.20.0.0/16"
+    },
+    "external-lan": {
+      "kind": "lan",
+      "cidr": "192.168.240.0/24"
+    },
+    "tailscale": {
+      "kind": "vpn",
+      "cidr": "100.64.0.0/10"
+    }
+  },
+  "sites": {
+    "aws": {
+      "lan": "aws-lan"
+    },
+    "external": {
+      "lan": "external-lan"
+    }
+  },
+  "machines": {
+    "apps": {
+      "execution": "ssh",
+      "management_address": "10.20.10.10",
+      "site": "aws",
+      "addresses": {
+        "aws-lan": "10.20.10.10",
+        "tailscale": "100.100.20.10"
+      }
+    },
+    "resolver": {
+      "execution": "ssh",
+      "management_address": "10.20.10.11",
+      "site": "aws",
+      "addresses": {
+        "aws-lan": "10.20.10.11",
+        "tailscale": "100.100.20.11"
+      }
+    },
+    "blockchain-a": {
+      "execution": "ssh",
+      "management_address": "10.20.10.12",
+      "site": "aws",
+      "addresses": {
+        "aws-lan": "10.20.10.12",
+        "tailscale": "100.100.20.12"
+      }
+    },
+    "blockchain-b": {
+      "execution": "ssh",
+      "management_address": "10.20.10.13",
+      "site": "aws",
+      "addresses": {
+        "aws-lan": "10.20.10.13",
+        "tailscale": "100.100.20.13"
+      }
+    },
+    "storage-1": {
+      "execution": "ssh",
+      "management_address": "10.20.10.14",
+      "site": "aws",
+      "addresses": {
+        "aws-lan": "10.20.10.14",
+        "tailscale": "100.100.20.14"
+      }
+    },
+    "storage-2": {
+      "execution": "ssh",
+      "management_address": "10.20.10.15",
+      "site": "aws",
+      "addresses": {
+        "aws-lan": "10.20.10.15",
+        "tailscale": "100.100.20.15"
+      }
+    },
+    "external-observer": {
+      "execution": "ssh",
+      "management_address": "100.100.20.20",
+      "site": "external",
+      "ssh": {
+        "user": "ubuntu",
+        "private_key_file": "/home/ubuntu/REPLACE-external-observer.pem"
+      },
+      "addresses": {
+        "external-lan": "192.168.240.20",
+        "tailscale": "100.100.20.20"
+      }
+    },
+    "external-storage": {
+      "execution": "ssh",
+      "management_address": "100.100.20.21",
+      "site": "external",
+      "ssh": {
+        "user": "ubuntu",
+        "private_key_file": "/home/ubuntu/REPLACE-external-storage.pem"
+      },
+      "addresses": {
+        "external-lan": "192.168.240.21",
+        "tailscale": "100.100.20.21"
+      }
+    }
+  },
+  "placement": {
+    "apps": "apps",
+    "resolver-observer": "resolver",
+    "blockchain-a": "blockchain-a",
+    "blockchain-b": "blockchain-b",
+    "storage-1": "storage-1",
+    "storage-2": "storage-2",
+    "external-observer": "external-observer",
+    "external-storage": "external-storage"
+  },
+  "routing": {
+    "blockchain_p2p": {
+      "same_site": "site_lan",
+      "cross_site": "tailscale"
+    },
+    "storage_p2p": {
+      "same_site": "site_lan",
+      "cross_site": "tailscale"
+    },
+    "storage_api": {
+      "same_site": "site_lan",
+      "cross_site": "tailscale"
+    },
+    "application_api": {
+      "same_site": "site_lan",
+      "cross_site": "tailscale"
+    }
+  },
+  "blockchain": {
+    "chain_id": 2025,
+    "validator_groups": {
+      "blockchain-a": {
+        "validator_count": 3
+      },
+      "blockchain-b": {
+        "validator_count": 2
+      }
+    },
+    "observer_groups": {
+      "resolver-observer": {
+        "observer_count": 1
+      },
+      "external-observer": {
+        "observer_count": 1
+      }
+    },
+    "rpc": {
+      "primary": "rpc01",
+      "nodes": {
+        "rpc01": {
+          "group": "apps"
+        }
+      },
+      "bindings": {
+        "resolver-api": "observer01"
+      }
+    },
+    "artifact": {
+      "path": "blockchain/role-artifact",
+      "source": "REPLACE/secrets/chain-artifact"
+    }
+  },
+  "storage": {
+    "cluster_name": "dark2-prod",
+    "peers": {
+      "storage-a": {
+        "group": "storage-1"
+      },
+      "storage-b": {
+        "group": "storage-2"
+      },
+      "storage-c": {
+        "group": "external-storage"
+      }
+    },
+    "replication": {
+      "publish_after_replicas": 1,
+      "target_replicas": 3
+    },
+    "readers": {
+      "store-api-reader": {
+        "group": "resolver-observer",
+        "consumers": [
+          "resolver-api"
+        ]
+      },
+      "store-api-reader-external": {
+        "group": "external-observer",
+        "consumers": [
+          "resolver-api-external"
+        ]
+      }
+    }
+  },
+  "proxies": {
+    "resolver-public": {
+      "group": "resolver-observer",
+      "listener": {
+        "bind": "public",
+        "port": 80
+      },
+      "tls": {
+        "mode": "external"
+      },
+      "sites": [
+        {
+          "host": "resolver-01.dark-pid.net",
+          "public_origin": "https://resolver-01.dark-pid.net",
+          "routes": [
+            {
+              "id": "resolver-health-live",
+              "path": "/health/live",
+              "service": "resolver-api",
+              "upstream_path": "/health/live"
+            },
+            {
+              "id": "arks",
+              "path": "/",
+              "service": "resolver-api",
+              "upstream_path": "/api/v1/arks/"
+            }
+          ]
+        }
+      ]
+    },
+    "apps-public": {
+      "group": "apps",
+      "listener": {
+        "bind": "public",
+        "port": 80
+      },
+      "tls": {
+        "mode": "external"
+      },
+      "sites": [
+        {
+          "host": "minter-01.dark-pid.net",
+          "public_origin": "https://minter-01.dark-pid.net",
+          "routes": [
+            {
+              "id": "minter-health",
+              "path": "/health",
+              "service": "minter-api",
+              "upstream_path": "/health"
+            },
+            {
+              "id": "minter-v1",
+              "path": "/api/v1/",
+              "service": "minter-api",
+              "upstream_path": "/api/v1/"
+            }
+          ]
+        }
+      ]
+    },
+    "resolver-external": {
+      "group": "external-observer",
+      "listener": {
+        "bind": "public",
+        "port": 80
+      },
+      "tls": {
+        "mode": "external"
+      },
+      "sites": [
+        {
+          "host": "external-resolver.example.org",
+          "public_origin": "https://external-resolver.example.org",
+          "routes": [
+            {
+              "id": "external-resolver-health-live",
+              "path": "/health/live",
+              "service": "resolver-api-external",
+              "upstream_path": "/health/live"
+            },
+            {
+              "id": "external-arks",
+              "path": "/",
+              "service": "resolver-api-external",
+              "upstream_path": "/api/v1/arks/"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "secrets": {
+    "source_root": "REPLACE/secrets"
+  },
+  "overrides": {
+    "explorer": {
+      "enabled": false
+    },
+    "resolver": {
+      "group": "resolver-observer"
+    },
+    "settings": {
+      "minter": {
+        "shoulder": "201"
+      }
+    }
+  },
+  "resolver": {
+    "instances": {
+      "resolver-api-external": {
+        "group": "external-observer",
+        "reader": "store-api-reader-external",
+        "rpc": "observer02"
+      }
+    }
+  }
+}

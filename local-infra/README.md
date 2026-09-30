@@ -133,7 +133,7 @@ validates.
 
 ```bash
 venv/bin/python local-infra/instantiate-inventory.py \
-  --input examples/operator-inventory/dark2-prod-aws.json \
+  --input examples/operator-inventory/dark2-prod.json \
   --output deployment-aws-active-six.json
 ```
 

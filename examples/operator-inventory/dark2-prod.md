@@ -1,6 +1,6 @@
-# dark2-prod-aws
+# dark2-prod
 
-`dark2-prod-aws.json` is the single-site AWS variant of the asymmetric
+`dark2-prod.json` is the single-site AWS variant of the asymmetric
 two-site example. It contains the complete active application stack on AWS:
 applications, primary RPC, Resolver, an observer, five validators, and two
 storage peers.
@@ -11,12 +11,24 @@ profile: Ubuntu's `ubuntu` user, `/srv/dark` paths, the `10.20.0.0/16` VPC,
 and the six private addresses in `10.20.10.0/24`.
 
 The controller is the `apps` host. It must have `lareferencia-dark.pem` at
-`/home/ubuntu/lareferencia-dark.pem` and network access to the private addresses, for example from inside the
-VPC or through the later Tailscale setup. Port 22 is not open to the public
-Internet. Before running the deployer, use `chmod 600 /home/ubuntu/lareferencia-dark.pem`.
+`/home/ubuntu/lareferencia-dark.pem` and network access to the private
+addresses. The current AWS profile keeps all six hosts in one VPC, so `apps`
+uses their private addresses directly. Port 22 is not open to the public
+Internet. Before running the deployer, use
+`chmod 600 /home/ubuntu/lareferencia-dark.pem`.
+
+The AWS bootstrap enrolls each host in the shared Headscale service using the
+temporary key entered through Rain. Tailnet names use the deployment and role,
+for example `dark2-prod-apps` and `dark2-prod-blockchain-a`.
+The inventory records both `aws-lan` and `tailscale` addresses. All current
+same-site traffic prefers the VPC LAN; the routing policy selects Tailscale
+for cross-site traffic when another site is added. These VPN addresses were
+refreshed from the live EC2 instances and Headscale nodes on 2026-09-30;
+regenerate the snapshot and update the inventory if a host is re-enrolled and
+receives a different address.
 
 For an isolated AWS VPC matching this topology, use the companion
-[`dark2-prod-aws.yaml`](../../infrastructure/aws/cloudformation/dark2-prod-aws.yaml)
+[`dark2-prod.yaml`](https://github.com/LA-Referencia-IOI/dark-aws-cloudfront/blob/main/infrastructure/aws/cloudformation/dark2-prod.yaml)
 CloudFormation profile. It creates the hosts and network only; instantiate this
 operator inventory from its outputs before installing dARK.
 
@@ -53,11 +65,32 @@ third peer is remote.
 - VPC/CIDR: `10.20.0.0/16`.
 - LAN subnet: `10.20.10.0/24`.
 - Private addresses: `10.20.10.10` through `10.20.10.15`.
+- Tailscale prefix: `100.64.1.0/24`; current node addresses:
+  `apps` `.1`, `blockchain-b` `.2`, `resolver` `.3`, `storage-1` `.4`,
+  `blockchain-a` `.5`, and `storage-2` `.6`.
 - SSH user: `ubuntu`.
 - AWS key pair: `lareferencia-dark`; private key on `apps`:
   `/home/ubuntu/lareferencia-dark.pem`.
 - Public origins: `https://minter-01.dark-pid.net` and
   `https://resolver-01.dark-pid.net`.
+
+## Export current machine addresses
+
+Generate an ignored JSON snapshot from the running EC2 instances and Headscale
+nodes before updating the inventory:
+
+```bash
+infrastructure/aws/pull-cloudformation.sh
+python3 infrastructure/aws/cloudformation/export_dark2_prod_addresses.py
+```
+
+The default output is
+`.generated/aws-addresses/dark2-prod.json`. It matches EC2 roles to
+Headscale nodes by the stable node names `dark2-prod-<role>` and records
+private, public, and VPN IPv4 addresses plus online status. It does not edit
+the inventory. Review the snapshot and then copy the current VPN addresses
+into `machines.*.addresses.tailscale`. Public EC2 addresses are dynamic and
+may change after a stop/start; regenerate the snapshot before relying on them.
 
 Before installation, replace only the deployment-specific secret source and
 chain-artifact source, and confirm the private key path. Do not replace the
@@ -68,11 +101,11 @@ with this inventory.
 
 ```bash
 venv/bin/python deploy.py validate \
-  --inventory examples/operator-inventory/dark2-prod-aws.json
+  --inventory examples/operator-inventory/dark2-prod.json
 venv/bin/python deploy.py inventory-network-matrix \
-  --inventory examples/operator-inventory/dark2-prod-aws.json
+  --inventory examples/operator-inventory/dark2-prod.json
 venv/bin/python deploy.py plan \
-  --inventory examples/operator-inventory/dark2-prod-aws.json
+  --inventory examples/operator-inventory/dark2-prod.json
 ```
 
 After Rain has provisioned the hosts, the data volumes are mounted, and the
@@ -80,6 +113,6 @@ private network path is available, install with:
 
 ```bash
 venv/bin/python deploy.py install \
-  --inventory examples/operator-inventory/dark2-prod-aws.json \
+  --inventory examples/operator-inventory/dark2-prod.json \
   --verbose
 ```
