@@ -276,7 +276,20 @@ def check_phase(plan, project_root: Path, phase: str) -> tuple[bool, str]:
             for provider in cluster:
                 if provider.machine_id == consumer.machine_id:
                     continue
-                connection = {"service": provider.id, "network": plan.raw["infrastructure"]["cluster"]["network"]}
+                edge = next(
+                    (
+                        item
+                        for item in p2p_edges(effective, "cluster", consumer.id)
+                        if item["to"] == provider.id
+                    ),
+                    None,
+                )
+                network = (
+                    edge["network"]
+                    if edge is not None
+                    else effective.raw["infrastructure"]["cluster"]["network"]
+                )
+                connection = {"service": provider.id, "network": network}
                 endpoint = endpoint_for(provider, plan.machine(provider.machine_id), plan.machine(consumer.machine_id), connection)
                 result = _curl(effective, effective.machine(consumer.machine_id), endpoint.url + "/id")
                 if result.returncode:
